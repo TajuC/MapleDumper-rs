@@ -1,0 +1,18 @@
+[package]
+name = "maple-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+maple-core.workspace = true
+slint = "1"
+
+[build-dependencies]
+slint-build = "1"
+
+[lints]
+workspace = true

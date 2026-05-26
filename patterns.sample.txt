@@ -1,0 +1,28 @@
+# MapleDumper sample patterns
+#
+# Line forms (all accepted):
+#   Name = AA BB ?? CC
+#   Name: 0xAA ?? CC
+#   Name AA ?? CC
+#
+# Wildcards: ? or ??     Comments: text after ; or #
+# Architecture sections: #32BIT / #64BIT select which block to load.
+# Category sections:     [name] groups the following symbols in offsets.h.
+#
+# Name suffixes control resolution:
+#   *_PTR  -> resolve a RIP-relative load or rel32 jmp/call target (emits the target RVA)
+#   *_CALL -> treat the match as a call and resolve the (nested) call target
+#   *_OFF  -> extract a struct member displacement (emits the raw offset, not an RVA)
+#   (none) -> emit the match address itself as an RVA
+
+#64BIT
+
+[globals]
+CUserLocal_PTR = 48 8B 0D ? ? ? ? 48 85 C9 74 16 E8 ? ? ? ? 85 C0
+CClickBase_PTR = 45 33 C0 48 8B 0D ? ? ? ? E8 ? ? ? ? EB 71
+
+[functions]
+EncodeStr_PTR = E9 ? ? ? ? 8B 56 0C
+
+[offsets]
+CurHp_OFF = 48 8B 8E ? ? ? ?

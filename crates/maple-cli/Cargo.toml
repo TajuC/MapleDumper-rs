@@ -1,0 +1,18 @@
+[package]
+name = "maple-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mapledumper"
+path = "src/main.rs"
+
+[dependencies]
+maple-core.workspace = true
+
+[lints]
+workspace = true

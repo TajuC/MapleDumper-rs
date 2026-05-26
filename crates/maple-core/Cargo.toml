@@ -1,0 +1,24 @@
+[package]
+name = "maple-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rayon = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "scan"
+harness = false
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }
