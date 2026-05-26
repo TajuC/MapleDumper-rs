@@ -133,7 +133,7 @@ fn run_scan(
 
     let patterns = maple_core::pattern::parse_patterns(&req.patterns, arch);
     if patterns.is_empty() {
-        return Err("no patterns to scan - the pattern list is empty".to_string());
+        return Err("no patterns to scan; the pattern list is empty".to_string());
     }
 
     let started = Instant::now();
@@ -225,7 +225,7 @@ fn export_text(state: tauri::State<'_, AppState>, format: String) -> Result<Stri
     let guard = state.last.lock().unwrap();
     let last = guard
         .as_ref()
-        .ok_or_else(|| "run a scan first - there is nothing to export yet".to_string())?;
+        .ok_or_else(|| "run a scan first; there is nothing to export yet".to_string())?;
     let out = match format.as_str() {
         "header" => offsets_header(&last.findings, &last.module_name, last.module_base),
         "ce" => cheat_table(&last.findings, &last.module_name),

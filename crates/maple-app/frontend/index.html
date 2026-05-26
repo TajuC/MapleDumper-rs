@@ -52,7 +52,7 @@
             <div class="engine-card">
               <span class="ico engine-shield" data-icon="shield"></span>
               <div class="engine-meta">
-                <span id="engine-badge">Engine —</span>
+                <span id="engine-badge">Engine</span>
                 <span class="engine-sub">Ready</span>
               </div>
             </div>
@@ -66,7 +66,7 @@
             <section class="view active" id="view-workspace">
               <div class="target-row">
                 <label class="field">
-                  <span class="field-label">Target process</span>
+                  <span class="field-label" id="target-label">Target process</span>
                   <span class="input-wrap">
                     <input id="w-target" type="text" value="MapleStory.exe" spellcheck="false" />
                     <span class="input-ico" data-icon="activity"></span>
@@ -145,7 +145,7 @@
                         </tr>
                       </thead>
                       <tbody id="w-body">
-                        <tr class="empty"><td colspan="6">No scan yet — set a target and click Start Scan.</td></tr>
+                        <tr class="empty"><td colspan="6">No scan yet. Set a target and click Start Scan.</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -166,19 +166,19 @@
                     <div id="insp-hint" class="insp-hint">Run a scan, then select a result to inspect its metadata and hit count.</div>
                   </div>
                   <div class="insp-body" id="insp-body" hidden>
-                    <div class="kv"><span>RVA</span><b id="insp-rva">—</b></div>
-                    <div class="kv"><span>Absolute</span><b id="insp-abs">—</b></div>
-                    <div class="kv"><span>Signature</span><b id="insp-aob" class="mono">—</b></div>
-                    <div class="kv"><span>Type</span><b id="insp-type">—</b></div>
-                    <div class="kv"><span>Category</span><b id="insp-cat">—</b></div>
-                    <div class="kv"><span>Module</span><b id="insp-mod">—</b></div>
+                    <div class="kv"><span>RVA</span><b id="insp-rva"></b></div>
+                    <div class="kv"><span>Absolute</span><b id="insp-abs"></b></div>
+                    <div class="kv"><span>Signature</span><b id="insp-aob" class="mono"></b></div>
+                    <div class="kv"><span>Type</span><b id="insp-type"></b></div>
+                    <div class="kv"><span>Category</span><b id="insp-cat"></b></div>
+                    <div class="kv"><span>Module</span><b id="insp-mod"></b></div>
                     <div class="insp-section">
                       <div class="insp-label">Hit count</div>
-                      <div class="quality"><div class="bar"><span id="insp-bar"></span></div><span id="insp-hits" class="qval">—</span></div>
+                      <div class="quality"><div class="bar"><span id="insp-bar"></span></div><span id="insp-hits" class="qval"></span></div>
                     </div>
                     <div class="insp-section">
                       <div class="insp-label">Notes</div>
-                      <div id="insp-note" class="note-box">—</div>
+                      <div id="insp-note" class="note-box"></div>
                     </div>
                   </div>
                   <div class="insp-foot">
@@ -205,8 +205,8 @@
                   <div class="stat"><span>Patterns loaded</span><b id="s-loaded">0</b></div>
                   <div class="stat"><span>Found</span><b id="s-found" class="ok">0</b></div>
                   <div class="stat"><span>Unresolved</span><b id="s-unresolved" class="warn">0</b></div>
-                  <div class="stat"><span>Scan time</span><b id="s-time">—</b></div>
-                  <div class="stat"><span>Module</span><b id="s-module" class="violet">—</b></div>
+                  <div class="stat"><span>Scan time</span><b id="s-time"></b></div>
+                  <div class="stat"><span>Module</span><b id="s-module" class="violet"></b></div>
                 </div>
                 <button id="open-editor" class="btn btn-soft tall"><span class="ico" data-icon="terminal"></span>Open editor</button>
               </footer>

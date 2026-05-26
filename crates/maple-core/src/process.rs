@@ -350,7 +350,7 @@ impl Target {
                 Err(AttachError::AccessDenied) => {
                     return Err(io::Error::new(
                         io::ErrorKind::PermissionDenied,
-                        "access denied opening the process - run MapleDumper as administrator",
+                        "access denied opening the process; run MapleDumper as administrator",
                     ));
                 }
                 Err(AttachError::NoNtdll) => {
@@ -386,7 +386,7 @@ impl Target {
             if code == ERROR_ACCESS_DENIED {
                 io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "access denied - run as administrator",
+                    "access denied; run as administrator",
                 )
             } else {
                 io::Error::other(format!("OpenProcess failed (error {code})"))

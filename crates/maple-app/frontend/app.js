@@ -141,6 +141,8 @@ $("t-wait").addEventListener("click", () => {
 $("t-class").addEventListener("click", () => {
   state.byClass = !state.byClass;
   $("t-class").classList.toggle("active", state.byClass);
+  $("target-label").textContent = state.byClass ? "Window class" : "Target process";
+  $("w-target").placeholder = state.byClass ? "Window class name" : "MapleStory.exe";
 });
 
 /* ---------- connection + footer ---------- */
@@ -284,7 +286,7 @@ function renderResults() {
 
   if (rows.length === 0) {
     body.innerHTML = `<tr class="empty"><td colspan="6">${
-      state.rows.length ? "No rows match this filter." : "No scan yet — set a target and press Start Scan."
+      state.rows.length ? "No rows match this filter." : "No scan yet. Set a target and click Start Scan."
     }</td></tr>`;
     return;
   }
@@ -294,7 +296,7 @@ function renderResults() {
       const pct = (r.matches / maxHits) * 100;
       const value = r.value
         ? `<span class="mono">${r.value}</span>`
-        : '<span class="muted">—</span>';
+        : '<span class="muted"></span>';
       return `<tr data-name="${esc(r.name)}" class="${state.selected === r.name ? "selected" : ""}">
         <td><div class="name-cell"><span class="dot-acc ${accentClass(r)}"></span>
           <div><div class="name-main">${esc(r.name)}</div><div class="name-sub">${esc(r.category)}</div></div></div></td>
@@ -341,17 +343,17 @@ function selectRow(name) {
   $("insp-body").hidden = false;
 
   const abs = absAddress(row);
-  $("insp-rva").textContent = row.value || "—";
-  $("insp-abs").textContent = abs || (row.is_offset ? "displacement" : "—");
+  $("insp-rva").textContent = row.value || "";
+  $("insp-abs").textContent = abs || (row.is_offset ? "displacement" : "");
   $("insp-aob").textContent = row.pattern;
   $("insp-type").textContent = typeLabel(row.kind);
   $("insp-cat").textContent = row.category;
-  $("insp-mod").textContent = state.report ? state.report.module_name : "—";
+  $("insp-mod").textContent = state.report ? state.report.module_name : "";
 
   const maxHits = Math.max(1, ...state.rows.map((r) => r.matches));
   $("insp-bar").style.width = `${(row.matches / maxHits) * 100}%`;
   $("insp-hits").textContent = `${row.matches}`;
-  $("insp-note").textContent = row.note || "—";
+  $("insp-note").textContent = row.note || "No notes";
 
   const copy = $("insp-copy");
   copy.disabled = !row.value;
