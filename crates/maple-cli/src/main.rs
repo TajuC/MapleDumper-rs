@@ -137,7 +137,7 @@ fn run() -> Result<(), String> {
 
     let regions = target.regions();
     println!("[+] scanning {} regions", regions.len());
-    let result = scan(&target, target.module.base, &regions, &patterns);
+    let result = scan(&target, target.module.base, &regions, &patterns, arch);
 
     println!();
     println!("[+] found {}", result.found.len());

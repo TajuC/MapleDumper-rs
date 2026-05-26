@@ -1,4 +1,4 @@
-import { Button, LineEdit, StandardTableView, VerticalBox, HorizontalBox, GroupBox } from "std-widgets.slint";
+import { Button, LineEdit, StandardTableView, VerticalBox, HorizontalBox, GroupBox, CheckBox } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
     title: "MapleDumper";
@@ -11,6 +11,8 @@ export component AppWindow inherits Window {
     in-out property <string> module;
     in-out property <string> patterns: "patterns.txt";
     in-out property <string> status: "Idle";
+    in-out property <bool> arch64: true;
+    in-out property <bool> scanning: false;
     in-out property <[[StandardListViewItem]]> rows;
 
     callback scan();
@@ -36,9 +38,14 @@ export component AppWindow inherits Window {
                         placeholder-text: "patterns file";
                         text <=> root.patterns;
                     }
+                    CheckBox {
+                        text: "64-bit";
+                        checked <=> root.arch64;
+                    }
                     Button {
-                        text: "Scan";
+                        text: root.scanning ? "Scanning..." : "Scan";
                         primary: true;
+                        enabled: !root.scanning;
                         clicked => {
                             root.scan();
                         }
@@ -63,12 +70,14 @@ export component AppWindow inherits Window {
         HorizontalBox {
             Button {
                 text: "Save offsets.h";
+                enabled: !root.scanning;
                 clicked => {
                     root.save-offsets();
                 }
             }
             Button {
                 text: "Save update.txt";
+                enabled: !root.scanning;
                 clicked => {
                     root.save-update();
                 }

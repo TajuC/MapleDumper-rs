@@ -10,9 +10,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Components
+        run: rustup component add clippy rustfmt
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
