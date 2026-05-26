@@ -5,8 +5,38 @@ use crate::resolver::{self, Kind};
 use crate::scanner::{self, CompiledPattern};
 use rayon::prelude::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Found,
+    Unresolved,
+    NotFound,
+}
+
+impl Status {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Found => "found",
+            Status::Unresolved => "unresolved",
+            Status::NotFound => "not found",
+        }
+    }
+}
+
+pub struct PatternRow {
+    pub name: String,
+    pub category: String,
+    pub pattern: String,
+    pub value: Option<u64>,
+    pub is_offset: bool,
+    pub matches: usize,
+    pub status: Status,
+    pub note: String,
+}
+
 pub struct ScanResult {
     pub findings: Vec<Finding>,
+    pub rows: Vec<PatternRow>,
     pub found: Vec<String>,
     pub matched_unresolved: Vec<String>,
     pub not_found: Vec<String>,
@@ -55,6 +85,7 @@ fn resolve<S: MemorySource>(
             resolver::extract_offset(bytes, 4, arch).map(u64::from),
             true,
         ),
+        Kind::Header => (resolver::extract_immediate(bytes, 4).map(u64::from), true),
         Kind::Call => (
             resolver::resolve_call(source, addr, bytes).map(|t| rva(t, module_base)),
             false,
@@ -113,35 +144,76 @@ where
     }
 
     let mut findings = Vec::new();
+    let mut rows = Vec::new();
     let mut found = Vec::new();
     let mut matched_unresolved = Vec::new();
     let mut not_found = Vec::new();
 
     for (idx, pattern) in patterns.iter().enumerate() {
+        let (_, base) = Kind::classify(&pattern.name);
+        let category = pattern
+            .category
+            .clone()
+            .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+        let aob = pattern.signature.to_aob();
+        let note = pattern.note.clone().unwrap_or_default();
         let group = &mut by_pattern[idx];
+        let match_count = group.len();
+
         if group.is_empty() {
             not_found.push(pattern.name.clone());
+            rows.push(PatternRow {
+                name: base.to_string(),
+                category,
+                pattern: aob,
+                value: None,
+                is_offset: false,
+                matches: 0,
+                status: Status::NotFound,
+                note,
+            });
             continue;
         }
+
         group.sort_by_key(|h| h.addr);
         if let Some((value, is_offset)) =
             group.iter().find_map(|h| h.value.map(|v| (v, h.is_offset)))
         {
-            let (_, base) = Kind::classify(&pattern.name);
             findings.push(Finding {
                 name: base.to_string(),
-                category: pattern.category.clone(),
+                category: category.clone(),
                 value,
                 is_offset,
             });
             found.push(pattern.name.clone());
+            rows.push(PatternRow {
+                name: base.to_string(),
+                category,
+                pattern: aob,
+                value: Some(value),
+                is_offset,
+                matches: match_count,
+                status: Status::Found,
+                note,
+            });
         } else {
             matched_unresolved.push(pattern.name.clone());
+            rows.push(PatternRow {
+                name: base.to_string(),
+                category,
+                pattern: aob,
+                value: None,
+                is_offset: false,
+                matches: match_count,
+                status: Status::Unresolved,
+                note,
+            });
         }
     }
 
     ScanResult {
         findings,
+        rows,
         found,
         matched_unresolved,
         not_found,
@@ -175,6 +247,8 @@ mod tests {
         assert_eq!(bar.value, 0x30);
         assert_eq!(result.found.len(), 2);
         assert!(result.not_found.is_empty());
+        assert_eq!(result.rows.len(), 2);
+        assert!(result.rows.iter().all(|r| r.status == Status::Found));
     }
 
     #[test]
@@ -188,5 +262,7 @@ mod tests {
         let result = scan(&source, base, &regions, &patterns, Arch::X64);
         assert_eq!(result.not_found, vec!["Missing"]);
         assert!(result.findings.is_empty());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].status, Status::NotFound);
     }
 }

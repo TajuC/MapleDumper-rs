@@ -6,3 +6,6 @@
 /hdr.txt
 /offsets.h
 /update.txt
+
+# Tauri build-time generated ACL/permission schemas
+crates/maple-app/gen/

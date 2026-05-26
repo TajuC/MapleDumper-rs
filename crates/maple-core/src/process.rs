@@ -2,8 +2,12 @@ use crate::memory::{MemorySource, Region, coalesce};
 use core::ffi::c_void;
 use std::io;
 use std::mem::{size_of, zeroed};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, LUID};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LUID,
+};
 use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
     TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
@@ -35,6 +39,35 @@ pub struct ModuleInfo {
     pub size: usize,
 }
 
+#[derive(Debug, Clone)]
+pub enum Locator {
+    Name(String),
+    Class(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AttachOptions {
+    pub wait: bool,
+    pub timeout: Option<Duration>,
+    pub poll: Duration,
+}
+
+impl Default for AttachOptions {
+    fn default() -> Self {
+        Self {
+            wait: false,
+            timeout: None,
+            poll: Duration::from_millis(300),
+        }
+    }
+}
+
+enum AttachError {
+    NotReady,
+    AccessDenied,
+    NoNtdll,
+}
+
 struct OwnedHandle(HANDLE);
 
 impl Drop for OwnedHandle {
@@ -54,6 +87,18 @@ fn u16_to_string(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
+fn strip_exe(s: &str) -> &str {
+    if s.len() >= 4 && s[s.len() - 4..].eq_ignore_ascii_case(".exe") {
+        &s[..s.len() - 4]
+    } else {
+        s
+    }
+}
+
+fn name_matches(candidate: &str, query: &str) -> bool {
+    strip_exe(candidate.trim()).eq_ignore_ascii_case(strip_exe(query.trim()))
+}
+
 #[must_use]
 pub fn find_pid_by_name(name: &str) -> Option<u32> {
     unsafe {
@@ -68,7 +113,7 @@ pub fn find_pid_by_name(name: &str) -> Option<u32> {
             return None;
         }
         loop {
-            if u16_to_string(&entry.szExeFile).eq_ignore_ascii_case(name) {
+            if name_matches(&u16_to_string(&entry.szExeFile), name) {
                 return Some(entry.th32ProcessID);
             }
             if Process32NextW(snap, &mut entry) == 0 {
@@ -80,7 +125,7 @@ pub fn find_pid_by_name(name: &str) -> Option<u32> {
 
 #[must_use]
 pub fn find_pid_by_class(class: &str) -> Option<u32> {
-    let wclass = wide(class);
+    let wclass = wide(class.trim());
     unsafe {
         let hwnd = FindWindowW(wclass.as_ptr(), std::ptr::null());
         if hwnd.is_null() {
@@ -120,18 +165,20 @@ fn enable_debug_privilege() -> bool {
     }
 }
 
-fn open_process(pid: u32) -> Option<OwnedHandle> {
+fn open_process(pid: u32) -> Result<OwnedHandle, u32> {
     let rights_options = [
         PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
         PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION,
     ];
+    let mut last_error = 0u32;
     for rights in rights_options {
         let handle = unsafe { OpenProcess(rights, 0, pid) };
         if !handle.is_null() {
-            return Some(OwnedHandle(handle));
+            return Ok(OwnedHandle(handle));
         }
+        last_error = unsafe { GetLastError() };
     }
-    None
+    Err(last_error)
 }
 
 fn find_module(pid: u32, module_name: &str) -> Option<ModuleInfo> {
@@ -147,7 +194,7 @@ fn find_module(pid: u32, module_name: &str) -> Option<ModuleInfo> {
             return None;
         }
         loop {
-            if u16_to_string(&me.szModule).eq_ignore_ascii_case(module_name) {
+            if name_matches(&u16_to_string(&me.szModule), module_name) {
                 return Some(ModuleInfo {
                     base: me.modBaseAddr as usize,
                     size: me.modBaseSize as usize,
@@ -230,6 +277,46 @@ fn load_nt_read() -> Option<NtReadVirtualMemoryFn> {
     }
 }
 
+fn resolve_module_name(locator: &Locator, module: &str) -> io::Result<String> {
+    let module = module.trim();
+    if !module.is_empty() {
+        return Ok(module.to_string());
+    }
+    match locator {
+        Locator::Name(name) => Ok(name.trim().to_string()),
+        Locator::Class(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a module name is required when attaching by window class",
+        )),
+    }
+}
+
+fn try_attach_once(locator: &Locator, module: &str) -> Result<Target, AttachError> {
+    let pid = match locator {
+        Locator::Name(name) => find_pid_by_name(name),
+        Locator::Class(class) => find_pid_by_class(class),
+    };
+    let Some(pid) = pid else {
+        return Err(AttachError::NotReady);
+    };
+    let handle = match open_process(pid) {
+        Ok(handle) => handle,
+        Err(code) if code == ERROR_ACCESS_DENIED => return Err(AttachError::AccessDenied),
+        Err(_) => return Err(AttachError::NotReady),
+    };
+    let Some(module_info) = find_module(pid, module) else {
+        return Err(AttachError::NotReady);
+    };
+    let Some(nt_read) = load_nt_read() else {
+        return Err(AttachError::NoNtdll);
+    };
+    Ok(Target {
+        handle,
+        nt_read,
+        module: module_info,
+    })
+}
+
 pub struct Target {
     handle: OwnedHandle,
     nt_read: NtReadVirtualMemoryFn,
@@ -242,23 +329,70 @@ unsafe impl Send for Target {}
 unsafe impl Sync for Target {}
 
 impl Target {
-    pub fn attach_by_name(process_name: &str, module_name: &str) -> io::Result<Self> {
-        let pid = find_pid_by_name(process_name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "process not found"))?;
-        Self::attach_pid(pid, module_name)
-    }
-
-    pub fn attach_by_class(class_name: &str, module_name: &str) -> io::Result<Self> {
-        let pid = find_pid_by_class(class_name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "window class not found"))?;
-        Self::attach_pid(pid, module_name)
-    }
-
-    pub fn attach_pid(pid: u32, module_name: &str) -> io::Result<Self> {
+    pub fn attach(
+        locator: &Locator,
+        module: &str,
+        opts: &AttachOptions,
+        cancel: &AtomicBool,
+    ) -> io::Result<Self> {
         enable_debug_privilege();
-        let handle = open_process(pid)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::PermissionDenied, "OpenProcess failed"))?;
-        let module = find_module(pid, module_name)
+        let module = resolve_module_name(locator, module)?;
+        let deadline = opts.timeout.map(|t| Instant::now() + t);
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "attach cancelled",
+                ));
+            }
+            match try_attach_once(locator, &module) {
+                Ok(target) => return Ok(target),
+                Err(AttachError::AccessDenied) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "access denied opening the process - run MapleDumper as administrator",
+                    ));
+                }
+                Err(AttachError::NoNtdll) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "NtReadVirtualMemory unavailable",
+                    ));
+                }
+                Err(AttachError::NotReady) => {
+                    if !opts.wait {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "target process not found (is it running?)",
+                        ));
+                    }
+                    if let Some(deadline) = deadline
+                        && Instant::now() >= deadline
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "timed out waiting for the target process",
+                        ));
+                    }
+                    std::thread::sleep(opts.poll);
+                }
+            }
+        }
+    }
+
+    pub fn attach_pid(pid: u32, module: &str) -> io::Result<Self> {
+        enable_debug_privilege();
+        let handle = open_process(pid).map_err(|code| {
+            if code == ERROR_ACCESS_DENIED {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "access denied - run as administrator",
+                )
+            } else {
+                io::Error::other(format!("OpenProcess failed (error {code})"))
+            }
+        })?;
+        let module_info = find_module(pid, module)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "module not found"))?;
         let nt_read = load_nt_read().ok_or_else(|| {
             io::Error::new(
@@ -269,8 +403,26 @@ impl Target {
         Ok(Self {
             handle,
             nt_read,
-            module,
+            module: module_info,
         })
+    }
+
+    pub fn attach_by_name(process: &str, module: &str) -> io::Result<Self> {
+        Self::attach(
+            &Locator::Name(process.to_string()),
+            module,
+            &AttachOptions::default(),
+            &AtomicBool::new(false),
+        )
+    }
+
+    pub fn attach_by_class(class: &str, module: &str) -> io::Result<Self> {
+        Self::attach(
+            &Locator::Class(class.to_string()),
+            module,
+            &AttachOptions::default(),
+            &AtomicBool::new(false),
+        )
     }
 
     #[must_use]
@@ -305,6 +457,14 @@ impl MemorySource for Target {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_matching_is_tolerant() {
+        assert!(name_matches("MapleStory.exe", "maplestory"));
+        assert!(name_matches("MapleStory.exe", "MapleStory.exe"));
+        assert!(name_matches("game", "game.exe"));
+        assert!(!name_matches("MapleStory.exe", "other"));
+    }
 
     #[test]
     fn reads_own_process_memory() {

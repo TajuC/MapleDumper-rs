@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/maple-core", "crates/maple-cli", "crates/maple-gui"]
+members = ["crates/maple-core", "crates/maple-cli", "crates/maple-app"]
 
 [workspace.package]
 version = "0.1.0"

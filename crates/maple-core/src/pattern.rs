@@ -22,12 +22,29 @@ impl Signature {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+
+    #[must_use]
+    pub fn to_aob(&self) -> String {
+        self.bytes
+            .iter()
+            .zip(&self.mask)
+            .map(|(b, &significant)| {
+                if significant {
+                    format!("{b:02X}")
+                } else {
+                    "??".to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pattern {
     pub name: String,
-    pub category: String,
+    pub category: Option<String>,
+    pub note: Option<String>,
     pub signature: Signature,
 }
 
@@ -95,12 +112,12 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
-fn split_name_aob(line: &str) -> Option<(String, String)> {
-    let without_comment = match line.find([';', '#']) {
-        Some(i) => &line[..i],
-        None => line,
+fn split_name_aob(line: &str) -> Option<(String, String, String)> {
+    let (body, note) = match line.find([';', '#']) {
+        Some(i) => (&line[..i], line[i + 1..].trim()),
+        None => (line, ""),
     };
-    let s = without_comment.trim();
+    let s = body.trim();
     if s.is_empty() {
         return None;
     }
@@ -114,7 +131,7 @@ fn split_name_aob(line: &str) -> Option<(String, String)> {
     if name.is_empty() || aob.is_empty() {
         return None;
     }
-    Some((name.to_string(), aob.to_string()))
+    Some((name.to_string(), aob.to_string(), note.to_string()))
 }
 
 #[must_use]
@@ -122,7 +139,7 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();
     let mut section: Option<Arch> = None;
-    let mut category = String::from("globals");
+    let mut category: Option<String> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim();
         if line.is_empty() {
@@ -139,7 +156,7 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
         if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
-                category = trimmed.to_string();
+                category = Some(trimmed.to_string());
             }
             continue;
         }
@@ -148,12 +165,13 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
         {
             continue;
         }
-        if let Some((name, aob)) = split_name_aob(line) {
+        if let Some((name, aob, note)) = split_name_aob(line) {
             let signature = parse_signature(&aob);
             if !signature.is_empty() {
                 out.push(Pattern {
                     name,
                     category: category.clone(),
+                    note: (!note.is_empty()).then_some(note),
                     signature,
                 });
             }
@@ -299,17 +317,17 @@ mod tests {
     }
 
     #[test]
-    fn default_category_is_globals() {
+    fn default_category_is_unspecified() {
         let p = parse_patterns("Foo = AA", Arch::X64);
-        assert_eq!(p[0].category, "globals");
+        assert_eq!(p[0].category, None);
     }
 
     #[test]
     fn category_sections_apply_to_following_patterns() {
         let text = "[functions]\nFoo = AA\n[offsets]\nBar = BB\nBaz = CC";
         let p = parse_patterns(text, Arch::X64);
-        assert_eq!(p[0].category, "functions");
-        assert_eq!(p[1].category, "offsets");
-        assert_eq!(p[2].category, "offsets");
+        assert_eq!(p[0].category.as_deref(), Some("functions"));
+        assert_eq!(p[1].category.as_deref(), Some("offsets"));
+        assert_eq!(p[2].category.as_deref(), Some("offsets"));
     }
 }

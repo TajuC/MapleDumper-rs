@@ -7,6 +7,7 @@ pub enum Kind {
     Pointer,
     Call,
     Offset,
+    Header,
 }
 
 impl Kind {
@@ -18,6 +19,8 @@ impl Kind {
             (Kind::Pointer, base)
         } else if let Some(base) = name.strip_suffix("_OFF") {
             (Kind::Offset, base)
+        } else if let Some(base) = name.strip_suffix("_HDR") {
+            (Kind::Header, base)
         } else {
             (Kind::Direct, name)
         }
@@ -167,6 +170,39 @@ pub fn extract_offset(data: &[u8], max_scan: usize, arch: Arch) -> Option<u32> {
     None
 }
 
+fn immediate_at(p: &[u8]) -> Option<u32> {
+    let start = usize::from(!p.is_empty() && (p[0] & 0xF0) == 0x40);
+    let rest = &p[start..];
+    if rest.is_empty() {
+        return None;
+    }
+    if (0xB8..=0xBF).contains(&rest[0]) && rest.len() >= 5 {
+        return Some(rel32(rest, 1) as u32);
+    }
+    if rest[0] == 0xC7 && rest.len() >= 2 && (rest[1] >> 3) & 0x07 == 0 {
+        let imm_off = match rest[1] >> 6 {
+            3 => 2,
+            0 if rest[1] & 0x07 != 4 && rest[1] & 0x07 != 5 => 2,
+            _ => return None,
+        };
+        if rest.len() >= imm_off + 4 {
+            return Some(rel32(rest, imm_off) as u32);
+        }
+    }
+    None
+}
+
+#[must_use]
+pub fn extract_immediate(data: &[u8], max_scan: usize) -> Option<u32> {
+    for off in 0..=max_scan {
+        let Some(p) = data.get(off..) else { break };
+        if let Some(value) = immediate_at(p) {
+            return Some(value);
+        }
+    }
+    None
+}
+
 pub fn resolve_call<S: MemorySource>(
     source: &S,
     match_addr: usize,
@@ -301,6 +337,18 @@ mod tests {
         assert_eq!(
             extract_offset(&[0x8B, 0x8E, 0x00, 0x01, 0x00, 0x00], 4, Arch::X86),
             Some(0x100)
+        );
+    }
+
+    #[test]
+    fn immediate_from_mov_reg_imm() {
+        assert_eq!(
+            extract_immediate(&[0xBA, 0x23, 0x01, 0x00, 0x00], 4),
+            Some(0x123)
+        );
+        assert_eq!(
+            extract_immediate(&[0x48, 0xC7, 0xC2, 0x23, 0x01, 0x00, 0x00], 4),
+            Some(0x123)
         );
     }
 
