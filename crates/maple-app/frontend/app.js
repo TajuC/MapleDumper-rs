@@ -61,6 +61,7 @@ const state = {
   arch: "x64",
   wait: true,
   byClass: false,
+  codeOnly: true,
   rows: [],
   report: null,
   activeCat: "all",
@@ -144,6 +145,10 @@ $("t-class").addEventListener("click", () => {
   $("target-label").textContent = state.byClass ? "Window class" : "Target process";
   $("w-target").placeholder = state.byClass ? "Window class name" : "MapleStory.exe";
 });
+$("t-code").addEventListener("click", () => {
+  state.codeOnly = !state.codeOnly;
+  $("t-code").classList.toggle("active", state.codeOnly);
+});
 
 /* ---------- connection + footer ---------- */
 
@@ -185,6 +190,7 @@ async function runScan() {
     arch: state.arch,
     wait: state.wait,
     timeout_secs: $("w-timeout").value ? Number($("w-timeout").value) : null,
+    code_only: state.codeOnly,
     patterns: state.patternText,
   };
   if (!req.target) {
@@ -215,7 +221,12 @@ async function runScan() {
     $("s-module").textContent = report.module_name;
     setConn("Attached", "ok");
     setRing("done", total ? (report.found / total) * 100 : 0);
-    setFoot("Scan complete", `${report.found} of ${total} resolved · ${report.total_matches} matches`);
+    const mb = report.bytes_scanned / 1048576;
+    const gbs = report.scan_ms > 0 ? report.bytes_scanned / (report.scan_ms / 1000) / 1073741824 : 0;
+    setFoot(
+      "Scan complete",
+      `${report.found} of ${total} resolved · ${mb.toFixed(0)} MB @ ${gbs.toFixed(2)} GB/s · attach ${report.attach_ms} ms`
+    );
   } catch (err) {
     setConn("Error", "err");
     setRing("done", 0);
@@ -569,9 +580,7 @@ $("modal-ok").addEventListener("click", async () => {
 
 window.MonacoEnvironment = {
   getWorkerUrl() {
-    const origin = location.origin;
-    const src = `self.MonacoEnvironment={baseUrl:'${origin}/'};importScripts('${origin}/vs/base/worker/workerMain.js');`;
-    return `data:text/javascript;charset=utf-8,${encodeURIComponent(src)}`;
+    return "vs/base/worker/workerMain.js";
   },
 };
 

@@ -853,7 +853,8 @@ button.btn-ico:hover {
 
 /* privacy mask: visual only, leaves data intact */
 .masked .sig,
-.masked #insp-aob {
+.masked #insp-aob,
+.masked #f-aob {
   filter: blur(5px);
   user-select: none;
 }

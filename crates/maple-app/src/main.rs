@@ -38,6 +38,7 @@ struct ScanRequest {
     arch: String,
     wait: bool,
     timeout_secs: Option<u64>,
+    code_only: bool,
     patterns: String,
 }
 
@@ -64,6 +65,10 @@ struct ScanReport {
     not_found: usize,
     total_matches: usize,
     elapsed_ms: u128,
+    attach_ms: u128,
+    scan_ms: u128,
+    bytes_scanned: u64,
+    regions: usize,
 }
 
 fn arch_of(s: &str) -> Arch {
@@ -138,9 +143,18 @@ fn run_scan(
 
     let started = Instant::now();
     let target = Target::attach(&locator, &req.module, &opts, cancel).map_err(|e| e.to_string())?;
+    let attach_ms = started.elapsed().as_millis();
     let module_base = target.module.base as u64;
-    let regions = target.regions();
+    let regions = if req.code_only {
+        target.code_regions()
+    } else {
+        target.regions()
+    };
+    let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
+    let region_count = regions.len();
+    let scan_started = Instant::now();
     let result = maple_core::scan(&target, target.module.base, &regions, &patterns, arch);
+    let scan_ms = scan_started.elapsed().as_millis();
     let elapsed_ms = started.elapsed().as_millis();
 
     let module_name = {
@@ -181,6 +195,10 @@ fn run_scan(
         not_found: result.not_found.len(),
         total_matches: result.total_matches,
         elapsed_ms,
+        attach_ms,
+        scan_ms,
+        bytes_scanned,
+        regions: region_count,
     };
 
     *last.lock().unwrap() = Some(LastScan {
