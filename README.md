@@ -13,9 +13,9 @@ on the same engine crate.
 ## Highlights
 
 **Engine**
-- **Read/scan pipeline** — one reader streams large blocks of the target's memory (one read at a
-  time, so the kernel never serializes competing reads) while the rayon thread-pool scans blocks
-  as they arrive. The scan overlaps the cross-process read and effectively hides under it.
+- **Read/scan pipeline** — a few reader threads stream the target's memory in parallel into a
+  bounded channel while the rayon thread-pool scans each block as it lands, so reading and scanning
+  overlap. Work units are kept small (256 KiB) so the scan spreads evenly across every core.
 - AVX2 masked matcher that anchors each pattern on its **rarest fixed byte** (static frequency
   table), with a scalar fallback selected at runtime.
 - Scans **executable regions only** by default (where code signatures live), with a one-switch
@@ -88,8 +88,10 @@ mapledumper (--process <name> | --class <window-class>) [options]
   --arch <32|64>     architecture section to load (default: 64)
   --out <dir>        output directory (default: .)
   --ce               write update.txt as a Cheat Engine table
+  --no-offsets       do not write offsets.h
   --no-wait          do not wait for the process; fail if it is not running
   --timeout <secs>   give up waiting after this many seconds
+  --profile          measure the read/scan/resolve split against the live target and exit
   -h, --help         print help
 ```
 
@@ -157,9 +159,9 @@ See `patterns.sample.txt` for a worked example.
    `PROCESS_VM_READ` (waiting for it to appear if requested).
 2. Enumerate the module's committed regions — executable only by default — and coalesce adjacent
    ones.
-3. Stream the regions through the pipeline: a reader issues large `NtReadVirtualMemory` reads
-   (tolerating partial copies) while the thread-pool scans each block with the AVX2 masked matcher
-   as soon as it lands, so reading and scanning overlap.
+3. Stream the regions through the pipeline: a few reader threads issue `NtReadVirtualMemory` reads
+   in parallel (tolerating partial copies) while the thread-pool scans each 256 KiB block with the
+   AVX2 masked matcher as soon as it lands, so reading and scanning overlap.
 4. Resolve each match according to its suffix and convert addresses to module RVAs.
 5. Emit `offsets.h`, a Cheat Engine table, or a plain report.
 
@@ -175,18 +177,20 @@ scans at **~29 GiB/s**, versus **~0.8 GiB/s** when forced onto a common byte lik
 **37x** difference, which is exactly why the anchor heuristic exists.
 (`cargo run --release --example throughput` is a dependency-light equivalent.)
 
-Against a **live** process the wall clock is bound by the cross-process *read*, not the match.
-`NtReadVirtualMemory` is the lowest documented user-mode read primitive (`ReadProcessMemory` merely
-wraps it), and it copies a running target's memory at roughly **0.5 GB/s** — and concurrent reads
-don't help, because the kernel serializes reads against the target's address space. So the engine
-reads continuously on one thread and overlaps the (far faster) scan on the pool, hiding it under
-the read, and reads executable regions only to keep the byte count down. A full live dump of a
-~140 MB code section finishes in under ~0.3 s.
+Against a **live** process, `--profile` breaks the wall clock into its read, scan, and resolve
+phases (and sweeps work-unit sizes) so the tuning is measured, not guessed. On a 143 MB code
+section with 52 patterns the picture was clear: the cross-process read via `NtReadVirtualMemory`
+(the primitive `ReadProcessMemory` wraps) is fast — ~2.3 GB/s on one thread, scaling past 5 GB/s
+with a few readers — and resolving is negligible. The time was going into the scan, which a
+too-coarse work unit left poorly balanced across cores. Sizing the accept window at 256 KiB and
+streaming the reads on a few threads spreads the scan evenly and overlaps it with the read, taking
+that dump from ~287 ms to **~49 ms**. Scanning executable regions only keeps the byte count down.
 
 Deliberately not used: `PssCaptureSnapshot` gives a consistent snapshot but throttles reads to
 ~30 MB/s; a kernel driver (`MmCopyVirtualMemory`) could read faster but conflicts with anti-cheat;
-reading the image from disk is fast but misses the target's runtime state. AVX-512 / Teddy
-multi-pattern prefilters were skipped because the scan is already hidden under the read.
+reading the image from disk is fast but misses the target's runtime state. AVX-512 and Teddy-style
+multi-pattern prefilters give diminishing returns now that finer chunking already balances the scan
+against the read.
 
 ## License
 
