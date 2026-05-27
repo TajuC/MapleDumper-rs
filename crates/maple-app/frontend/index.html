@@ -45,6 +45,7 @@
             <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span data-i18n="nav.patterns">Patterns</span></button>
             <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span data-i18n="nav.editor">Editor</span></button>
             <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span data-i18n="nav.output">Output</span></button>
+            <button class="nav-item" data-view="history" data-icon="history"><span class="ico"></span><span data-i18n="nav.history">History</span></button>
             <button class="nav-item" data-view="settings" data-icon="settings"><span class="ico"></span><span data-i18n="nav.settings">Settings</span></button>
           </nav>
           <div class="side-foot">
@@ -254,6 +255,23 @@
               <pre id="output-text" class="panel output grow">Run a scan, then export from the Workspace toolbar.</pre>
             </section>
 
+            <section class="view" id="view-history">
+              <div class="simple-head">
+                <div><h2 data-i18n="hist.title">History</h2><p class="muted" data-i18n="hist.sub">Every scan, grouped by version</p></div>
+                <div class="head-actions">
+                  <button id="hist-refresh" class="btn btn-soft"><span class="ico" data-icon="activity"></span><span data-i18n="hist.refresh">Refresh</span></button>
+                  <button id="hist-compare" class="btn btn-soft" disabled><span class="ico" data-icon="diff"></span><span data-i18n="hist.compare">Compare A ↔ B</span></button>
+                  <button id="hist-matrix" class="btn btn-soft"><span class="ico" data-icon="grid"></span><span data-i18n="hist.matrix">Matrix</span></button>
+                  <button id="hist-clear" class="btn btn-soft" data-i18n="hist.clear">Clear all</button>
+                </div>
+              </div>
+              <div id="hist-pins" class="hist-pins"></div>
+              <div class="hist-grid">
+                <div class="panel table-scroll" id="hist-list"></div>
+                <aside class="panel hist-detail" id="hist-detail"><div id="hist-tabs" class="hist-tabs" hidden></div><div id="hist-tab-content" class="hist-tab-content"><div class="insp-hint" data-i18n="hist.selectHint">Select a scan to view its offsets, or pin two and Compare.</div></div></aside>
+              </div>
+            </section>
+
             <section class="view" id="view-settings">
               <div class="simple-head">
                 <div><h2 data-i18n="set.title">Settings</h2><p class="muted" data-i18n="set.sub">Privacy mask and display options</p></div>
@@ -278,6 +296,7 @@
                     </div>
                   </div>
                   <div class="settings-list">
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.randomize">Randomize instead of blur</b><span data-i18n="set.randomizeDesc">Showcase mode: replace masked data with realistic fake values instead of blurring it.</span></div><input type="checkbox" id="mask-mode" /></label>
                     <label class="setting"><div class="setting-text"><b data-i18n="set.sig">Signatures</b><span data-i18n="set.sigDesc">AOB byte patterns in tables, the inspector, and the edit dialog</span></div><input type="checkbox" data-mask="sig" /></label>
                     <label class="setting"><div class="setting-text"><b data-i18n="set.name">Pattern names</b><span data-i18n="set.nameDesc">Symbol names everywhere they appear</span></div><input type="checkbox" data-mask="name" /></label>
                     <label class="setting"><div class="setting-text"><b data-i18n="set.addr">Addresses</b><span data-i18n="set.addrDesc">Resolved RVA and absolute addresses</span></div><input type="checkbox" data-mask="addr" /></label>

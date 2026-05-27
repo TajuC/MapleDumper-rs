@@ -188,6 +188,240 @@ try {
 } catch {
 }
 let onLangChange = null;
+const DIFF_I18N = {
+  en: {
+    "nav.diff": "Diff",
+    "diff.title": "Diff",
+    "diff.sub": "Compare two saved dumps",
+    "diff.loadA": "Load A (old)",
+    "diff.loadB": "Load B (new)",
+    "diff.compare": "Compare",
+    "diff.empty": "Load two dumps (A = old, B = new) and click Compare.",
+    "diff.noChanges": "No differences.",
+    "diff.needBoth": "Load both A and B first.",
+    "diff.unchanged": "unchanged",
+    "diff.new": "new",
+    "diff.moved": "moved",
+    "diff.removed": "removed",
+    "diff.changed": "changed",
+    "diff.same": "same",
+    "diff.colChange": "Change",
+    "diff.colOld": "Old",
+    "diff.colNew": "New",
+  },
+  ja: {
+    "nav.diff": "差分",
+    "diff.title": "差分",
+    "diff.sub": "保存した2つのダンプを比較します",
+    "diff.loadA": "A を読み込み（旧）",
+    "diff.loadB": "B を読み込み（新）",
+    "diff.compare": "比較",
+    "diff.empty": "2つのダンプ（A = 旧、B = 新）を読み込んで「比較」を押してください。",
+    "diff.noChanges": "差分はありません。",
+    "diff.needBoth": "先に A と B の両方を読み込んでください。",
+    "diff.unchanged": "変更なし",
+    "diff.new": "新規",
+    "diff.moved": "移動",
+    "diff.removed": "削除",
+    "diff.changed": "変更あり",
+    "diff.same": "同一",
+    "diff.colChange": "種別",
+    "diff.colOld": "旧",
+    "diff.colNew": "新",
+  },
+  zh: {
+    "nav.diff": "差异",
+    "diff.title": "差异",
+    "diff.sub": "比较两个已保存的转储",
+    "diff.loadA": "加载 A（旧）",
+    "diff.loadB": "加载 B（新）",
+    "diff.compare": "比较",
+    "diff.empty": "加载两个转储（A = 旧，B = 新），然后点击“比较”。",
+    "diff.noChanges": "没有差异。",
+    "diff.needBoth": "请先加载 A 和 B。",
+    "diff.unchanged": "未变",
+    "diff.new": "新增",
+    "diff.moved": "移动",
+    "diff.removed": "移除",
+    "diff.changed": "已更改",
+    "diff.same": "相同",
+    "diff.colChange": "变更",
+    "diff.colOld": "旧",
+    "diff.colNew": "新",
+  },
+  ko: {
+    "nav.diff": "비교",
+    "diff.title": "비교",
+    "diff.sub": "저장된 두 덤프를 비교합니다",
+    "diff.loadA": "A 불러오기 (이전)",
+    "diff.loadB": "B 불러오기 (새로운)",
+    "diff.compare": "비교",
+    "diff.empty": "두 덤프(A = 이전, B = 새로운)를 불러온 후 비교를 클릭하세요.",
+    "diff.noChanges": "차이가 없습니다.",
+    "diff.needBoth": "먼저 A와 B를 모두 불러오세요.",
+    "diff.unchanged": "변경 없음",
+    "diff.new": "신규",
+    "diff.moved": "이동",
+    "diff.removed": "제거",
+    "diff.changed": "변경됨",
+    "diff.same": "동일",
+    "diff.colChange": "변경",
+    "diff.colOld": "이전",
+    "diff.colNew": "새로운",
+  },
+  he: {
+    "nav.diff": "השוואה",
+    "diff.title": "השוואה",
+    "diff.sub": "השוואת שני קובצי dump שמורים",
+    "diff.loadA": "טען A (ישן)",
+    "diff.loadB": "טען B (חדש)",
+    "diff.compare": "השווה",
+    "diff.empty": "טען שני קובצי dump (A = ישן, B = חדש) ולחץ על השווה.",
+    "diff.noChanges": "אין הבדלים.",
+    "diff.needBoth": "טען תחילה גם את A וגם את B.",
+    "diff.unchanged": "ללא שינוי",
+    "diff.new": "חדש",
+    "diff.moved": "הוזז",
+    "diff.removed": "הוסר",
+    "diff.changed": "השתנה",
+    "diff.same": "זהה",
+    "diff.colChange": "שינוי",
+    "diff.colOld": "ישן",
+    "diff.colNew": "חדש",
+  },
+};
+Object.keys(DIFF_I18N).forEach((lang) => Object.assign(I18N[lang], DIFF_I18N[lang]));
+
+const HIST_I18N = {
+  en: {
+    "nav.history": "History",
+    "hist.title": "History",
+    "hist.sub": "Every scan, grouped by version",
+    "hist.refresh": "Refresh",
+    "hist.compare": "Compare A ↔ B",
+    "hist.clear": "Clear all",
+    "hist.empty": "No scans yet. Run a scan and it appears here.",
+    "hist.selectHint": "Select a scan to view its offsets, or pin two and Compare.",
+    "hist.noFindings": "No findings stored for this scan.",
+    "hist.found": "found",
+    "hist.unknownVer": "Unknown version",
+    "hist.delete": "Delete",
+    "hist.export": "Export",
+    "hist.exported": "Exported",
+    "hist.scanDetail": "Scan details",
+  },
+  ja: {
+    "nav.history": "履歴",
+    "hist.title": "履歴",
+    "hist.sub": "すべてのスキャンをバージョン別に整理",
+    "hist.refresh": "更新",
+    "hist.compare": "A ↔ B を比較",
+    "hist.clear": "すべて削除",
+    "hist.empty": "まだスキャンがありません。スキャンするとここに表示されます。",
+    "hist.selectHint": "スキャンを選択してオフセットを表示するか、2つを固定して比較してください。",
+    "hist.noFindings": "このスキャンに保存された結果はありません。",
+    "hist.found": "発見",
+    "hist.unknownVer": "不明なバージョン",
+    "hist.delete": "削除",
+    "hist.export": "エクスポート",
+    "hist.exported": "エクスポートしました",
+    "hist.scanDetail": "スキャンの詳細",
+  },
+  zh: {
+    "nav.history": "历史",
+    "hist.title": "历史",
+    "hist.sub": "按版本分组的所有扫描",
+    "hist.refresh": "刷新",
+    "hist.compare": "比较 A ↔ B",
+    "hist.clear": "清除全部",
+    "hist.empty": "暂无扫描。运行一次扫描后会显示在此处。",
+    "hist.selectHint": "选择一次扫描查看其偏移，或固定两个进行比较。",
+    "hist.noFindings": "此扫描没有存储的结果。",
+    "hist.found": "找到",
+    "hist.unknownVer": "未知版本",
+    "hist.delete": "删除",
+    "hist.export": "导出",
+    "hist.exported": "已导出",
+    "hist.scanDetail": "扫描详情",
+  },
+  ko: {
+    "nav.history": "기록",
+    "hist.title": "기록",
+    "hist.sub": "버전별로 정리된 모든 스캔",
+    "hist.refresh": "새로고침",
+    "hist.compare": "A ↔ B 비교",
+    "hist.clear": "모두 지우기",
+    "hist.empty": "아직 스캔이 없습니다. 스캔을 실행하면 여기에 표시됩니다.",
+    "hist.selectHint": "스캔을 선택하여 오프셋을 보거나 두 개를 고정해 비교하세요.",
+    "hist.noFindings": "이 스캔에 저장된 결과가 없습니다.",
+    "hist.found": "발견",
+    "hist.unknownVer": "알 수 없는 버전",
+    "hist.delete": "삭제",
+    "hist.export": "내보내기",
+    "hist.exported": "내보냈습니다",
+    "hist.scanDetail": "스캔 세부정보",
+  },
+  he: {
+    "nav.history": "היסטוריה",
+    "hist.title": "היסטוריה",
+    "hist.sub": "כל הסריקות, מקובצות לפי גרסה",
+    "hist.refresh": "רענן",
+    "hist.compare": "השווה A ↔ B",
+    "hist.clear": "נקה הכול",
+    "hist.empty": "אין עדיין סריקות. הרץ סריקה והיא תופיע כאן.",
+    "hist.selectHint": "בחר סריקה כדי לראות את ההיסטים, או נעץ שתיים והשווה.",
+    "hist.noFindings": "אין ממצאים שמורים לסריקה זו.",
+    "hist.found": "נמצאו",
+    "hist.unknownVer": "גרסה לא ידועה",
+    "hist.delete": "מחק",
+    "hist.export": "ייצוא",
+    "hist.exported": "יוצא",
+    "hist.scanDetail": "פרטי הסריקה",
+  },
+};
+Object.keys(HIST_I18N).forEach((lang) => Object.assign(I18N[lang], HIST_I18N[lang]));
+
+const PINS_I18N = {
+  en: { "hist.compare": "Compare versions", "hist.base": "Base", "hist.target": "Target", "hist.pinHint": "Pick a base and a target version to compare.", "hist.unset": "not set", "hist.setBase": "Set as base", "hist.setTarget": "Set as target" },
+  ja: { "hist.compare": "バージョンを比較", "hist.base": "基準", "hist.target": "対象", "hist.pinHint": "比較する基準バージョンと対象バージョンを選択してください。", "hist.unset": "未設定", "hist.setBase": "基準に設定", "hist.setTarget": "対象に設定" },
+  zh: { "hist.compare": "比较版本", "hist.base": "基准", "hist.target": "目标", "hist.pinHint": "请选择要比较的基准版本和目标版本。", "hist.unset": "未设置", "hist.setBase": "设为基准", "hist.setTarget": "设为目标" },
+  ko: { "hist.compare": "버전 비교", "hist.base": "기준", "hist.target": "대상", "hist.pinHint": "비교할 기준 버전과 대상 버전을 선택하세요.", "hist.unset": "미설정", "hist.setBase": "기준으로 설정", "hist.setTarget": "대상으로 설정" },
+  he: { "hist.compare": "השווה גרסאות", "hist.base": "בסיס", "hist.target": "יעד", "hist.pinHint": "בחר גרסת בסיס וגרסת יעד להשוואה.", "hist.unset": "לא הוגדר", "hist.setBase": "הגדר כבסיס", "hist.setTarget": "הגדר כיעד" },
+};
+Object.keys(PINS_I18N).forEach((lang) => Object.assign(I18N[lang], PINS_I18N[lang]));
+
+const SEARCH_I18N = { en: "Search offsets…", ja: "オフセットを検索…", zh: "搜索偏移…", ko: "오프셋 검색…", he: "חיפוש היסטים…" };
+Object.keys(SEARCH_I18N).forEach((lang) => {
+  I18N[lang]["hist.search"] = SEARCH_I18N[lang];
+});
+
+const RAND_I18N = {
+  en: { "set.randomize": "Randomize instead of blur", "set.randomizeDesc": "Showcase mode: replace masked data with realistic fake values instead of blurring it." },
+  ja: { "set.randomize": "ぼかしの代わりにランダム化", "set.randomizeDesc": "ショーケースモード：マスクしたデータをぼかす代わりに、本物らしい偽の値に置き換えます。" },
+  zh: { "set.randomize": "随机化而非模糊", "set.randomizeDesc": "展示模式：用逼真的随机假数据替换被遮罩的数据，而不是模糊处理。" },
+  ko: { "set.randomize": "흐리게 대신 무작위화", "set.randomizeDesc": "쇼케이스 모드: 마스킹된 데이터를 흐리게 처리하는 대신 사실적인 가짜 값으로 대체합니다." },
+  he: { "set.randomize": "אקראי במקום טשטוש", "set.randomizeDesc": "מצב תצוגה: החלף נתונים ממוסכים בערכים מזויפים אך מציאותיים במקום לטשטש." },
+};
+Object.keys(RAND_I18N).forEach((lang) => Object.assign(I18N[lang], RAND_I18N[lang]));
+
+const TAB_I18N = {
+  en: { "hist.matrix": "Matrix", "hist.needTwo": "Need at least two versions to build a matrix.", "hist.matrixTitle": "Matrix ({n})", "hist.rename": "Double-click to rename" },
+  ja: { "hist.matrix": "マトリクス", "hist.needTwo": "マトリクスを作成するには2つ以上のバージョンが必要です。", "hist.matrixTitle": "マトリクス ({n})", "hist.rename": "ダブルクリックで名前を変更" },
+  zh: { "hist.matrix": "矩阵", "hist.needTwo": "构建矩阵至少需要两个版本。", "hist.matrixTitle": "矩阵 ({n})", "hist.rename": "双击重命名" },
+  ko: { "hist.matrix": "매트릭스", "hist.needTwo": "매트릭스를 만들려면 두 개 이상의 버전이 필요합니다.", "hist.matrixTitle": "매트릭스 ({n})", "hist.rename": "더블클릭하여 이름 변경" },
+  he: { "hist.matrix": "מטריצה", "hist.needTwo": "נדרשות לפחות שתי גרסאות ליצירת מטריצה.", "hist.matrixTitle": "מטריצה ({n})", "hist.rename": "לחיצה כפולה לשינוי שם" },
+};
+Object.keys(TAB_I18N).forEach((lang) => Object.assign(I18N[lang], TAB_I18N[lang]));
+
+const ASM_I18N = {
+  en: { "hist.loading": "Disassembling…", "hist.noBytes": "No bytes captured for this symbol." },
+  ja: { "hist.loading": "逆アセンブル中…", "hist.noBytes": "このシンボルのバイトは記録されていません。" },
+  zh: { "hist.loading": "正在反汇编…", "hist.noBytes": "未记录此符号的字节。" },
+  ko: { "hist.loading": "디스어셈블 중…", "hist.noBytes": "이 심볼에 대해 기록된 바이트가 없습니다." },
+  he: { "hist.loading": "מפרק לאסמבלי…", "hist.noBytes": "לא נשמרו בייטים עבור סמל זה." },
+};
+Object.keys(ASM_I18N).forEach((lang) => Object.assign(I18N[lang], ASM_I18N[lang]));
+
 function t(key, params) {
   const table = I18N[LANG] || I18N.en;
   let s = table[key] != null ? table[key] : I18N.en[key] != null ? I18N.en[key] : key;
@@ -237,6 +471,8 @@ const ICONS = {
   "eye-off": SVG('<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13.5 13.5 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/>'),
   settings: SVG('<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'),
   globe: SVG('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'),
+  diff: SVG('<line x1="12" y1="4" x2="12" y2="20"/><polyline points="7 9 4 12 7 15"/><polyline points="17 9 20 12 17 15"/>'),
+  history: SVG('<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>'),
 };
 
 function injectIcons(root = document) {
@@ -278,10 +514,24 @@ function saveMaskSettings() {
   } catch {
   }
 }
+function loadMaskMode() {
+  try {
+    return localStorage.getItem("maskMode") || "blur";
+  } catch {
+    return "blur";
+  }
+}
+function saveMaskMode() {
+  try {
+    localStorage.setItem("maskMode", state.maskMode);
+  } catch {
+  }
+}
 
 const state = {
   patternText: SEED,
   mask: loadMaskSettings(),
+  maskMode: loadMaskMode(),
   patterns: [],
   editingIndex: -1,
   arch: "x64",
@@ -318,14 +568,44 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function hueOf(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+function catChip(category) {
+  return `<span class="cat-chip" style="--ch:${hueOf(category)}">${esc(category)}</span>`;
+}
+function smartName(ext) {
+  const r = state.report;
+  const mod = ((r && r.module_name) || "offsets").replace(/\.exe$/i, "");
+  const ver = r && r.build_version ? `-${r.build_version}` : "";
+  const date = new Date().toISOString().slice(0, 10);
+  return `${mod}${ver}-${date}.${ext}`;
+}
+
+let currentView = "workspace";
 function showView(name) {
+  currentView = name;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
   if (name === "patterns") refreshPatterns();
   if (name === "editor") ensureEditor();
+  if (name === "history") loadHistory();
 }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
 $("open-editor").addEventListener("click", () => showView("editor"));
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) {
+    if (currentView === "editor") return;
+    const inp = $({ workspace: "w-search", patterns: "pattern-search", history: "hist-search" }[currentView]);
+    if (inp) {
+      e.preventDefault();
+      inp.focus();
+      inp.select();
+    }
+  }
+});
 
 function currentWindow() {
   const tauri = window.__TAURI__ || {};
@@ -353,9 +633,84 @@ document.addEventListener("keydown", (e) => {
 
 let masked = false;
 
+const FAKE_WORDS = ["Get", "Set", "Send", "Recv", "Make", "Init", "Update", "Player", "Skill", "Packet", "Mob", "Quest", "Field", "Stat", "Buff", "Item", "Inven", "Login", "Channel", "Hook", "Base", "Ctx", "Mgr", "Pool", "Node", "Data", "Calc", "Apply", "Reset", "Find"];
+const FAKE_CATS = ["functions", "packets", "globals", "offsets", "structs", "hooks"];
+const FAKE_NOTES = ["entry point", "inbound handler", "struct field", "opcode", "cached pointer", ""];
+const MASK_KEYS = { "d-sig": "sig", "d-name": "name", "d-addr": "addr", "d-cat": "cat", "d-note": "note" };
+const FIELD_CLASSES = ".d-sig, .d-name, .d-addr, .d-cat, .d-note";
+
+function seedHash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h = (h ^ s.charCodeAt(i)) >>> 0;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0 || 1;
+}
+function rngFrom(seed) {
+  let x = seed >>> 0 || 1;
+  return () => {
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    x >>>= 0;
+    return x;
+  };
+}
+function fakeFor(kind, real) {
+  if (kind === "d-addr" && !/0x/i.test(real)) return real;
+  const rng = rngFrom(seedHash(real));
+  const hex = "0123456789ABCDEF";
+  if (kind === "d-name") {
+    let s = "";
+    for (let i = 0, n = 2 + (rng() % 2); i < n; i++) s += FAKE_WORDS[rng() % FAKE_WORDS.length];
+    return s;
+  }
+  if (kind === "d-addr") {
+    const m = real.match(/0x([0-9a-fA-F]+)/i);
+    const len = m ? m[1].length : 6;
+    let out = "";
+    for (let i = 0; i < len; i++) out += hex[rng() % 16];
+    return "0x" + out;
+  }
+  if (kind === "d-sig") {
+    return real
+      .trim()
+      .split(/\s+/)
+      .map((tok) => (tok.includes("?") ? "??" : hex[rng() % 16] + hex[rng() % 16]))
+      .join(" ");
+  }
+  if (kind === "d-cat") return FAKE_CATS[rng() % FAKE_CATS.length];
+  if (kind === "d-note") return real.trim() ? FAKE_NOTES[rng() % FAKE_NOTES.length] : "";
+  return real;
+}
+function fieldKind(el) {
+  return ["d-sig", "d-name", "d-addr", "d-cat", "d-note"].find((k) => el.classList.contains(k));
+}
+function randomizeActive() {
+  return masked && state.maskMode === "randomize";
+}
+const maskObserver = new MutationObserver(() => applyRandomizeTo(document));
+function applyRandomizeTo(root) {
+  maskObserver.disconnect();
+  root.querySelectorAll(FIELD_CLASSES).forEach((el) => {
+    const kind = fieldKind(el);
+    if (randomizeActive() && state.mask[MASK_KEYS[kind]]) {
+      if (el.dataset.real == null) el.dataset.real = el.textContent;
+      el.textContent = fakeFor(kind, el.dataset.real);
+    } else if (el.dataset.real != null) {
+      el.textContent = el.dataset.real;
+      delete el.dataset.real;
+    }
+  });
+  if (randomizeActive()) maskObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 function applyMask() {
   const c = document.body.classList;
   c.toggle("masked", masked);
+  c.toggle("mask-rand", randomizeActive());
   c.toggle("m-sig", state.mask.sig);
   c.toggle("m-name", state.mask.name);
   c.toggle("m-addr", state.mask.addr);
@@ -363,6 +718,7 @@ function applyMask() {
   c.toggle("m-note", state.mask.note);
   c.toggle("m-editor", state.mask.editor);
   c.toggle("m-output", state.mask.output);
+  applyRandomizeTo(document);
 }
 
 $("mask-toggle").addEventListener("click", () => {
@@ -382,6 +738,16 @@ document.querySelectorAll("[data-mask]").forEach((cb) => {
     applyMask();
   });
 });
+
+const modeCb = $("mask-mode");
+if (modeCb) {
+  modeCb.checked = state.maskMode === "randomize";
+  modeCb.addEventListener("change", () => {
+    state.maskMode = modeCb.checked ? "randomize" : "blur";
+    saveMaskMode();
+    applyMask();
+  });
+}
 
 applyMask();
 
@@ -659,8 +1025,9 @@ document.querySelectorAll("#export-menu button").forEach((b) =>
       state.outputGenerated = true;
       state.output = { typeKey: EXPORT_KEY[b.dataset.export], n: text.split("\n").length };
       $("output-label").textContent = t("out.label", { name: t(state.output.typeKey), n: state.output.n });
-      $("output-text").dataset.suggest =
-        b.dataset.export === "header" ? "offsets.h" : b.dataset.export === "ce" ? "table.CT" : "offsets.txt";
+      $("output-text").dataset.suggest = smartName(
+        b.dataset.export === "header" ? "h" : b.dataset.export === "ce" ? "CT" : "txt",
+      );
       showView("output");
     } catch (err) {
       toast(String(err), true);
@@ -965,6 +1332,337 @@ $("ed-apply").addEventListener("click", async () => {
   sel.addEventListener("change", () => setLang(sel.value));
 })();
 
+const histState = { groups: [], pinA: null, pinB: null, selected: null, tabs: [], activeTab: null, tabSeq: 0 };
+
+function fmtDate(unix) {
+  return new Date(unix * 1000).toLocaleString();
+}
+function scanInfo(id) {
+  for (const g of histState.groups) for (const s of g.scans) if (s.id === id) return { scan: s, group: g };
+  return null;
+}
+function verLabel(g) {
+  if (!g) return "?";
+  return g.build_version ? `v${g.build_version}` : g.build_hash.slice(0, 8);
+}
+function pinLabel(id) {
+  const info = scanInfo(id);
+  return info ? `${esc(verLabel(info.group))} · ${esc(fmtDate(info.scan.created_at))}` : "";
+}
+function renderHistPins() {
+  const el = $("hist-pins");
+  if (!histState.pinA && !histState.pinB) {
+    el.innerHTML = `<span class="pins-hint">${t("hist.pinHint")}</span>`;
+  } else {
+    const base = histState.pinA ? pinLabel(histState.pinA) : `<span class="pins-empty">${t("hist.unset")}</span>`;
+    const target = histState.pinB ? pinLabel(histState.pinB) : `<span class="pins-empty">${t("hist.unset")}</span>`;
+    el.innerHTML = `<span class="pins-slot"><span class="pins-tag">${t("hist.base")}</span>${base}</span><span class="pins-arrow">→</span><span class="pins-slot"><span class="pins-tag">${t("hist.target")}</span>${target}</span>`;
+  }
+  $("hist-compare").disabled = !(histState.pinA && histState.pinB);
+}
+function renderHistory() {
+  const list = $("hist-list");
+  if (!histState.groups.length) {
+    list.innerHTML = `<div class="empty-pad">${t("hist.empty")}</div>`;
+    renderHistPins();
+    return;
+  }
+  list.innerHTML = histState.groups
+    .map((g) => {
+      const ver = g.build_version ? `v${esc(g.build_version)}` : t("hist.unknownVer");
+      const scans = g.scans
+        .map(
+          (s) =>
+            `<div class="hist-scan${s.id === histState.selected ? " active" : ""}" data-id="${s.id}"><div class="hist-scan-main"><span class="hist-scan-time d-addr">${esc(fmtDate(s.created_at))}</span><span class="hist-scan-meta">${esc(s.arch)} · ${t("hist.found")} ${s.found}/${s.total_matches}</span></div><div class="hist-scan-actions"><button class="pin${histState.pinA === s.id ? " pinned" : ""}" data-pin="a" data-id="${s.id}" title="${t("hist.setBase")}">${t("hist.base")}</button><button class="pin${histState.pinB === s.id ? " pinned" : ""}" data-pin="b" data-id="${s.id}" title="${t("hist.setTarget")}">${t("hist.target")}</button><button class="hist-del" data-del="${s.id}" title="${t("hist.delete")}">✕</button></div></div>`,
+        )
+        .join("");
+      return `<div class="hist-group"><div class="hist-group-head" style="--vh:${hueOf(g.build_hash)}"><span class="hist-ver d-name">${ver}</span><span class="hist-hash d-addr">${esc(g.build_hash)}</span><span class="hist-count">${g.scans.length}</span></div>${scans}</div>`;
+    })
+    .join("");
+  list.querySelectorAll(".hist-scan-main").forEach((el) =>
+    el.addEventListener("click", () => selectHistScan(Number(el.parentElement.dataset.id))),
+  );
+  list.querySelectorAll("[data-pin]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (b.dataset.pin === "a") histState.pinA = Number(b.dataset.id);
+      else histState.pinB = Number(b.dataset.id);
+      renderHistory();
+    }),
+  );
+  list.querySelectorAll("[data-del]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteHistScan(Number(b.dataset.del));
+    }),
+  );
+  renderHistPins();
+}
+async function loadHistory() {
+  try {
+    histState.groups = await invoke("history_builds");
+    renderHistory();
+    renderTabs();
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+function wireDetailSearch() {
+  const inp = $("hist-search");
+  if (!inp) return;
+  const tbody = $("hist-tab-content").querySelector("tbody");
+  if (!tbody) return;
+  inp.addEventListener("input", () => {
+    const term = inp.value.trim().toLowerCase();
+    tbody.querySelectorAll("tr").forEach((tr) => {
+      tr.style.display = !term || tr.textContent.toLowerCase().includes(term) ? "" : "none";
+    });
+  });
+}
+
+function activateTab(id) {
+  histState.activeTab = id;
+  const tab = histState.tabs.find((tb) => tb.id === id);
+  histState.selected = tab && tab.type === "scan" ? tab.scanId : null;
+  renderHistory();
+  renderTabs();
+  renderActiveTab();
+}
+function openTab(spec) {
+  let tab = histState.tabs.find((tb) => tb.key === spec.key);
+  if (!tab) {
+    tab = { id: ++histState.tabSeq, ...spec };
+    histState.tabs.push(tab);
+  }
+  activateTab(tab.id);
+}
+function closeTab(id) {
+  const i = histState.tabs.findIndex((tb) => tb.id === id);
+  if (i < 0) return;
+  histState.tabs.splice(i, 1);
+  if (histState.activeTab === id) {
+    const next = histState.tabs[i] || histState.tabs[i - 1] || null;
+    activateTab(next ? next.id : null);
+  } else {
+    renderTabs();
+  }
+}
+function startRename(el, id) {
+  el.contentEditable = "true";
+  el.focus();
+  el.addEventListener(
+    "blur",
+    () => {
+      el.contentEditable = "false";
+      const tab = histState.tabs.find((tb) => tb.id === id);
+      if (tab) tab.title = el.textContent.trim() || tab.title;
+      renderTabs();
+    },
+    { once: true },
+  );
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      el.blur();
+    }
+  });
+}
+function renderTabs() {
+  const bar = $("hist-tabs");
+  bar.hidden = histState.tabs.length === 0;
+  bar.innerHTML = histState.tabs
+    .map(
+      (tb) =>
+        `<div class="hist-tab${tb.id === histState.activeTab ? " active" : ""}" data-tab="${tb.id}"><span class="hist-tab-title" data-tab="${tb.id}" title="${t("hist.rename")}">${esc(tb.title)}</span><button class="hist-tab-close" data-close="${tb.id}">✕</button></div>`,
+    )
+    .join("");
+  bar.querySelectorAll(".hist-tab-title").forEach((el) => {
+    el.addEventListener("click", () => activateTab(Number(el.dataset.tab)));
+    el.addEventListener("dblclick", () => startRename(el, Number(el.dataset.tab)));
+  });
+  bar.querySelectorAll(".hist-tab-close").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeTab(Number(b.dataset.close));
+    }),
+  );
+}
+async function asmFor(hex, bits, base) {
+  if (!hex) return `<div class="sym-empty">${t("hist.noBytes")}</div>`;
+  const lines = await invoke("disassemble", { hex, bits, base: base || "0" });
+  const hexFmt = hex.replace(/(..)/g, "$1 ").trim();
+  const asm = lines.length ? lines.map((l) => esc(l)).join("\n") : esc(hexFmt);
+  return `<div class="sym-hex mono">${esc(hexFmt)}</div><pre class="sym-asm">${asm}</pre>`;
+}
+async function toggleSymDetail(tr) {
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains("sym-detail")) {
+    next.remove();
+    return;
+  }
+  tr.closest("tbody")
+    .querySelectorAll(".sym-detail")
+    .forEach((e) => e.remove());
+  const bits = Number(tr.dataset.bits) || 64;
+  const det = document.createElement("tr");
+  det.className = "sym-detail";
+  det.innerHTML = `<td colspan="${tr.children.length}"><div class="sym-body">${t("hist.loading")}</div></td>`;
+  tr.after(det);
+  const body = det.querySelector(".sym-body");
+  try {
+    if (tr.dataset.kind === "diff") {
+      const oldAsm = await asmFor(tr.dataset.oldBytes, bits, tr.dataset.old);
+      const newAsm = await asmFor(tr.dataset.newBytes, bits, tr.dataset.new);
+      body.innerHTML = `<div class="sym-cols"><div class="sym-col"><div class="sym-h">${t("diff.colOld")} <span class="mono">${esc(tr.dataset.old || "—")}</span></div>${oldAsm}</div><div class="sym-col"><div class="sym-h">${t("diff.colNew")} <span class="mono">${esc(tr.dataset.new || "—")}</span></div>${newAsm}</div></div>`;
+    } else {
+      body.innerHTML = await asmFor(tr.dataset.bytes, bits, tr.dataset.addr);
+    }
+  } catch (e) {
+    body.textContent = String(e);
+  }
+}
+async function renderActiveTab() {
+  const c = $("hist-tab-content");
+  const tab = histState.tabs.find((tb) => tb.id === histState.activeTab);
+  if (!tab) {
+    c.innerHTML = `<div class="insp-hint">${t("hist.selectHint")}</div>`;
+    return;
+  }
+  try {
+    if (tab.type === "scan") c.innerHTML = await scanTabHtml(tab);
+    else if (tab.type === "diff") c.innerHTML = await diffTabHtml(tab);
+    else if (tab.type === "matrix") c.innerHTML = await matrixTabHtml(tab);
+    const exp = $("hist-exp");
+    if (exp && tab.type === "scan") exp.addEventListener("click", () => exportHistScan(tab.scanId));
+    wireDetailSearch();
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+async function scanTabHtml(tab) {
+  const findings = await invoke("history_findings", { id: tab.scanId });
+  if (!findings.length) return `<div class="insp-hint">${t("hist.noFindings")}</div>`;
+  const info = scanInfo(tab.scanId);
+  const g = info && info.group;
+  const bits = info && info.scan.arch === "x86" ? 32 : 64;
+  const ver = g && g.build_version ? `v${esc(g.build_version)}` : t("hist.unknownVer");
+  const hue = g ? hueOf(g.build_hash) : 210;
+  const rows = findings
+    .map(
+      (f) =>
+        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "—"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}</td></tr>`,
+    )
+    .join("");
+  return `<div class="hist-banner" style="--vh:${hue}"><span class="hist-banner-ver">${ver}</span><span class="hist-banner-hash">${g ? esc(g.build_hash) : ""}</span><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /><button id="hist-exp" class="btn btn-soft">${t("out.copy")}</button></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("col.address")}</th><th>${t("col.category")}</th><th>${t("col.status")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function diffTabHtml(tab) {
+  const view = await invoke("history_diff", { a: tab.a, b: tab.b });
+  const info = scanInfo(tab.a);
+  const bits = info && info.scan.arch === "x86" ? 32 : 64;
+  const label = { moved: t("diff.moved"), new: t("diff.new"), removed: t("diff.removed") };
+  const cls = { moved: "moved", new: "new", removed: "removed" };
+  const tail = view.changed === true ? ` (${t("diff.changed")})` : view.changed === false ? ` (${t("diff.same")})` : "";
+  const head = `${view.old_build || "?"} → ${view.new_build || "?"}${tail}`;
+  const summary = `${t("diff.unchanged")} ${view.unchanged} · ${t("diff.new")} ${view.added} · ${t("diff.moved")} ${view.moved} · ${t("diff.removed")} ${view.removed}`;
+  const rows = view.rows.length
+    ? view.rows
+        .map(
+          (r) =>
+            `<tr class="sym-row" data-kind="diff" data-bits="${bits}" data-old="${esc(r.old || "")}" data-new="${esc(r.new || "")}" data-old-bytes="${esc(r.old_bytes || "")}" data-new-bytes="${esc(r.new_bytes || "")}"><td class="d-name">${esc(r.name)}</td><td><span class="diff-tag ${cls[r.state]}">${label[r.state]}</span></td><td class="mono d-addr">${esc(r.old || "—")}</td><td class="mono d-addr">${esc(r.new || "—")}</td><td class="d-cat">${esc(r.category)}</td></tr>`,
+        )
+        .join("")
+    : `<tr class="empty"><td colspan="5">${t("diff.noChanges")}</td></tr>`;
+  return `<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function matrixTabHtml(tab) {
+  const view = await invoke("history_matrix", { ids: tab.ids });
+  const cols = view.columns.map((c) => `<th class="mx-col">${esc(c.label)}</th>`).join("");
+  const rows = view.rows
+    .map((r) => {
+      let prev = null;
+      const cells = r.cells
+        .map((v) => {
+          const changed = v != null && prev != null && v !== prev;
+          if (v != null) prev = v;
+          return `<td class="mono d-addr${changed ? " mx-changed" : ""}">${v ? esc(v) : "—"}</td>`;
+        })
+        .join("");
+      return `<tr><td class="d-name mx-name">${esc(r.name)}</td><td>${catChip(r.category)}</td>${cells}</tr>`;
+    })
+    .join("");
+  return `<div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll mx-scroll"><table class="grid-table mx-table"><thead><tr><th class="mx-name">${t("col.name")}</th><th>${t("col.category")}</th>${cols}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function selectHistScan(id) {
+  const info = scanInfo(id);
+  openTab({ type: "scan", key: "s" + id, scanId: id, title: info ? verLabel(info.group) : `#${id}` });
+}
+async function exportHistScan(id) {
+  try {
+    const text = await invoke("history_export", { id, format: "txt" });
+    await navigator.clipboard.writeText(text);
+    toast(t("toast.copied"));
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+async function deleteHistScan(id) {
+  try {
+    await invoke("history_delete", { id });
+    if (histState.pinA === id) histState.pinA = null;
+    if (histState.pinB === id) histState.pinB = null;
+    histState.tabs = histState.tabs.filter((tb) => !(tb.type === "scan" && tb.scanId === id));
+    if (!histState.tabs.some((tb) => tb.id === histState.activeTab)) {
+      histState.activeTab = histState.tabs.length ? histState.tabs[histState.tabs.length - 1].id : null;
+    }
+    await loadHistory();
+    renderActiveTab();
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+async function clearHistory() {
+  try {
+    await invoke("history_clear");
+    histState.pinA = null;
+    histState.pinB = null;
+    histState.tabs = [];
+    histState.activeTab = null;
+    histState.selected = null;
+    await loadHistory();
+    renderActiveTab();
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+function compareHist() {
+  if (!histState.pinA || !histState.pinB) return;
+  const a = histState.pinA;
+  const b = histState.pinB;
+  const ga = (scanInfo(a) || {}).group;
+  const gb = (scanInfo(b) || {}).group;
+  openTab({ type: "diff", key: `d${a}-${b}`, a, b, title: `${verLabel(ga)} → ${verLabel(gb)}` });
+}
+function openMatrix() {
+  const picks = histState.groups
+    .filter((g) => g.scans.length)
+    .map((g) => ({ id: g.scans[0].id, at: g.scans[0].created_at }));
+  if (picks.length < 2) {
+    toast(t("hist.needTwo"), true);
+    return;
+  }
+  picks.sort((x, y) => x.at - y.at);
+  const ids = picks.map((p) => p.id);
+  openTab({ type: "matrix", key: "m" + ids.join(","), ids, title: t("hist.matrixTitle", { n: ids.length }) });
+}
+$("hist-refresh").addEventListener("click", loadHistory);
+$("hist-compare").addEventListener("click", compareHist);
+$("hist-matrix").addEventListener("click", openMatrix);
+$("hist-clear").addEventListener("click", clearHistory);
+$("hist-tab-content").addEventListener("click", (e) => {
+  const tr = e.target.closest && e.target.closest("tr.sym-row");
+  if (tr) toggleSymDetail(tr);
+});
+
 function relocalize() {
   $("mask-toggle").title = t(masked ? "mask.on" : "mask.off");
   $("t-arch-label").textContent = state.arch === "x64" ? t("ws.arch64") : t("ws.arch32");
@@ -979,6 +1677,11 @@ function relocalize() {
   buildTabs();
   renderResults();
   renderPatterns();
+  if (histState.groups.length) {
+    renderHistory();
+    renderTabs();
+    renderActiveTab();
+  }
   if (state.selected) selectRow(state.selected);
   else {
     $("insp-name").textContent = t("insp.noSelection");
