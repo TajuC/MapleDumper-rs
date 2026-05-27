@@ -1,20 +1,16 @@
 :root {
   color-scheme: dark;
-  /* surfaces: solid, low-saturation blue-gray, elevated by lightening */
   --bg: #090d14;
   --card: #0e131c;
   --surface: #131a26;
   --surface-2: #1a2230;
   --inset: #0b0f17;
   --header: #161d2a;
-  /* hairlines */
   --line: rgba(255, 255, 255, 0.07);
   --line-2: rgba(255, 255, 255, 0.11);
-  /* text ramp */
   --t1: #e7ebf2;
   --t2: #9aa6b6;
   --t3: #616e7e;
-  /* accent + semantics */
   --blue: #3b82f6;
   --blue-hi: #5b97f9;
   --blue-soft: rgba(59, 130, 246, 0.15);
@@ -51,7 +47,6 @@ body {
   overflow: hidden;
 }
 
-/* ambient glow inside the card */
 .ambient {
   position: absolute;
   inset: 0;
@@ -87,7 +82,6 @@ body {
   background: rgba(6, 182, 212, 0.1);
 }
 
-/* shell */
 #shell {
   position: relative;
   display: flex;
@@ -106,7 +100,6 @@ body {
   }
 }
 
-/* icons */
 .ico {
   display: inline-flex;
   align-items: center;
@@ -117,7 +110,6 @@ body {
   height: 18px;
 }
 
-/* title bar */
 #titlebar {
   position: relative;
   z-index: 1;
@@ -213,7 +205,6 @@ body {
   height: 16px;
 }
 
-/* connection pill */
 .conn-pill {
   display: inline-flex;
   align-items: center;
@@ -249,7 +240,6 @@ body {
   box-shadow: 0 0 10px var(--red);
 }
 
-/* body split */
 #body {
   position: relative;
   z-index: 1;
@@ -258,7 +248,6 @@ body {
   display: flex;
 }
 
-/* sidebar */
 #sidebar {
   width: 152px;
   flex-shrink: 0;
@@ -361,7 +350,6 @@ body {
   letter-spacing: 0.6px;
 }
 
-/* main / views */
 #main {
   flex: 1;
   min-width: 0;
@@ -384,7 +372,6 @@ body {
   display: flex;
 }
 
-/* target row */
 .target-row {
   display: flex;
   flex-wrap: wrap;
@@ -464,7 +451,6 @@ button.btn-ico:hover {
   gap: 10px;
 }
 
-/* buttons */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -519,7 +505,6 @@ button.btn-ico:hover {
   height: 52px;
 }
 
-/* options row */
 .options-row {
   display: flex;
   align-items: center;
@@ -601,7 +586,6 @@ button.btn-ico:hover {
   color: var(--t3);
 }
 
-/* menu */
 .menu {
   position: relative;
 }
@@ -636,7 +620,6 @@ button.btn-ico:hover {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* work grid */
 .work-grid {
   flex: 1;
   min-height: 0;
@@ -754,7 +737,6 @@ button.btn-ico:hover {
   outline: none;
 }
 
-/* tables */
 .table-scroll {
   flex: 1;
   min-height: 0;
@@ -851,8 +833,6 @@ button.btn-ico:hover {
   transition: filter 0.15s ease;
 }
 
-/* privacy mask: visual only, leaves data intact. A field (d-*) blurs only when the master mask
-   is on (.masked) AND that field type is enabled (.m-*); editor and output blur as a whole. */
 .masked.m-sig .d-sig,
 .masked.m-name .d-name,
 .masked.m-addr .d-addr,
@@ -867,12 +847,14 @@ button.btn-ico:hover {
   user-select: none;
 }
 
-/* settings */
 .settings-wrap {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 16px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 .settings-card {
   max-width: 680px;
@@ -903,6 +885,16 @@ button.btn-ico:hover {
   color: var(--t2);
   max-width: 470px;
   line-height: 1.55;
+}
+.lang-card .settings-card-head {
+  align-items: center;
+  border-bottom: none;
+}
+.lang-card .settings-card-head > div {
+  flex: 1;
+}
+.lang-card .select {
+  min-width: 150px;
 }
 .settings-list {
   display: flex;
@@ -1015,7 +1007,6 @@ button.btn-ico:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* inspector */
 .inspector {
   min-width: 0;
 }
@@ -1131,7 +1122,6 @@ button.btn-ico:hover {
   border-top: 1px solid var(--line);
 }
 
-/* footer */
 .work-foot {
   flex-shrink: 0;
   display: grid;
@@ -1243,7 +1233,6 @@ button.btn-ico:hover {
   color: var(--violet);
 }
 
-/* simple views */
 .simple-head {
   display: flex;
   align-items: center;
@@ -1312,7 +1301,6 @@ button.btn-ico:hover {
   max-width: 240px;
 }
 
-/* modal */
 .modal {
   position: fixed;
   inset: 0;
@@ -1374,7 +1362,6 @@ button.btn-ico:hover {
   margin-top: 22px;
 }
 
-/* toast */
 .toast {
   position: fixed;
   bottom: 26px;
@@ -1397,7 +1384,6 @@ button.btn-ico:hover {
   color: #ffc4cd;
 }
 
-/* scrollbars */
 ::-webkit-scrollbar {
   width: 11px;
   height: 11px;
@@ -1411,4 +1397,58 @@ button.btn-ico:hover {
 ::-webkit-scrollbar-thumb:hover {
   background: #2e3a4a;
   background-clip: padding-box;
+}
+
+[dir="rtl"] #titlebar {
+  padding-left: 0;
+  padding-right: 16px;
+}
+[dir="rtl"] #sidebar {
+  border-right: none;
+  border-left: 1px solid var(--line);
+}
+[dir="rtl"] .input-ico {
+  border-left: none;
+  border-right: 1px solid var(--line);
+}
+[dir="rtl"] .grid-table {
+  text-align: right;
+}
+[dir="rtl"] th.num,
+[dir="rtl"] td.num {
+  text-align: left;
+}
+[dir="rtl"] .ml-auto {
+  margin-left: 0;
+  margin-right: auto;
+}
+[dir="rtl"] .menu-list {
+  right: auto;
+  left: 0;
+}
+[dir="rtl"] .stat {
+  border-left: none;
+  border-right: 1px solid var(--line);
+}
+[dir="rtl"] .stat:first-child {
+  border-right: none;
+}
+[dir="rtl"] .grid-table tbody tr.selected {
+  box-shadow: inset -2px 0 0 var(--blue);
+}
+[dir="rtl"] .setting input[type="checkbox"]::after {
+  left: auto;
+  right: 2px;
+}
+[dir="rtl"] .setting input[type="checkbox"]:checked::after {
+  transform: translateX(-18px);
+}
+[dir="rtl"] .mono,
+[dir="rtl"] .sig,
+[dir="rtl"] .output,
+[dir="rtl"] #editor-host {
+  direction: ltr;
+}
+[dir="rtl"] .output {
+  text-align: left;
 }

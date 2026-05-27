@@ -14,7 +14,6 @@
         <span class="blob blob-violet"></span>
         <span class="blob blob-cyan"></span>
       </div>
-      <!-- custom title bar -->
       <div id="titlebar" data-tauri-drag-region>
         <div class="tb-brand" data-tauri-drag-region>
           <img src="logo.png" class="tb-logo" alt="" />
@@ -22,16 +21,16 @@
         </div>
         <div class="tb-spacer" data-tauri-drag-region></div>
         <div class="tb-right">
-          <button id="mask-toggle" class="tb-btn" title="Mask signatures for screenshots"><span class="ico" data-icon="eye"></span></button>
+          <button id="mask-toggle" class="tb-btn" data-i18n-title="mask.off" title="Mask for screenshots"><span class="ico" data-icon="eye"></span></button>
           <span id="conn-pill" class="conn-pill"><span class="dot"></span><span id="conn-text">Idle</span></span>
           <div class="win-controls">
-            <button id="win-min" class="win-btn" title="Minimize" aria-label="Minimize">
+            <button id="win-min" class="win-btn" data-i18n-title="win.min" title="Minimize">
               <svg viewBox="0 0 10 10"><path d="M1 5h8" /></svg>
             </button>
-            <button id="win-max" class="win-btn" title="Maximize" aria-label="Maximize">
+            <button id="win-max" class="win-btn" data-i18n-title="win.max" title="Maximize">
               <svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="1" /></svg>
             </button>
-            <button id="win-close" class="win-btn close" title="Close" aria-label="Close">
+            <button id="win-close" class="win-btn close" data-i18n-title="win.close" title="Close">
               <svg viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" /></svg>
             </button>
           </div>
@@ -39,31 +38,28 @@
       </div>
 
       <div id="body">
-        <!-- sidebar -->
         <aside id="sidebar">
           <div class="brand"><img src="logo.png" class="brand-logo" alt="MapleDumper" /></div>
           <nav id="nav">
-            <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span>Workspace</span></button>
-            <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span>Patterns</span></button>
-            <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span>Editor</span></button>
-            <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span>Output</span></button>
-            <button class="nav-item" data-view="settings" data-icon="settings"><span class="ico"></span><span>Settings</span></button>
+            <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span data-i18n="nav.workspace">Workspace</span></button>
+            <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span data-i18n="nav.patterns">Patterns</span></button>
+            <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span data-i18n="nav.editor">Editor</span></button>
+            <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span data-i18n="nav.output">Output</span></button>
+            <button class="nav-item" data-view="settings" data-icon="settings"><span class="ico"></span><span data-i18n="nav.settings">Settings</span></button>
           </nav>
           <div class="side-foot">
             <div class="engine-card">
               <span class="ico engine-shield" data-icon="shield"></span>
               <div class="engine-meta">
                 <span id="engine-badge">Engine</span>
-                <span class="engine-sub">Ready</span>
+                <span class="engine-sub" data-i18n="engine.ready">Ready</span>
               </div>
             </div>
           </div>
         </aside>
 
-        <!-- main -->
         <main id="main">
           <div id="views">
-            <!-- WORKSPACE -->
             <section class="view active" id="view-workspace">
               <div class="target-row">
                 <label class="field">
@@ -74,24 +70,24 @@
                   </span>
                 </label>
                 <label class="field">
-                  <span class="field-label">Module</span>
+                  <span class="field-label" data-i18n="ws.module">Module</span>
                   <span class="input-wrap">
                     <input id="w-module" type="text" value="MapleStory.exe" spellcheck="false" />
                     <span class="input-ico" data-icon="boxes"></span>
                   </span>
                 </label>
                 <label class="field wide">
-                  <span class="field-label">Pattern source</span>
+                  <span class="field-label" data-i18n="ws.patternSource">Pattern source</span>
                   <span class="input-wrap">
                     <input id="w-source" type="text" value="Built-in samples" readonly />
-                    <button id="w-source-btn" class="input-ico btn-ico" data-icon="folder" title="Load a pattern file"></button>
+                    <button id="w-source-btn" class="input-ico btn-ico" data-icon="folder" data-i18n-title="ws.loadFileTitle" title="Load a pattern file"></button>
                   </span>
                 </label>
                 <div class="field shrink">
                   <span class="field-label">&nbsp;</span>
                   <div class="scan-buttons">
-                    <button id="w-scan" class="btn btn-primary"><span class="ico" data-icon="play"></span>Start Scan</button>
-                    <button id="w-stop" class="btn btn-soft" disabled><span class="ico" data-icon="square"></span>Stop</button>
+                    <button id="w-scan" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="ws.startScan">Start Scan</span></button>
+                    <button id="w-stop" class="btn btn-soft" disabled><span class="ico" data-icon="square"></span><span data-i18n="ws.stop">Stop</span></button>
                   </div>
                 </div>
               </div>
@@ -99,21 +95,21 @@
               <div class="options-row">
                 <div class="toggles">
                   <button id="t-arch" class="toggle active" data-on="true"><span class="ico" data-icon="cpu"></span><span id="t-arch-label">64-bit</span></button>
-                  <button id="t-wait" class="toggle active" data-on="true"><span class="check">✓</span>Wait for target</button>
-                  <button id="t-class" class="toggle" data-on="false"><span class="check">✓</span>Find by window class</button>
-                  <button id="t-code" class="toggle active" data-on="true"><span class="check">✓</span>Code regions only</button>
+                  <button id="t-wait" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.waitTarget">Wait for target</span></button>
+                  <button id="t-class" class="toggle" data-on="false"><span class="check">✓</span><span data-i18n="ws.findByClass">Find by window class</span></button>
+                  <button id="t-code" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.codeOnly">Code regions only</span></button>
                   <label class="toggle timeout">
-                    <span>Timeout</span>
+                    <span data-i18n="ws.timeout">Timeout</span>
                     <input id="w-timeout" type="number" min="0" placeholder="∞" />
-                    <span class="muted">s</span>
+                    <span class="muted" data-i18n="ws.seconds">s</span>
                   </label>
                 </div>
                 <div class="menu">
-                  <button id="w-export" class="btn btn-soft"><span class="ico" data-icon="download"></span>Export<span class="ico chev" data-icon="chevron"></span></button>
+                  <button id="w-export" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="ws.export">Export</span><span class="ico chev" data-icon="chevron"></span></button>
                   <div id="export-menu" class="menu-list" hidden>
-                    <button data-export="header">C++ header (offsets.h)</button>
-                    <button data-export="ce">Cheat Engine table</button>
-                    <button data-export="txt">Plain text</button>
+                    <button data-export="header" data-i18n="ws.exportHeader">C++ header (offsets.h)</button>
+                    <button data-export="ce" data-i18n="ws.exportCe">Cheat Engine table</button>
+                    <button data-export="txt" data-i18n="ws.exportTxt">Plain text</button>
                   </div>
                 </div>
               </div>
@@ -122,32 +118,32 @@
                 <div class="panel results-panel">
                   <div class="panel-head">
                     <div>
-                      <h2>Results</h2>
-                      <p>Pattern matches grouped by category</p>
+                      <h2 data-i18n="ws.results">Results</h2>
+                      <p data-i18n="ws.resultsSub">Pattern matches grouped by category</p>
                     </div>
-                    <div class="results-count"><span id="w-count">0</span> results</div>
+                    <div class="results-count" id="w-count">0 results</div>
                   </div>
                   <div class="panel-tools">
-                    <div id="w-tabs" class="tabs"><button class="tab active" data-cat="all">All</button></div>
+                    <div id="w-tabs" class="tabs"><button class="tab active" data-cat="all" data-i18n="ws.tabAll">All</button></div>
                     <div class="search ml-auto">
                       <span class="ico" data-icon="search"></span>
-                      <input id="w-search" type="text" placeholder="Search by name or address…" spellcheck="false" />
+                      <input id="w-search" type="text" data-i18n-ph="ws.searchResults" placeholder="Search by name or address…" spellcheck="false" />
                     </div>
                   </div>
                   <div class="panel-body table-scroll">
                     <table class="grid-table">
                       <thead>
                         <tr>
-                          <th>Name</th>
-                          <th>Address (RVA)</th>
-                          <th>Signature</th>
-                          <th>Status</th>
-                          <th>Type</th>
-                          <th>Hits</th>
+                          <th data-i18n="col.name">Name</th>
+                          <th data-i18n="col.address">Address (RVA)</th>
+                          <th data-i18n="col.signature">Signature</th>
+                          <th data-i18n="col.status">Status</th>
+                          <th data-i18n="col.type">Type</th>
+                          <th data-i18n="col.hits">Hits</th>
                         </tr>
                       </thead>
                       <tbody id="w-body">
-                        <tr class="empty"><td colspan="6">No scan yet. Set a target and click Start Scan.</td></tr>
+                        <tr class="empty"><td colspan="6" data-i18n="ws.empty">No scan yet. Set a target and click Start Scan.</td></tr>
                       </tbody>
                     </table>
                   </div>
@@ -165,26 +161,26 @@
                         <p id="insp-desc">Select a row to inspect it.</p>
                       </div>
                     </div>
-                    <div id="insp-hint" class="insp-hint">Run a scan, then select a result to inspect its metadata and hit count.</div>
+                    <div id="insp-hint" class="insp-hint" data-i18n="insp.hint">Run a scan, then select a result to inspect its metadata and hit count.</div>
                   </div>
                   <div class="insp-body" id="insp-body" hidden>
-                    <div class="kv"><span>RVA</span><b id="insp-rva" class="d-addr"></b></div>
-                    <div class="kv"><span>Absolute</span><b id="insp-abs" class="d-addr"></b></div>
-                    <div class="kv"><span>Signature</span><b id="insp-aob" class="mono d-sig"></b></div>
-                    <div class="kv"><span>Type</span><b id="insp-type"></b></div>
-                    <div class="kv"><span>Category</span><b id="insp-cat" class="d-cat"></b></div>
-                    <div class="kv"><span>Module</span><b id="insp-mod"></b></div>
+                    <div class="kv"><span data-i18n="insp.rva">RVA</span><b id="insp-rva" class="d-addr"></b></div>
+                    <div class="kv"><span data-i18n="insp.absolute">Absolute</span><b id="insp-abs" class="d-addr"></b></div>
+                    <div class="kv"><span data-i18n="insp.signature">Signature</span><b id="insp-aob" class="mono d-sig"></b></div>
+                    <div class="kv"><span data-i18n="insp.type">Type</span><b id="insp-type"></b></div>
+                    <div class="kv"><span data-i18n="insp.category">Category</span><b id="insp-cat" class="d-cat"></b></div>
+                    <div class="kv"><span data-i18n="insp.module">Module</span><b id="insp-mod"></b></div>
                     <div class="insp-section">
-                      <div class="insp-label">Hit count</div>
+                      <div class="insp-label" data-i18n="insp.hitCount">Hit count</div>
                       <div class="quality"><div class="bar"><span id="insp-bar"></span></div><span id="insp-hits" class="qval"></span></div>
                     </div>
                     <div class="insp-section">
-                      <div class="insp-label">Notes</div>
+                      <div class="insp-label" data-i18n="insp.notes">Notes</div>
                       <div id="insp-note" class="note-box d-note"></div>
                     </div>
                   </div>
                   <div class="insp-foot">
-                    <button id="insp-copy" class="btn btn-soft full" disabled><span class="ico" data-icon="copy"></span>Copy address</button>
+                    <button id="insp-copy" class="btn btn-soft full" disabled><span class="ico" data-icon="copy"></span><span data-i18n="insp.copyAddress">Copy address</span></button>
                   </div>
                 </aside>
               </div>
@@ -204,85 +200,91 @@
                   </div>
                 </div>
                 <div class="stat-strip">
-                  <div class="stat"><span>Patterns loaded</span><b id="s-loaded">0</b></div>
-                  <div class="stat"><span>Found</span><b id="s-found" class="ok">0</b></div>
-                  <div class="stat"><span>Unresolved</span><b id="s-unresolved" class="warn">0</b></div>
-                  <div class="stat"><span>Scan time</span><b id="s-time"></b></div>
-                  <div class="stat"><span>Module</span><b id="s-module" class="violet"></b></div>
+                  <div class="stat"><span data-i18n="foot.patternsLoaded">Patterns loaded</span><b id="s-loaded">0</b></div>
+                  <div class="stat"><span data-i18n="foot.found">Found</span><b id="s-found" class="ok">0</b></div>
+                  <div class="stat"><span data-i18n="foot.unresolved">Unresolved</span><b id="s-unresolved" class="warn">0</b></div>
+                  <div class="stat"><span data-i18n="foot.scanTime">Scan time</span><b id="s-time"></b></div>
+                  <div class="stat"><span data-i18n="foot.module">Module</span><b id="s-module" class="violet"></b></div>
                 </div>
-                <button id="open-editor" class="btn btn-soft tall"><span class="ico" data-icon="terminal"></span>Open editor</button>
+                <button id="open-editor" class="btn btn-soft tall"><span class="ico" data-icon="terminal"></span><span data-i18n="foot.openEditor">Open editor</span></button>
               </footer>
             </section>
 
-            <!-- PATTERNS -->
             <section class="view" id="view-patterns">
               <div class="simple-head">
-                <div><h2>Patterns</h2><p id="pattern-count" class="muted">0 patterns</p></div>
+                <div><h2 data-i18n="pat.title">Patterns</h2><p id="pattern-count" class="muted">0 patterns</p></div>
                 <div class="head-actions">
-                  <button id="pat-add" class="btn btn-soft">+ Add</button>
-                  <button id="pat-load" class="btn btn-soft"><span class="ico" data-icon="folder"></span>Load</button>
-                  <button id="pat-save" class="btn btn-primary"><span class="ico" data-icon="download"></span>Save</button>
+                  <button id="pat-add" class="btn btn-soft" data-i18n="pat.add">+ Add</button>
+                  <button id="pat-load" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="pat.load">Load</span></button>
+                  <button id="pat-save" class="btn btn-primary"><span class="ico" data-icon="download"></span><span data-i18n="pat.save">Save</span></button>
                 </div>
               </div>
               <div class="panel-tools flat">
-                <div class="search"><span class="ico" data-icon="search"></span><input id="pattern-search" type="text" placeholder="Filter patterns…" spellcheck="false" /></div>
-                <select id="pattern-cat" class="select"><option value="all">All categories</option></select>
+                <div class="search"><span class="ico" data-icon="search"></span><input id="pattern-search" type="text" data-i18n-ph="pat.filter" placeholder="Filter patterns…" spellcheck="false" /></div>
+                <select id="pattern-cat" class="select"><option value="all" data-i18n="pat.allCategories">All categories</option></select>
               </div>
               <div class="panel table-scroll grow">
                 <table class="grid-table">
-                  <thead><tr><th>Name</th><th>Kind</th><th>Category</th><th>Signature</th><th>Note</th><th></th></tr></thead>
+                  <thead><tr><th data-i18n="col.name">Name</th><th data-i18n="col.kind">Kind</th><th data-i18n="col.category">Category</th><th data-i18n="col.signature">Signature</th><th data-i18n="col.note">Note</th><th></th></tr></thead>
                   <tbody id="pattern-body"></tbody>
                 </table>
               </div>
             </section>
 
-            <!-- EDITOR -->
             <section class="view" id="view-editor">
               <div class="simple-head">
-                <div><h2>Editor</h2><p class="muted">Syntax-highlighted pattern editor</p></div>
+                <div><h2 data-i18n="ed.title">Editor</h2><p class="muted" data-i18n="ed.sub">Syntax-highlighted pattern editor</p></div>
                 <div class="head-actions">
-                  <button id="ed-load" class="btn btn-soft"><span class="ico" data-icon="folder"></span>Load</button>
-                  <button id="ed-save" class="btn btn-soft"><span class="ico" data-icon="download"></span>Save</button>
-                  <button id="ed-apply" class="btn btn-primary">Apply</button>
+                  <button id="ed-load" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="ed.load">Load</span></button>
+                  <button id="ed-save" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="ed.save">Save</span></button>
+                  <button id="ed-apply" class="btn btn-primary" data-i18n="ed.apply">Apply</button>
                 </div>
               </div>
               <div id="editor-host" class="panel grow"></div>
             </section>
 
-            <!-- OUTPUT -->
             <section class="view" id="view-output">
               <div class="simple-head">
-                <div><h2>Output</h2><p id="output-label" class="muted">Nothing generated yet</p></div>
+                <div><h2 data-i18n="out.title">Output</h2><p id="output-label" class="muted">Nothing generated yet</p></div>
                 <div class="head-actions">
-                  <button id="out-copy" class="btn btn-soft"><span class="ico" data-icon="copy"></span>Copy</button>
-                  <button id="out-save" class="btn btn-primary"><span class="ico" data-icon="download"></span>Save</button>
+                  <button id="out-copy" class="btn btn-soft"><span class="ico" data-icon="copy"></span><span data-i18n="out.copy">Copy</span></button>
+                  <button id="out-save" class="btn btn-primary"><span class="ico" data-icon="download"></span><span data-i18n="out.save">Save</span></button>
                 </div>
               </div>
               <pre id="output-text" class="panel output grow">Run a scan, then export from the Workspace toolbar.</pre>
             </section>
 
-            <!-- SETTINGS -->
             <section class="view" id="view-settings">
               <div class="simple-head">
-                <div><h2>Settings</h2><p class="muted">Privacy mask and display options</p></div>
+                <div><h2 data-i18n="set.title">Settings</h2><p class="muted" data-i18n="set.sub">Privacy mask and display options</p></div>
               </div>
               <div class="settings-wrap">
+                <div class="settings-card lang-card">
+                  <div class="settings-card-head">
+                    <span class="ico" data-icon="globe"></span>
+                    <div>
+                      <h3 data-i18n="set.langTitle">Language</h3>
+                      <p data-i18n="set.langDesc">Display language for the interface.</p>
+                    </div>
+                    <select id="lang-select" class="select"></select>
+                  </div>
+                </div>
                 <div class="settings-card">
                   <div class="settings-card-head">
                     <span class="ico" data-icon="eye"></span>
                     <div>
-                      <h3>Privacy mask</h3>
-                      <p>Choose what the eye button in the title bar blurs for screenshots. It applies across every tab, and never changes your data; only the on-screen display is hidden.</p>
+                      <h3 data-i18n="set.maskTitle">Privacy mask</h3>
+                      <p data-i18n="set.maskDesc">Choose what the eye button in the title bar blurs for screenshots. It applies across every tab, and never changes your data; only the on-screen display is hidden.</p>
                     </div>
                   </div>
                   <div class="settings-list">
-                    <label class="setting"><div class="setting-text"><b>Signatures</b><span>AOB byte patterns in tables, the inspector, and the edit dialog</span></div><input type="checkbox" data-mask="sig" /></label>
-                    <label class="setting"><div class="setting-text"><b>Pattern names</b><span>Symbol names everywhere they appear</span></div><input type="checkbox" data-mask="name" /></label>
-                    <label class="setting"><div class="setting-text"><b>Addresses</b><span>Resolved RVA and absolute addresses</span></div><input type="checkbox" data-mask="addr" /></label>
-                    <label class="setting"><div class="setting-text"><b>Categories</b><span>Category labels</span></div><input type="checkbox" data-mask="cat" /></label>
-                    <label class="setting"><div class="setting-text"><b>Notes</b><span>Per-pattern notes</span></div><input type="checkbox" data-mask="note" /></label>
-                    <label class="setting"><div class="setting-text"><b>Editor</b><span>Blur the entire code editor</span></div><input type="checkbox" data-mask="editor" /></label>
-                    <label class="setting"><div class="setting-text"><b>Output</b><span>Blur generated headers, tables, and reports</span></div><input type="checkbox" data-mask="output" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.sig">Signatures</b><span data-i18n="set.sigDesc">AOB byte patterns in tables, the inspector, and the edit dialog</span></div><input type="checkbox" data-mask="sig" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.name">Pattern names</b><span data-i18n="set.nameDesc">Symbol names everywhere they appear</span></div><input type="checkbox" data-mask="name" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.addr">Addresses</b><span data-i18n="set.addrDesc">Resolved RVA and absolute addresses</span></div><input type="checkbox" data-mask="addr" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.cat">Categories</b><span data-i18n="set.catDesc">Category labels</span></div><input type="checkbox" data-mask="cat" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.note">Notes</b><span data-i18n="set.noteDesc">Per-pattern notes</span></div><input type="checkbox" data-mask="note" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.editor">Editor</b><span data-i18n="set.editorDesc">Blur the entire code editor</span></div><input type="checkbox" data-mask="editor" /></label>
+                    <label class="setting"><div class="setting-text"><b data-i18n="set.output">Output</b><span data-i18n="set.outputDesc">Blur generated headers, tables, and reports</span></div><input type="checkbox" data-mask="output" /></label>
                   </div>
                 </div>
               </div>
@@ -292,19 +294,18 @@
       </div>
     </div>
 
-    <!-- modal -->
     <div id="modal" class="modal" hidden>
       <div class="modal-card">
         <h2 id="modal-title">Add pattern</h2>
         <div class="modal-grid">
-          <label>Name<input id="f-name" class="d-name" type="text" spellcheck="false" placeholder="SendPacket_PTR" /></label>
-          <label>Category<input id="f-cat" class="d-cat" type="text" spellcheck="false" placeholder="functions" /></label>
-          <label class="wide">Signature (AOB)<input id="f-aob" class="d-sig" type="text" spellcheck="false" placeholder="48 8B ?? ?? ?? ??" /></label>
-          <label class="wide">Note<input id="f-note" class="d-note" type="text" spellcheck="false" placeholder="Optional" /></label>
+          <label><span data-i18n="modal.name">Name</span><input id="f-name" class="d-name" type="text" spellcheck="false" placeholder="SendPacket_PTR" /></label>
+          <label><span data-i18n="modal.category">Category</span><input id="f-cat" class="d-cat" type="text" spellcheck="false" placeholder="functions" /></label>
+          <label class="wide"><span data-i18n="modal.signature">Signature (AOB)</span><input id="f-aob" class="d-sig" type="text" spellcheck="false" placeholder="48 8B ?? ?? ?? ??" /></label>
+          <label class="wide"><span data-i18n="modal.note">Note</span><input id="f-note" class="d-note" type="text" spellcheck="false" data-i18n-ph="modal.phNote" placeholder="Optional" /></label>
         </div>
         <div class="modal-actions">
-          <button id="modal-cancel" class="btn btn-soft">Cancel</button>
-          <button id="modal-ok" class="btn btn-primary">Save</button>
+          <button id="modal-cancel" class="btn btn-soft" data-i18n="modal.cancel">Cancel</button>
+          <button id="modal-ok" class="btn btn-primary" data-i18n="modal.save">Save</button>
         </div>
       </div>
     </div>
