@@ -620,6 +620,9 @@ fn disassemble(hex: String, bits: u32, base: String) -> Vec<String> {
     let mut out = Vec::new();
     while decoder.can_decode() {
         decoder.decode_out(&mut instr);
+        if instr.is_invalid() {
+            break;
+        }
         let mut text = String::new();
         formatter.format(&instr, &mut text);
         out.push(format!("{:08X}  {text}", instr.ip()));
