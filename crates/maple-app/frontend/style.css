@@ -851,16 +851,118 @@ button.btn-ico:hover {
   transition: filter 0.15s ease;
 }
 
-/* privacy mask: visual only, leaves data intact */
-.masked .sig,
-.masked #insp-aob,
-.masked #f-aob {
+/* privacy mask: visual only, leaves data intact. A field (d-*) blurs only when the master mask
+   is on (.masked) AND that field type is enabled (.m-*); editor and output blur as a whole. */
+.masked.m-sig .d-sig,
+.masked.m-name .d-name,
+.masked.m-addr .d-addr,
+.masked.m-cat .d-cat,
+.masked.m-note .d-note {
   filter: blur(5px);
   user-select: none;
 }
-.masked #editor-host {
+.masked.m-editor #editor-host,
+.masked.m-output #output-text {
   filter: blur(7px);
   user-select: none;
+}
+
+/* settings */
+.settings-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 24px 24px;
+}
+.settings-card {
+  max-width: 680px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-card-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-card-head .ico {
+  color: var(--blue-hi);
+  margin-top: 1px;
+}
+.settings-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.settings-card-head p {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  color: var(--t2);
+  max-width: 470px;
+  line-height: 1.55;
+}
+.settings-list {
+  display: flex;
+  flex-direction: column;
+}
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.setting:last-child {
+  border-bottom: none;
+}
+.setting:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.setting-text b {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: block;
+}
+.setting-text span {
+  font-size: 12px;
+  color: var(--t3);
+}
+.setting input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--inset);
+  border: 1px solid var(--line-2);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.setting input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--t2);
+  transition: transform 0.15s, background 0.15s;
+}
+.setting input[type="checkbox"]:checked {
+  background: var(--blue);
+  border-color: var(--blue);
+}
+.setting input[type="checkbox"]:checked::after {
+  transform: translateX(18px);
+  background: #fff;
 }
 .badge {
   display: inline-flex;

@@ -47,6 +47,7 @@
             <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span>Patterns</span></button>
             <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span>Editor</span></button>
             <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span>Output</span></button>
+            <button class="nav-item" data-view="settings" data-icon="settings"><span class="ico"></span><span>Settings</span></button>
           </nav>
           <div class="side-foot">
             <div class="engine-card">
@@ -158,7 +159,7 @@
                       <div class="insp-icon"><span class="ico" data-icon="boxes"></span></div>
                       <div>
                         <div class="insp-title-row">
-                          <h3 id="insp-name">No selection</h3>
+                          <h3 id="insp-name" class="d-name">No selection</h3>
                           <span id="insp-status" class="badge"></span>
                         </div>
                         <p id="insp-desc">Select a row to inspect it.</p>
@@ -167,11 +168,11 @@
                     <div id="insp-hint" class="insp-hint">Run a scan, then select a result to inspect its metadata and hit count.</div>
                   </div>
                   <div class="insp-body" id="insp-body" hidden>
-                    <div class="kv"><span>RVA</span><b id="insp-rva"></b></div>
-                    <div class="kv"><span>Absolute</span><b id="insp-abs"></b></div>
-                    <div class="kv"><span>Signature</span><b id="insp-aob" class="mono"></b></div>
+                    <div class="kv"><span>RVA</span><b id="insp-rva" class="d-addr"></b></div>
+                    <div class="kv"><span>Absolute</span><b id="insp-abs" class="d-addr"></b></div>
+                    <div class="kv"><span>Signature</span><b id="insp-aob" class="mono d-sig"></b></div>
                     <div class="kv"><span>Type</span><b id="insp-type"></b></div>
-                    <div class="kv"><span>Category</span><b id="insp-cat"></b></div>
+                    <div class="kv"><span>Category</span><b id="insp-cat" class="d-cat"></b></div>
                     <div class="kv"><span>Module</span><b id="insp-mod"></b></div>
                     <div class="insp-section">
                       <div class="insp-label">Hit count</div>
@@ -179,7 +180,7 @@
                     </div>
                     <div class="insp-section">
                       <div class="insp-label">Notes</div>
-                      <div id="insp-note" class="note-box"></div>
+                      <div id="insp-note" class="note-box d-note"></div>
                     </div>
                   </div>
                   <div class="insp-foot">
@@ -259,6 +260,33 @@
               </div>
               <pre id="output-text" class="panel output grow">Run a scan, then export from the Workspace toolbar.</pre>
             </section>
+
+            <!-- SETTINGS -->
+            <section class="view" id="view-settings">
+              <div class="simple-head">
+                <div><h2>Settings</h2><p class="muted">Privacy mask and display options</p></div>
+              </div>
+              <div class="settings-wrap">
+                <div class="settings-card">
+                  <div class="settings-card-head">
+                    <span class="ico" data-icon="eye"></span>
+                    <div>
+                      <h3>Privacy mask</h3>
+                      <p>Choose what the eye button in the title bar blurs for screenshots. It applies across every tab, and never changes your data; only the on-screen display is hidden.</p>
+                    </div>
+                  </div>
+                  <div class="settings-list">
+                    <label class="setting"><div class="setting-text"><b>Signatures</b><span>AOB byte patterns in tables, the inspector, and the edit dialog</span></div><input type="checkbox" data-mask="sig" /></label>
+                    <label class="setting"><div class="setting-text"><b>Pattern names</b><span>Symbol names everywhere they appear</span></div><input type="checkbox" data-mask="name" /></label>
+                    <label class="setting"><div class="setting-text"><b>Addresses</b><span>Resolved RVA and absolute addresses</span></div><input type="checkbox" data-mask="addr" /></label>
+                    <label class="setting"><div class="setting-text"><b>Categories</b><span>Category labels</span></div><input type="checkbox" data-mask="cat" /></label>
+                    <label class="setting"><div class="setting-text"><b>Notes</b><span>Per-pattern notes</span></div><input type="checkbox" data-mask="note" /></label>
+                    <label class="setting"><div class="setting-text"><b>Editor</b><span>Blur the entire code editor</span></div><input type="checkbox" data-mask="editor" /></label>
+                    <label class="setting"><div class="setting-text"><b>Output</b><span>Blur generated headers, tables, and reports</span></div><input type="checkbox" data-mask="output" /></label>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </main>
       </div>
@@ -269,10 +297,10 @@
       <div class="modal-card">
         <h2 id="modal-title">Add pattern</h2>
         <div class="modal-grid">
-          <label>Name<input id="f-name" type="text" spellcheck="false" placeholder="SendPacket_PTR" /></label>
-          <label>Category<input id="f-cat" type="text" spellcheck="false" placeholder="functions" /></label>
-          <label class="wide">Signature (AOB)<input id="f-aob" type="text" spellcheck="false" placeholder="48 8B ?? ?? ?? ??" /></label>
-          <label class="wide">Note<input id="f-note" type="text" spellcheck="false" placeholder="Optional" /></label>
+          <label>Name<input id="f-name" class="d-name" type="text" spellcheck="false" placeholder="SendPacket_PTR" /></label>
+          <label>Category<input id="f-cat" class="d-cat" type="text" spellcheck="false" placeholder="functions" /></label>
+          <label class="wide">Signature (AOB)<input id="f-aob" class="d-sig" type="text" spellcheck="false" placeholder="48 8B ?? ?? ?? ??" /></label>
+          <label class="wide">Note<input id="f-note" class="d-note" type="text" spellcheck="false" placeholder="Optional" /></label>
         </div>
         <div class="modal-actions">
           <button id="modal-cancel" class="btn btn-soft">Cancel</button>

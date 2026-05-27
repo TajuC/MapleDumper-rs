@@ -25,6 +25,7 @@ const ICONS = {
   layers: SVG('<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'),
   eye: SVG('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
   "eye-off": SVG('<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13.5 13.5 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61"/><path d="m2 2 20 20"/>'),
+  settings: SVG('<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>'),
 };
 
 function injectIcons(root = document) {
@@ -54,8 +55,25 @@ Player_Hp_OFF = 8B 8E ?? ?? ?? ??          ; hp field on the character struct
 Login_HDR = C7 45 ?? ?? ?? ?? ??           ; login opcode immediate
 `;
 
+function loadMaskSettings() {
+  const def = { sig: true, name: false, addr: false, cat: false, note: false, editor: true, output: true };
+  try {
+    return Object.assign(def, JSON.parse(localStorage.getItem("maskSettings") || "{}"));
+  } catch {
+    return def;
+  }
+}
+function saveMaskSettings() {
+  try {
+    localStorage.setItem("maskSettings", JSON.stringify(state.mask));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 const state = {
   patternText: SEED,
+  mask: loadMaskSettings(),
   patterns: [],
   editingIndex: -1,
   arch: "x64",
@@ -118,14 +136,38 @@ try {
 /* ---------- privacy mask ---------- */
 
 let masked = false;
+
+function applyMask() {
+  const c = document.body.classList;
+  c.toggle("masked", masked);
+  c.toggle("m-sig", state.mask.sig);
+  c.toggle("m-name", state.mask.name);
+  c.toggle("m-addr", state.mask.addr);
+  c.toggle("m-cat", state.mask.cat);
+  c.toggle("m-note", state.mask.note);
+  c.toggle("m-editor", state.mask.editor);
+  c.toggle("m-output", state.mask.output);
+}
+
 $("mask-toggle").addEventListener("click", () => {
   masked = !masked;
-  document.body.classList.toggle("masked", masked);
   const btn = $("mask-toggle");
   btn.classList.toggle("active", masked);
   btn.querySelector(".ico").innerHTML = ICONS[masked ? "eye-off" : "eye"];
-  btn.title = masked ? "Show signatures" : "Mask signatures for screenshots";
+  btn.title = masked ? "Show everything" : "Mask for screenshots";
+  applyMask();
 });
+
+document.querySelectorAll("[data-mask]").forEach((cb) => {
+  cb.checked = !!state.mask[cb.dataset.mask];
+  cb.addEventListener("change", () => {
+    state.mask[cb.dataset.mask] = cb.checked;
+    saveMaskSettings();
+    applyMask();
+  });
+});
+
+applyMask();
 
 /* ---------- toggles ---------- */
 
@@ -306,13 +348,13 @@ function renderResults() {
     .map((r) => {
       const pct = (r.matches / maxHits) * 100;
       const value = r.value
-        ? `<span class="mono">${r.value}</span>`
+        ? `<span class="mono d-addr">${r.value}</span>`
         : '<span class="muted"></span>';
       return `<tr data-name="${esc(r.name)}" class="${state.selected === r.name ? "selected" : ""}">
         <td><div class="name-cell"><span class="dot-acc ${accentClass(r)}"></span>
-          <div><div class="name-main">${esc(r.name)}</div><div class="name-sub">${esc(r.category)}</div></div></div></td>
+          <div><div class="name-main d-name">${esc(r.name)}</div><div class="name-sub d-cat">${esc(r.category)}</div></div></div></td>
         <td>${value}</td>
-        <td><span class="sig" title="${esc(r.pattern)}">${esc(r.pattern)}</span></td>
+        <td><span class="sig d-sig" title="${esc(r.pattern)}">${esc(r.pattern)}</span></td>
         <td>${statusBadge(r.status)}</td>
         <td><span class="tag">${typeLabel(r.kind)}</span></td>
         <td><div class="hits"><div class="bar"><span style="width:${pct}%"></span></div><span class="num">${r.matches}</span></div></td>
@@ -465,11 +507,11 @@ function renderPatterns() {
   body.innerHTML = rows
     .map(
       ({ p, i }) => `<tr>
-      <td class="mono">${esc(p.name)}</td>
+      <td class="mono d-name">${esc(p.name)}</td>
       <td><span class="tag">${p.kind}</span></td>
-      <td>${esc(p.category)}</td>
-      <td><span class="sig" title="${esc(p.aob)}">${esc(p.aob)}</span></td>
-      <td class="note-cell">${esc(p.note || "")}</td>
+      <td class="d-cat">${esc(p.category)}</td>
+      <td><span class="sig d-sig" title="${esc(p.aob)}">${esc(p.aob)}</span></td>
+      <td class="note-cell d-note">${esc(p.note || "")}</td>
       <td><div class="row-actions">
         <button class="icon-btn" data-edit="${i}">edit</button>
         <button class="icon-btn danger" data-del="${i}">del</button>
