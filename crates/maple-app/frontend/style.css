@@ -1181,6 +1181,7 @@ button.btn-ico:hover {
 }
 #editor-host {
   padding: 0;
+  background: #0d121b;
 }
 .row-actions {
   display: flex;
