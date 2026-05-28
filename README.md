@@ -35,6 +35,11 @@ same engine crate.
 - **Compare across versions** — a tabbed workspace: open any scan, compare any two builds
   (moved / new / removed offsets), or line every version up in a **matrix** to track an offset across
   the whole timeline. Click a changed symbol to see its **bytes and x86/x64 disassembly** side by side.
+- **Assembly scan** — find code by *instruction* instead of bytes (à la Cheat Engine): type lines of
+  assembly (`push`, `call`, `test eax,eax`) with wildcards (`*` zero-or-more, `?` one char, `^` line
+  start, `$` line end), and it disassembles the target and lists every address where those
+  instructions appear back-to-back. Narrow it with an optional From/To range, and save any match
+  straight into your pattern list.
 - Built-in **pattern manager** (add / edit / delete / notes) and a syntax-highlighted **editor**.
 - **Privacy mask** — one click hides every signature, name, address, category, and note for
   screenshots. Pick **blur**, or a **showcase mode** that swaps in realistic fake values instead.
@@ -49,6 +54,7 @@ same engine crate.
 - The same scan and output pipeline, suitable for scripting and CI.
 - Offline helpers that need no target: `--lint` flags weak signatures, `--diff` reports which
   offsets moved between two dumps, and `--profile` breaks a live scan into read/scan/resolve timing.
+- `--asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
 
 ## Workspace layout
 
@@ -107,6 +113,9 @@ mapledumper (--process <name> | --class <window-class>) [options]
   --profile          measure the read/scan/resolve split against the live target and exit
   --lint             check the pattern file for weak signatures and exit
   --diff <a> <b>     compare two saved dumps and report what moved, then exit
+  --asm <file>       scan by assembly instructions (one per line, wildcards * ? ^ $), then exit
+  --from <addr>      with --asm, only report matches at or above this address (hex)
+  --to <addr>        with --asm, only report matches below this address (hex)
   -h, --help         print help
 ```
 
@@ -118,6 +127,9 @@ mapledumper --lint --patterns patterns.txt
 
 # see which offsets moved between two game versions
 mapledumper --diff old/update.txt new/update.txt
+
+# find code by instruction: every push, then a call, then test eax,eax (one instruction per line)
+mapledumper --process MapleStory.exe --asm find.asm
 ```
 
 ## Patterns
