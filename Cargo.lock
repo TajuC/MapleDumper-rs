@@ -2242,7 +2242,7 @@ checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "maple-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "iced-x86",
  "maple-core",
@@ -2256,14 +2256,14 @@ dependencies = [
 
 [[package]]
 name = "maple-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "maple-core",
 ]
 
 [[package]]
 name = "maple-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "criterion",
  "iced-x86",

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/maple-core", "crates/maple-cli", "crates/maple-app"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "MIT"
 authors = ["TajuC"]
