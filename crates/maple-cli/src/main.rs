@@ -7,7 +7,7 @@ use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, parse_patterns_file};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, Locator, Pattern, ProfileReport, ScanResult, Status,
-    Target, diff, lint, parse_dump, parse_stamp, profile, scan,
+    Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp, profile, scan,
 };
 
 struct Args {
@@ -24,6 +24,9 @@ struct Args {
     profile: bool,
     lint: bool,
     diff: Option<(PathBuf, PathBuf)>,
+    asm: Option<PathBuf>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 const HELP: &str = "\
@@ -48,6 +51,9 @@ OUTPUT:
     --profile          measure the read/scan/resolve split against the live target and exit
     --lint             check the pattern file for weak signatures and exit
     --diff <a> <b>     compare two saved dumps and report what moved, then exit
+    --asm <file>       scan by assembly instructions (one per line, wildcards * ? ^ $), then exit
+    --from <addr>      with --asm, only report matches at or above this address (hex)
+    --to <addr>        with --asm, only report matches below this address (hex)
 
     -h, --help         print this help
     -V, --version      print version
@@ -56,6 +62,18 @@ By default mapledumper waits for the target, so you can start it before the game
 
 fn value(it: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     it.next().ok_or_else(|| format!("{flag} requires a value"))
+}
+
+fn parse_hex_opt(field: &Option<String>) -> Result<Option<usize>, String> {
+    match field.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(raw) => {
+            let hex = raw.trim_start_matches("0x").trim_start_matches("0X");
+            usize::from_str_radix(hex, 16)
+                .map(Some)
+                .map_err(|_| format!("invalid address '{raw}'"))
+        }
+    }
 }
 
 fn parse_arch(s: &str) -> Result<Arch, String> {
@@ -80,6 +98,9 @@ fn parse_args() -> Result<Args, String> {
     let mut profile = false;
     let mut lint = false;
     let mut diff = None;
+    let mut asm = None;
+    let mut from = None;
+    let mut to = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -100,6 +121,9 @@ fn parse_args() -> Result<Args, String> {
                 let new = PathBuf::from(value(&mut it, "--diff")?);
                 diff = Some((old, new));
             }
+            "--asm" => asm = Some(PathBuf::from(value(&mut it, "--asm")?)),
+            "--from" => from = Some(value(&mut it, "--from")?),
+            "--to" => to = Some(value(&mut it, "--to")?),
             "--timeout" => {
                 let raw = value(&mut it, "--timeout")?;
                 let secs: u64 = raw
@@ -136,6 +160,9 @@ fn parse_args() -> Result<Args, String> {
         profile,
         lint,
         diff,
+        asm,
+        from,
+        to,
     })
 }
 
@@ -201,20 +228,24 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let patterns = parse_patterns_file(&args.patterns, args.arch)
-        .map_err(|e| format!("failed to read {}: {e}", args.patterns.display()))?;
-    if patterns.is_empty() {
-        return Err(format!(
-            "no patterns loaded from {}",
-            args.patterns.display()
-        ));
-    }
-    println!("[+] loaded {} patterns", patterns.len());
-
-    if args.lint {
-        print_lints(&patterns);
-        return Ok(());
-    }
+    let patterns = if args.asm.is_none() {
+        let patterns = parse_patterns_file(&args.patterns, args.arch)
+            .map_err(|e| format!("failed to read {}: {e}", args.patterns.display()))?;
+        if patterns.is_empty() {
+            return Err(format!(
+                "no patterns loaded from {}",
+                args.patterns.display()
+            ));
+        }
+        println!("[+] loaded {} patterns", patterns.len());
+        if args.lint {
+            print_lints(&patterns);
+            return Ok(());
+        }
+        patterns
+    } else {
+        Vec::new()
+    };
 
     let loc = locator(&args)?;
     let module = module_name(&args);
@@ -237,6 +268,38 @@ fn run() -> Result<(), String> {
         "[+] attached; module {} base 0x{:X} size 0x{:X}",
         module, target.module.base, target.module.size
     );
+
+    if let Some(path) = &args.asm {
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let pat = parse_asm_patterns(&text)
+            .ok_or_else(|| format!("no assembly lines in {}", path.display()))?;
+        let from = parse_hex_opt(&args.from)?;
+        let to = parse_hex_opt(&args.to)?;
+        let regions = maple_core::memory::clip_regions(&target.code_regions(), from, to);
+        println!("[+] assembly scan over {} regions", regions.len());
+        let hits = assembly_scan(
+            &target,
+            target.module.base,
+            &regions,
+            args.arch,
+            &pat,
+            &cancel,
+        );
+        println!("[+] {} matches", hits.len());
+        for h in &hits {
+            let bytes = h
+                .bytes
+                .iter()
+                .map(|b| format!("{b:02X} "))
+                .collect::<String>();
+            println!("  0x{:X} (+0x{:X})  {}", h.address, h.rva, bytes.trim_end());
+            for line in &h.lines {
+                println!("      {line}");
+            }
+        }
+        return Ok(());
+    }
 
     if args.profile {
         let regions = target.code_regions();
