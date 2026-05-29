@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LUID,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_NOT_ALL_ASSIGNED, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE, LUID,
 };
 use windows_sys::Win32::Security::{
     AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED,
@@ -165,8 +166,68 @@ fn enable_debug_privilege() -> bool {
                 Attributes: SE_PRIVILEGE_ENABLED,
             }],
         };
-        AdjustTokenPrivileges(token, 0, &tp, 0, std::ptr::null_mut(), std::ptr::null_mut()) != 0
+        if AdjustTokenPrivileges(token, 0, &tp, 0, std::ptr::null_mut(), std::ptr::null_mut()) == 0
+        {
+            return false;
+        }
+        // AdjustTokenPrivileges reports success even when the privilege was not actually assigned;
+        // the real outcome is in GetLastError.
+        GetLastError() != ERROR_NOT_ALL_ASSIGNED
     }
+}
+
+/// A process that matches a target name, with enough detail to disambiguate several clients,
+/// launchers or private servers sharing a name. The path is best-effort and absent when the process
+/// cannot be opened.
+#[derive(Debug, Clone)]
+pub struct ProcessCandidate {
+    pub pid: u32,
+    pub name: String,
+    pub path: Option<String>,
+}
+
+fn process_path(pid: u32) -> Option<String> {
+    let handle = open_process(pid).ok()?;
+    let mut buf = vec![0u16; 1024];
+    let mut len = buf.len() as u32;
+    let ok = unsafe {
+        QueryFullProcessImageNameW(handle.0, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
+    };
+    (ok != 0 && len != 0).then(|| u16_to_string(&buf[..len as usize]))
+}
+
+/// Every running process whose name matches `name`, so the caller can choose instead of silently
+/// taking the first match.
+#[must_use]
+pub fn process_candidates(name: &str) -> Vec<ProcessCandidate> {
+    let mut out = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        let _guard = OwnedHandle(snap);
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut entry) == 0 {
+            return out;
+        }
+        loop {
+            let exe = u16_to_string(&entry.szExeFile);
+            if name_matches(&exe, name) {
+                let pid = entry.th32ProcessID;
+                out.push(ProcessCandidate {
+                    pid,
+                    name: exe,
+                    path: process_path(pid),
+                });
+            }
+            if Process32NextW(snap, &mut entry) == 0 {
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn open_process(pid: u32) -> Result<OwnedHandle, u32> {
@@ -346,7 +407,7 @@ impl Target {
         opts: &AttachOptions,
         cancel: &AtomicBool,
     ) -> io::Result<Self> {
-        enable_debug_privilege();
+        let debug_priv = enable_debug_privilege();
         let module = resolve_module_name(locator, module)?;
         let deadline = opts.timeout.map(|t| Instant::now() + t);
         loop {
@@ -359,10 +420,12 @@ impl Target {
             match try_attach_once(locator, &module) {
                 Ok(target) => return Ok(target),
                 Err(AttachError::AccessDenied) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "access denied opening the process; run MapleDumper as administrator",
-                    ));
+                    let detail = if debug_priv {
+                        "access denied opening the process even with SeDebugPrivilege; the target may be a protected process"
+                    } else {
+                        "access denied opening the process; run MapleDumper as administrator to enable SeDebugPrivilege"
+                    };
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, detail));
                 }
                 Err(AttachError::NoNtdll) => {
                     return Err(io::Error::new(

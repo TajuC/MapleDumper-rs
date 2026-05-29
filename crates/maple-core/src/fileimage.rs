@@ -82,6 +82,10 @@ fn section_name(name: &[u8; 8]) -> &str {
     std::str::from_utf8(&name[..end]).unwrap_or("")
 }
 
+fn entropy_is_packing_signal(entropy: f64, section_len: usize, corroborated: bool) -> bool {
+    entropy > 7.2 && (section_len >= 0x4000 || corroborated)
+}
+
 fn shannon_entropy(bytes: &[u8]) -> f64 {
     if bytes.is_empty() {
         return 0.0;
@@ -342,6 +346,7 @@ impl FileImage {
     #[must_use]
     pub fn pack_report(&self) -> PackReport {
         let mut reasons = Vec::new();
+        let mut entropy_hits: Vec<(String, f64, usize)> = Vec::new();
         let mut max_entropy = 0.0f64;
         for s in &self.sections {
             let name = section_name(&s.name);
@@ -362,6 +367,15 @@ impl FileImage {
             let entropy = shannon_entropy(&self.data[start..start + len]);
             max_entropy = max_entropy.max(entropy);
             if entropy > 7.2 {
+                entropy_hits.push((name.to_string(), entropy, len));
+            }
+        }
+        // High entropy alone over-reports: a few hundred bytes of dense code can exceed the cutoff
+        // and wrongly cap a signature at grade D. Count it only for a sizeable section, or when a
+        // packer name or executable+writable section already corroborates packing.
+        let corroborated = !reasons.is_empty();
+        for (name, entropy, len) in entropy_hits {
+            if entropy_is_packing_signal(entropy, len, corroborated) {
                 reasons.push(format!("high entropy {entropy:.2} in {name}"));
             }
         }
@@ -590,6 +604,18 @@ mod tests {
         let report = FileImage::parse(packed).unwrap().pack_report();
         assert!(report.likely_packed);
         assert!(report.reasons.iter().any(|r| r.contains("UPX0")));
+    }
+
+    #[test]
+    fn entropy_alone_needs_a_sizeable_section() {
+        // a few hundred high-entropy bytes are not enough on their own
+        assert!(!entropy_is_packing_signal(7.5, 300, false));
+        // a sizeable high-entropy section is a signal
+        assert!(entropy_is_packing_signal(7.5, 0x8000, false));
+        // a small high-entropy section counts when another signal already fired
+        assert!(entropy_is_packing_signal(7.5, 300, true));
+        // below the cutoff is never a signal
+        assert!(!entropy_is_packing_signal(7.0, 0x8000, false));
     }
 
     #[test]
