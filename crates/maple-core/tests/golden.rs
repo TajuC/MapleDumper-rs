@@ -59,7 +59,7 @@ fn canonical(result: &ScanResult) -> String {
 }
 
 const EXPECTED: &str = "\
-Amb [globals] found value=0x300 offset=false matches=2
+Amb [globals] found (ambiguous) value=0x300 offset=false matches=2
 Bar [globals] found value=0x90 offset=false matches=1
 Baz [globals] found value=0x205 offset=false matches=1
 Foo [globals] found value=0x40 offset=false matches=1
@@ -80,7 +80,7 @@ fn scan_and_resolve_snapshot() {
     }];
     let patterns = parse_patterns(PATTERNS, Arch::X64);
 
-    let result = scan(&source, BASE, &regions, &patterns, Arch::X64);
+    let result = scan(&source, BASE, SIZE, &regions, &patterns, Arch::X64);
 
     assert_eq!(canonical(&result), EXPECTED);
 }

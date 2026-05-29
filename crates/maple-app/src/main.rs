@@ -273,7 +273,14 @@ fn run_scan(
     let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
     let region_count = regions.len();
     let scan_started = Instant::now();
-    let result = maple_core::scan(&target, target.module.base, &regions, &patterns, arch);
+    let result = maple_core::scan(
+        &target,
+        target.module.base,
+        target.module.size,
+        &regions,
+        &patterns,
+        arch,
+    );
     let scan_ms = scan_started.elapsed().as_millis();
     let elapsed_ms = started.elapsed().as_millis();
 

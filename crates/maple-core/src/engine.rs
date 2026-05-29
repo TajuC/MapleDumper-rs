@@ -1,3 +1,4 @@
+use crate::domain::{FailureReason, FindingStatus, checked_rva};
 use crate::memory::{MemorySource, Region};
 use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
@@ -7,24 +8,6 @@ use rayon::prelude::*;
 use std::hint::black_box;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    Found,
-    Unresolved,
-    NotFound,
-}
-
-impl Status {
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Status::Found => "found",
-            Status::Unresolved => "unresolved",
-            Status::NotFound => "not found",
-        }
-    }
-}
-
 pub struct PatternRow {
     pub name: String,
     pub category: String,
@@ -32,7 +15,7 @@ pub struct PatternRow {
     pub value: Option<u64>,
     pub is_offset: bool,
     pub matches: usize,
-    pub status: Status,
+    pub status: FindingStatus,
     pub note: String,
 }
 
@@ -45,15 +28,27 @@ pub struct ScanResult {
     pub total_matches: usize,
 }
 
+#[derive(Clone, Copy)]
+enum Resolved {
+    Addr(u64),
+    Off(u64),
+}
+
+impl Resolved {
+    fn value(self) -> u64 {
+        match self {
+            Resolved::Addr(v) | Resolved::Off(v) => v,
+        }
+    }
+    fn is_offset(self) -> bool {
+        matches!(self, Resolved::Off(_))
+    }
+}
+
 struct Hit {
     pattern_idx: usize,
     addr: usize,
-    value: Option<u64>,
-    is_offset: bool,
-}
-
-fn rva(addr: usize, base: usize) -> u64 {
-    addr.wrapping_sub(base) as u64
+    outcome: Result<Resolved, FailureReason>,
 }
 
 // Extra bytes read past a chunk's accept window so a pattern starting near the end still
@@ -83,31 +78,34 @@ fn resolve<S: MemorySource>(
     kind: Kind,
     source: &S,
     module_base: usize,
+    module_size: usize,
     addr: usize,
     bytes: &[u8],
     arch: Arch,
-) -> (Option<u64>, bool) {
+) -> Result<Resolved, FailureReason> {
+    let addr_rva =
+        |target: usize| checked_rva(target, module_base, module_size).map(Resolved::Addr);
     match kind {
-        Kind::Direct => (Some(rva(addr, module_base)), false),
-        Kind::Pointer => (
-            resolver::extract_pointer(bytes, addr, arch).map(|t| rva(t, module_base)),
-            false,
-        ),
-        Kind::Offset => (
-            resolver::extract_offset(bytes, 4, arch).map(u64::from),
-            true,
-        ),
-        Kind::Header => (resolver::extract_immediate(bytes, 4).map(u64::from), true),
-        Kind::Call => (
-            resolver::resolve_call(source, addr, bytes).map(|t| rva(t, module_base)),
-            false,
-        ),
+        Kind::Direct => addr_rva(addr),
+        Kind::Pointer => resolver::extract_pointer(bytes, addr, arch)
+            .ok_or(FailureReason::Unresolved)
+            .and_then(addr_rva),
+        Kind::Offset => resolver::extract_offset(bytes, 4, arch)
+            .map(|v| Resolved::Off(u64::from(v)))
+            .ok_or(FailureReason::Unresolved),
+        Kind::Header => resolver::extract_immediate(bytes, 4)
+            .map(|v| Resolved::Off(u64::from(v)))
+            .ok_or(FailureReason::Unresolved),
+        Kind::Call => resolver::resolve_call(source, addr, bytes)
+            .ok_or(FailureReason::Unresolved)
+            .and_then(addr_rva),
     }
 }
 
 pub fn scan<S>(
     source: &S,
     module_base: usize,
+    module_size: usize,
     regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
@@ -115,12 +113,21 @@ pub fn scan<S>(
 where
     S: MemorySource + Sync,
 {
-    scan_chunked(source, module_base, regions, patterns, arch, SCAN_CHUNK)
+    scan_chunked(
+        source,
+        module_base,
+        module_size,
+        regions,
+        patterns,
+        arch,
+        SCAN_CHUNK,
+    )
 }
 
 fn scan_chunked<S>(
     source: &S,
     module_base: usize,
+    module_size: usize,
     regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
@@ -188,13 +195,19 @@ where
                             continue;
                         }
                         let addr = base + off;
-                        let (value, is_offset) =
-                            resolve(*kind, source, module_base, addr, &buf[off..], arch);
+                        let outcome = resolve(
+                            *kind,
+                            source,
+                            module_base,
+                            module_size,
+                            addr,
+                            &buf[off..],
+                            arch,
+                        );
                         local.push(Hit {
                             pattern_idx: idx,
                             addr,
-                            value,
-                            is_offset,
+                            outcome,
                         });
                     }
                 }
@@ -235,16 +248,16 @@ where
                 value: None,
                 is_offset: false,
                 matches: 0,
-                status: Status::NotFound,
+                status: FindingStatus::NotFound,
                 note,
             });
             continue;
         }
 
         group.sort_by_key(|h| h.addr);
-        if let Some((value, is_offset)) =
-            group.iter().find_map(|h| h.value.map(|v| (v, h.is_offset)))
-        {
+        if let Some(resolved) = group.iter().find_map(|h| h.outcome.as_ref().ok().copied()) {
+            let value = resolved.value();
+            let is_offset = resolved.is_offset();
             findings.push(Finding {
                 name: base.to_string(),
                 category: category.clone(),
@@ -252,6 +265,13 @@ where
                 is_offset,
             });
             found.push(pattern.name.clone());
+            let status = if match_count > 1 {
+                FindingStatus::FoundAmbiguous {
+                    candidates: match_count,
+                }
+            } else {
+                FindingStatus::FoundUnique
+            };
             rows.push(PatternRow {
                 name: base.to_string(),
                 category,
@@ -259,10 +279,19 @@ where
                 value: Some(value),
                 is_offset,
                 matches: match_count,
-                status: Status::Found,
+                status,
                 note,
             });
         } else {
+            // matched but nothing resolved: surface an out-of-module target distinctly from a
+            // decode miss, since it usually means the signature landed on the wrong instruction.
+            let reason = group
+                .iter()
+                .find_map(|h| match &h.outcome {
+                    Err(FailureReason::OutOfModule) => Some(FailureReason::OutOfModule),
+                    _ => None,
+                })
+                .unwrap_or(FailureReason::Unresolved);
             matched_unresolved.push(pattern.name.clone());
             rows.push(PatternRow {
                 name: base.to_string(),
@@ -271,7 +300,7 @@ where
                 value: None,
                 is_offset: false,
                 matches: match_count,
-                status: Status::Unresolved,
+                status: FindingStatus::Failed(reason),
                 note,
             });
         }
@@ -402,6 +431,7 @@ fn scan_parallel(
 fn resolve_pass<S: MemorySource>(
     source: &S,
     module_base: usize,
+    module_size: usize,
     bufs: &[(usize, Vec<u8>)],
     compiled: &[CompiledPat],
     found: &[Probe],
@@ -416,15 +446,16 @@ fn resolve_pass<S: MemorySource>(
             call_hits += 1;
         }
         let addr = bufs[p.buf].0 + p.off;
-        let (value, _) = resolve(
+        let outcome = resolve(
             kind,
             source,
             module_base,
+            module_size,
             addr,
             &bufs[p.buf].1[p.off..],
             arch,
         );
-        acc = acc.wrapping_add(value.unwrap_or(0));
+        acc = acc.wrapping_add(outcome.map(Resolved::value).unwrap_or(0));
     }
     black_box(acc);
     (t.elapsed().as_millis(), call_hits)
@@ -433,6 +464,7 @@ fn resolve_pass<S: MemorySource>(
 fn time_scan<S: MemorySource + Sync>(
     source: &S,
     module_base: usize,
+    module_size: usize,
     regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
@@ -442,6 +474,7 @@ fn time_scan<S: MemorySource + Sync>(
     black_box(scan_chunked(
         source,
         module_base,
+        module_size,
         regions,
         patterns,
         arch,
@@ -473,6 +506,7 @@ pub struct ProfileReport {
 pub fn profile<S>(
     source: &S,
     module_base: usize,
+    module_size: usize,
     regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
@@ -502,9 +536,25 @@ where
 
     let scan_parallel_ms = scan_parallel(&bufs, &compiled, BLOCK, max_len.max(1));
 
-    let (resolve_ms, call_hits) = resolve_pass(source, module_base, &bufs, &compiled, &found, arch);
+    let (resolve_ms, call_hits) = resolve_pass(
+        source,
+        module_base,
+        module_size,
+        &bufs,
+        &compiled,
+        &found,
+        arch,
+    );
 
-    let full_ms = time_scan(source, module_base, regions, patterns, arch, SCAN_CHUNK);
+    let full_ms = time_scan(
+        source,
+        module_base,
+        module_size,
+        regions,
+        patterns,
+        arch,
+        SCAN_CHUNK,
+    );
 
     let chunk_ms = [
         64usize << 10,
@@ -518,7 +568,15 @@ where
     .map(|size| {
         (
             size,
-            time_scan(source, module_base, regions, patterns, arch, size),
+            time_scan(
+                source,
+                module_base,
+                module_size,
+                regions,
+                patterns,
+                arch,
+                size,
+            ),
         )
     })
     .collect();
@@ -556,7 +614,7 @@ mod tests {
         let regions = [Region { base, size: 64 }];
         let patterns = parse_patterns("Foo = DE AD BE EF\nBar_PTR = 48 8D 0D ? ? ? ?", Arch::X64);
 
-        let result = scan(&source, base, &regions, &patterns, Arch::X64);
+        let result = scan(&source, base, 64, &regions, &patterns, Arch::X64);
 
         let foo = result.findings.iter().find(|f| f.name == "Foo").unwrap();
         assert_eq!(foo.value, 0x10);
@@ -566,7 +624,12 @@ mod tests {
         assert_eq!(result.found.len(), 2);
         assert!(result.not_found.is_empty());
         assert_eq!(result.rows.len(), 2);
-        assert!(result.rows.iter().all(|r| r.status == Status::Found));
+        assert!(
+            result
+                .rows
+                .iter()
+                .all(|r| r.status == FindingStatus::FoundUnique)
+        );
     }
 
     #[test]
@@ -577,11 +640,32 @@ mod tests {
         let regions = [Region { base, size: 32 }];
         let patterns = parse_patterns("Missing = 11 22 33 44", Arch::X64);
 
-        let result = scan(&source, base, &regions, &patterns, Arch::X64);
+        let result = scan(&source, base, 32, &regions, &patterns, Arch::X64);
         assert_eq!(result.not_found, vec!["Missing"]);
         assert!(result.findings.is_empty());
         assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].status, Status::NotFound);
+        assert_eq!(result.rows[0].status, FindingStatus::NotFound);
+    }
+
+    #[test]
+    fn out_of_module_pointer_is_rejected_not_wrapped() {
+        // a rip-relative lea whose target lands before the module base must not wrap into a
+        // huge rva; it is reported as a failed resolve instead of a bogus finding.
+        let base = 0x1_0000usize;
+        let mut data = vec![0u8; 64];
+        // 48 8D 0D <disp32> with a large negative displacement -> target far below base
+        data[0x10..0x17].copy_from_slice(&[0x48, 0x8D, 0x0D, 0x00, 0x00, 0xFF, 0xFF]);
+        let source = BufferSource::new(base, data);
+        let regions = [Region { base, size: 64 }];
+        let patterns = parse_patterns("Bad_PTR = 48 8D 0D ?? ?? ?? ??", Arch::X64);
+
+        let result = scan(&source, base, 64, &regions, &patterns, Arch::X64);
+        assert!(result.findings.is_empty());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].status,
+            FindingStatus::Failed(FailureReason::OutOfModule)
+        );
     }
 
     #[test]
@@ -599,10 +683,13 @@ mod tests {
         let patterns = parse_patterns("Foo = DE AD BE EF 11", Arch::X64);
 
         // a deliberately tiny chunk forces many boundaries; each match must appear exactly once
-        let result = scan_chunked(&source, base, &regions, &patterns, Arch::X64, 16);
+        let result = scan_chunked(&source, base, 200, &regions, &patterns, Arch::X64, 16);
         assert_eq!(result.total_matches, starts.len());
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].matches, starts.len());
-        assert_eq!(result.rows[0].status, Status::Found);
+        assert!(matches!(
+            result.rows[0].status,
+            FindingStatus::FoundAmbiguous { candidates: 6 }
+        ));
     }
 }

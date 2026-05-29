@@ -8,8 +8,9 @@ use serde::Serialize;
 use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, parse_patterns_file};
 use maple_core::{
-    AttachOptions, BuildStamp, DiffReport, Locator, Pattern, ProfileReport, ScanResult, Status,
-    Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp, profile, scan,
+    AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
+    ScanResult, Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp,
+    profile, scan,
 };
 use maple_core::{
     FileImage, ImageInput, SigCandidate, SigOptions, SigReport, TargetKind, TargetSpec, generate,
@@ -370,14 +371,28 @@ fn run() -> Result<(), String> {
             "[*] profiling {} executable regions (runs several full reads, give it a few seconds)...",
             regions.len()
         );
-        let report = profile(&target, target.module.base, &regions, &patterns, args.arch);
+        let report = profile(
+            &target,
+            target.module.base,
+            target.module.size,
+            &regions,
+            &patterns,
+            args.arch,
+        );
         print_profile(&report);
         return Ok(());
     }
 
     let regions = target.regions();
     println!("[+] scanning {} regions", regions.len());
-    let result = scan(&target, target.module.base, &regions, &patterns, args.arch);
+    let result = scan(
+        &target,
+        target.module.base,
+        target.module.size,
+        &regions,
+        &patterns,
+        args.arch,
+    );
 
     println!();
     println!("[+] found {}", result.found.len());
@@ -399,7 +414,7 @@ fn run() -> Result<(), String> {
     let ambiguous: Vec<_> = result
         .rows
         .iter()
-        .filter(|r| r.status == Status::Found && r.matches > 1)
+        .filter(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
         .collect();
     if !ambiguous.is_empty() {
         println!(
