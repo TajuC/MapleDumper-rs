@@ -84,6 +84,35 @@ fn parse_token(raw: &str) -> Option<Token> {
     Some(Token::Byte((hi << 4) | lo))
 }
 
+#[must_use]
+pub fn signature_from_aob(aob: &str) -> Signature {
+    parse_signature(aob)
+}
+
+/// Like [`signature_from_aob`] but rejects malformed input instead of silently dropping unparseable
+/// tokens. Use this at trust boundaries (CLI/GUI) where the AOB comes from a user.
+pub fn try_signature_from_aob(aob: &str) -> Result<Signature, String> {
+    let mut bytes = Vec::new();
+    let mut mask = Vec::new();
+    for tok in aob.split_whitespace() {
+        match parse_token(tok) {
+            Some(Token::Byte(value)) => {
+                bytes.push(value);
+                mask.push(true);
+            }
+            Some(Token::Wild) => {
+                bytes.push(0);
+                mask.push(false);
+            }
+            None => return Err(format!("invalid AOB token: '{tok}'")),
+        }
+    }
+    if bytes.is_empty() {
+        return Err("signature is empty".to_string());
+    }
+    Ok(Signature { bytes, mask })
+}
+
 fn parse_signature(aob: &str) -> Signature {
     let mut bytes = Vec::new();
     let mut mask = Vec::new();

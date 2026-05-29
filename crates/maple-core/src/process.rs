@@ -442,7 +442,7 @@ impl Target {
         enumerate_regions(self.handle.0, self.module, false)
     }
 
-    /// Only the executable regions of the module - what code signatures live in.
+    /// Only the executable regions of the module, where code signatures live.
     #[must_use]
     pub fn code_regions(&self) -> Vec<Region> {
         enumerate_regions(self.handle.0, self.module, true)
