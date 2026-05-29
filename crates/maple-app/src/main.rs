@@ -256,7 +256,18 @@ fn run_scan(
         poll: Duration::from_millis(300),
     };
 
-    let patterns = maple_core::pattern::parse_patterns(&req.patterns, arch);
+    let patterns = match maple_core::pattern::parse_patterns_strict(&req.patterns, arch) {
+        Ok(parsed) => parsed.patterns,
+        Err(issues) => {
+            let detail = issues
+                .iter()
+                .filter(|i| i.severity == maple_core::pattern::ParseSeverity::Error)
+                .map(|i| format!("line {}: {}", i.line, i.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!("pattern errors: {detail}"));
+        }
+    };
     if patterns.is_empty() {
         return Err("no patterns to scan; the pattern list is empty".to_string());
     }

@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use maple_core::output::{cheat_table, offsets_header, plain_text};
-use maple_core::pattern::{Arch, parse_patterns_file};
+use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file_strict};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
     ScanResult, Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp,
@@ -293,8 +293,37 @@ fn run() -> Result<(), String> {
     }
 
     let patterns = if args.asm.is_none() {
-        let patterns = parse_patterns_file(&args.patterns, args.arch)
+        let parsed = parse_patterns_file_strict(&args.patterns, args.arch)
             .map_err(|e| format!("failed to read {}: {e}", args.patterns.display()))?;
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(issues) => {
+                for issue in &issues {
+                    let tag = match issue.severity {
+                        ParseSeverity::Error => "x",
+                        ParseSeverity::Warning => "!",
+                    };
+                    eprintln!(
+                        "[{tag}] {}:{} {}",
+                        args.patterns.display(),
+                        issue.line,
+                        issue.message
+                    );
+                }
+                let errors = issues
+                    .iter()
+                    .filter(|i| i.severity == ParseSeverity::Error)
+                    .count();
+                return Err(format!(
+                    "{errors} pattern error(s) in {}",
+                    args.patterns.display()
+                ));
+            }
+        };
+        for w in &parsed.warnings {
+            eprintln!("[!] {}:{} {}", args.patterns.display(), w.line, w.message);
+        }
+        let patterns = parsed.patterns;
         if patterns.is_empty() {
             return Err(format!(
                 "no patterns loaded from {}",

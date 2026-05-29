@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +216,203 @@ pub fn parse_patterns_file(path: &Path, arch: Arch) -> std::io::Result<Vec<Patte
     Ok(parse_patterns(&text, arch))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseIssue {
+    pub line: usize,
+    pub severity: ParseSeverity,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPatterns {
+    pub patterns: Vec<Pattern>,
+    pub warnings: Vec<ParseIssue>,
+}
+
+fn parse_token_strict(raw: &str) -> Result<Token, String> {
+    let trimmed = raw.trim_end_matches(',');
+    if trimmed.is_empty() {
+        return Err("empty token".to_string());
+    }
+    let upper = trimmed.to_ascii_uppercase();
+    if upper == "?" || upper == "??" {
+        return Ok(Token::Wild);
+    }
+    let hex = upper.strip_prefix("0X").unwrap_or(upper.as_str());
+    let bytes = hex.as_bytes();
+    if bytes.len() == 2 && (bytes[0] == b'?' || bytes[1] == b'?') {
+        return Err(format!("partial-nibble wildcard '{raw}'; use ?? instead"));
+    }
+    if bytes.len() != 2 {
+        return Err(format!("invalid token '{raw}'"));
+    }
+    match (hex_val(bytes[0]), hex_val(bytes[1])) {
+        (Some(hi), Some(lo)) => Ok(Token::Byte((hi << 4) | lo)),
+        _ => Err(format!("invalid hex byte '{raw}'")),
+    }
+}
+
+/// Parse a pattern list with validation instead of silently dropping malformed input. A bad token,
+/// a partial-nibble wildcard, an all-wildcard or empty signature, and a duplicate name are hard
+/// errors; a very short or duplicated signature is a warning. Use this on every load path that
+/// comes from a user, and keep [`parse_patterns`] only where lenient best-effort parsing is wanted.
+///
+/// # Errors
+/// Returns the collected issues when any of them is an error.
+pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, Vec<ParseIssue>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut out = Vec::new();
+    let mut issues = Vec::new();
+    let mut section: Option<Arch> = None;
+    let mut category: Option<String> = None;
+    let mut seen_names: HashMap<String, usize> = HashMap::new();
+    let mut seen_sigs: HashMap<String, String> = HashMap::new();
+
+    for (i, raw_line) in text.lines().enumerate() {
+        let line_no = i + 1;
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('#') {
+            if line.contains("32BIT") {
+                section = Some(Arch::X86);
+            } else if line.contains("64BIT") {
+                section = Some(Arch::X64);
+            }
+            continue;
+        }
+        if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                category = Some(trimmed.to_string());
+            }
+            continue;
+        }
+        if let Some(sec) = section
+            && sec != arch
+        {
+            continue;
+        }
+        let Some((name, aob, note)) = split_name_aob(line) else {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Warning,
+                message: format!("ignored line (not a 'name = AOB' pattern): {line}"),
+            });
+            continue;
+        };
+
+        let mut bytes = Vec::new();
+        let mut mask = Vec::new();
+        let mut token_error = false;
+        for tok in aob.split_whitespace() {
+            match parse_token_strict(tok) {
+                Ok(Token::Byte(value)) => {
+                    bytes.push(value);
+                    mask.push(true);
+                }
+                Ok(Token::Wild) => {
+                    bytes.push(0);
+                    mask.push(false);
+                }
+                Err(msg) => {
+                    issues.push(ParseIssue {
+                        line: line_no,
+                        severity: ParseSeverity::Error,
+                        message: format!("{name}: {msg}"),
+                    });
+                    token_error = true;
+                }
+            }
+        }
+        if token_error {
+            continue;
+        }
+        if bytes.is_empty() {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Error,
+                message: format!("{name}: empty signature"),
+            });
+            continue;
+        }
+        if mask.iter().all(|&m| !m) {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Error,
+                message: format!("{name}: all-wildcard signature would match everywhere"),
+            });
+            continue;
+        }
+        if let Some(prev) = seen_names.get(&name) {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Error,
+                message: format!("duplicate pattern name '{name}' (first seen on line {prev})"),
+            });
+            continue;
+        }
+        if bytes.len() < 4 {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Warning,
+                message: format!(
+                    "{name}: signature is only {} bytes and may match widely",
+                    bytes.len()
+                ),
+            });
+        }
+        let signature = Signature { bytes, mask };
+        let aob_norm = signature.to_aob();
+        if let Some(prev_name) = seen_sigs.get(&aob_norm) {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Warning,
+                message: format!("{name}: identical signature to '{prev_name}'"),
+            });
+        } else {
+            seen_sigs.insert(aob_norm, name.clone());
+        }
+        seen_names.insert(name.clone(), line_no);
+        out.push(Pattern {
+            name,
+            category: category.clone(),
+            note: (!note.is_empty()).then_some(note),
+            signature,
+        });
+    }
+
+    if issues.iter().any(|x| x.severity == ParseSeverity::Error) {
+        Err(issues)
+    } else {
+        Ok(ParsedPatterns {
+            patterns: out,
+            warnings: issues,
+        })
+    }
+}
+
+/// Strict variant of [`parse_patterns_file`]. The outer result is the file read; the inner result
+/// is the validation outcome.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be read.
+pub fn parse_patterns_file_strict(
+    path: &Path,
+    arch: Arch,
+) -> std::io::Result<Result<ParsedPatterns, Vec<ParseIssue>>> {
+    let raw = std::fs::read(path)?;
+    let text = String::from_utf8_lossy(&raw);
+    Ok(parse_patterns_strict(&text, arch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +556,65 @@ mod tests {
         assert_eq!(p[0].category.as_deref(), Some("functions"));
         assert_eq!(p[1].category.as_deref(), Some("offsets"));
         assert_eq!(p[2].category.as_deref(), Some("offsets"));
+    }
+
+    #[test]
+    fn strict_rejects_bad_token_instead_of_dropping_it() {
+        let err = parse_patterns_strict("A = AA ZZ BB", Arch::X64).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|i| i.severity == ParseSeverity::Error && i.message.contains("ZZ"))
+        );
+    }
+
+    #[test]
+    fn strict_rejects_partial_nibble_wildcard() {
+        let err = parse_patterns_strict("A = AA B? CC DD", Arch::X64).unwrap_err();
+        assert!(err.iter().any(|i| i.message.contains("partial-nibble")));
+    }
+
+    #[test]
+    fn strict_rejects_all_wildcard() {
+        let err = parse_patterns_strict("A = ?? ?? ??", Arch::X64).unwrap_err();
+        assert!(err.iter().any(|i| i.message.contains("all-wildcard")));
+    }
+
+    #[test]
+    fn strict_rejects_duplicate_name() {
+        let err =
+            parse_patterns_strict("Foo = AA BB CC DD\nFoo = 11 22 33 44", Arch::X64).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|i| i.message.contains("duplicate pattern name 'Foo'"))
+        );
+    }
+
+    #[test]
+    fn strict_warns_on_short_and_duplicate_signature() {
+        let parsed = parse_patterns_strict("A = AA BB\nB = AA BB", Arch::X64).unwrap();
+        assert_eq!(parsed.patterns.len(), 2);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("2 bytes"))
+        );
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("identical signature"))
+        );
+    }
+
+    #[test]
+    fn strict_accepts_clean_patterns_without_warnings() {
+        let parsed = parse_patterns_strict(
+            "Foo = AA BB CC DD\nBar_PTR = 48 8D 0D ?? ?? ?? ??",
+            Arch::X64,
+        )
+        .unwrap();
+        assert_eq!(parsed.patterns.len(), 2);
+        assert!(parsed.warnings.is_empty());
     }
 }
