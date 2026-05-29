@@ -2,7 +2,7 @@ use crate::domain::{FailureReason, FindingStatus, checked_rva};
 use crate::memory::{MemorySource, Region};
 use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
-use crate::resolver::{self, Kind};
+use crate::resolver::{self, Kind, ResolverSpec};
 use crate::scanner::{self, CompiledPattern};
 use rayon::prelude::*;
 use std::hint::black_box;
@@ -79,18 +79,18 @@ fn resolve<S: MemorySource>(
 ) -> Result<Resolved, FailureReason> {
     let addr_rva =
         |target: usize| checked_rva(target, module_base, module_size).map(Resolved::Addr);
-    match kind {
-        Kind::Direct => addr_rva(addr),
-        Kind::Pointer => resolver::extract_pointer(bytes, addr, arch)
+    match kind.spec() {
+        ResolverSpec::MatchAddress => addr_rva(addr),
+        ResolverSpec::MemoryPointer => resolver::extract_pointer(bytes, addr, arch)
             .ok_or(FailureReason::Unresolved)
             .and_then(addr_rva),
-        Kind::Offset => resolver::extract_offset(bytes, 4, arch)
+        ResolverSpec::StructOffset => resolver::extract_offset(bytes, 4, arch)
             .map(|v| Resolved::Off(u64::from(v)))
             .ok_or(FailureReason::Unresolved),
-        Kind::Header => resolver::extract_immediate(bytes, 4)
+        ResolverSpec::Immediate => resolver::extract_immediate(bytes, 4)
             .map(|v| Resolved::Off(u64::from(v)))
             .ok_or(FailureReason::Unresolved),
-        Kind::Call => resolver::resolve_call(source, addr, bytes)
+        ResolverSpec::NestedCall => resolver::resolve_call(source, addr, bytes, arch)
             .ok_or(FailureReason::Unresolved)
             .and_then(addr_rva),
     }

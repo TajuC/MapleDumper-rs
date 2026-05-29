@@ -1,5 +1,6 @@
 use crate::memory::MemorySource;
 use crate::pattern::Arch;
+use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -25,6 +26,35 @@ impl Kind {
             (Kind::Direct, name)
         }
     }
+
+    /// The typed resolution strategy for this kind. Dispatch reads this value rather than
+    /// re-parsing the name suffix at each use.
+    #[must_use]
+    pub fn spec(self) -> ResolverSpec {
+        match self {
+            Kind::Direct => ResolverSpec::MatchAddress,
+            Kind::Pointer => ResolverSpec::MemoryPointer,
+            Kind::Offset => ResolverSpec::StructOffset,
+            Kind::Header => ResolverSpec::Immediate,
+            Kind::Call => ResolverSpec::NestedCall,
+        }
+    }
+}
+
+/// How a matched site turns into a reported value. Today this is derived from the pattern name
+/// suffix via [`Kind::spec`], but it is an explicit type so behavior is driven by a value, not by a
+/// string, and a future pattern format can set it directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolverSpec {
+    MatchAddress,
+    MemoryPointer,
+    StructOffset,
+    Immediate,
+    NestedCall,
+}
+
+fn bitness(arch: Arch) -> u32 {
+    if matches!(arch, Arch::X64) { 64 } else { 32 }
 }
 
 fn rel32(bytes: &[u8], at: usize) -> i32 {
@@ -131,7 +161,12 @@ fn offset_x64(p: &[u8]) -> Option<u32> {
     }
     let rex = p[0];
     if (rex & 0xF0) == 0x40 && (rex & 0x08) != 0 && p[1] == 0x8B {
-        match p[2] >> 6 {
+        let modrm = p[2];
+        // an r/m of 100 means a SIB byte follows and shifts the displacement; do not misread it
+        if modrm & 0x07 == 0x04 {
+            return None;
+        }
+        match modrm >> 6 {
             1 => return Some(u32::from(p[3])),
             2 if p.len() >= 7 => return Some(rel32(p, 3) as u32),
             _ => {}
@@ -171,7 +206,11 @@ pub fn extract_offset(data: &[u8], max_scan: usize, arch: Arch) -> Option<u32> {
 }
 
 fn immediate_at(p: &[u8]) -> Option<u32> {
-    let start = usize::from(!p.is_empty() && (p[0] & 0xF0) == 0x40);
+    // only skip a 0x40-0x4F byte as a REX prefix when a mov-immediate opcode follows, so a
+    // standalone x86 INC/DEC is not mistaken for a prefix
+    let has_rex =
+        p.len() >= 2 && (p[0] & 0xF0) == 0x40 && ((0xB8..=0xBF).contains(&p[1]) || p[1] == 0xC7);
+    let start = usize::from(has_rex);
     let rest = &p[start..];
     if rest.is_empty() {
         return None;
@@ -207,33 +246,44 @@ pub fn resolve_call<S: MemorySource>(
     source: &S,
     match_addr: usize,
     matched: &[u8],
+    arch: Arch,
 ) -> Option<usize> {
-    let rel = if matched.len() >= 5 {
-        rel32(matched, 1)
+    // first hop: the match must begin with a near call or jmp. Decoding the opcode rejects a
+    // prefixed, indirect, or mis-anchored match instead of blindly reading a rel32 from offset 1.
+    let mut head = [0u8; 8];
+    let head: &[u8] = if matched.len() >= 8 {
+        matched
     } else {
-        let mut buf = [0u8; 4];
-        if source.read_into(match_addr + 1, &mut buf).ok()? < 4 {
-            return None;
-        }
-        i32::from_le_bytes(buf)
+        let n = source.read_into(match_addr, &mut head).ok()?;
+        &head[..n]
     };
-    let target = match_addr.wrapping_add(5).wrapping_add_signed(rel as isize);
+    let target = decode_rel_target(head, match_addr)?;
+
+    // second hop: follow one nested direct call at the callee entry. Decoding instructions means a
+    // 0xE8 byte inside a displacement is never mistaken for a call, unlike a raw byte scan.
     let mut buf = [0u8; 0x100];
-    let read = source.read_into(target, &mut buf).ok()?;
-    let mut i = 0;
-    while i + 5 <= read {
-        if buf[i] == 0xE8 {
-            let nested = rel32(&buf, i + 1);
-            return Some(
-                target
-                    .wrapping_add(i)
-                    .wrapping_add(5)
-                    .wrapping_add_signed(nested as isize),
-            );
+    let n = source.read_into(target, &mut buf).ok()?;
+    Some(first_direct_call(&buf[..n], target, arch).unwrap_or(target))
+}
+
+fn first_direct_call(buf: &[u8], base: usize, arch: Arch) -> Option<usize> {
+    let mut decoder = Decoder::with_ip(bitness(arch), buf, base as u64, DecoderOptions::NONE);
+    let mut instr = Instruction::default();
+    while decoder.can_decode() {
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() {
+            break;
         }
-        i += 1;
+        if instr.is_call_near()
+            && matches!(
+                instr.op0_kind(),
+                OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+            )
+        {
+            return Some(instr.near_branch_target() as usize);
+        }
     }
-    Some(target)
+    None
 }
 
 #[cfg(test)]
@@ -360,6 +410,40 @@ mod tests {
         data[0x100..0x105].copy_from_slice(&[0xE8, 0xFB, 0x00, 0x00, 0x00]);
         let source = BufferSource::new(base, data);
         let matched = [0xE8, 0xFB, 0x00, 0x00, 0x00];
-        assert_eq!(resolve_call(&source, base, &matched), Some(0x1_0200));
+        assert_eq!(
+            resolve_call(&source, base, &matched, Arch::X64),
+            Some(0x1_0200)
+        );
+    }
+
+    #[test]
+    fn resolve_call_rejects_indirect_and_prefixed() {
+        let base = 0x1_0000usize;
+        let data = vec![0u8; 0x40];
+        let source = BufferSource::new(base, data);
+        // FF 15 is an indirect call [rip+disp], not a direct rel call: must not resolve a target.
+        assert_eq!(
+            resolve_call(&source, base, &[0xFF, 0x15, 0, 0, 0, 0, 0, 0], Arch::X64),
+            None
+        );
+        // a match that starts on an operand-size prefix is not a bare near call at offset 0.
+        assert_eq!(
+            resolve_call(&source, base, &[0x66, 0xE8, 0, 0, 0, 0, 0, 0], Arch::X64),
+            None
+        );
+    }
+
+    #[test]
+    fn offset_x64_does_not_misread_sib_form() {
+        // mov rax,[rsp+0x10] needs a SIB byte, so the displacement is not at p[3]; report nothing
+        // rather than a wrong offset.
+        assert_eq!(
+            extract_offset(
+                &[0x48, 0x8B, 0x84, 0x24, 0x10, 0x00, 0x00, 0x00],
+                0,
+                Arch::X64
+            ),
+            None
+        );
     }
 }
