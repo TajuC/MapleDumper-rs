@@ -510,7 +510,7 @@ fn finalize(
         if is_anchor && let Some(site) = rva {
             match resolve_anchor(anchor, img, site as usize) {
                 Some(target_abs) => {
-                    let target_rva = target_abs.wrapping_sub(img.base);
+                    let target_rva = target_abs.saturating_sub(img.base);
                     let kind = img.classify(target_abs);
                     resolved_target_rva = Some(target_rva as u64);
                     target_kind = Some(kind);
