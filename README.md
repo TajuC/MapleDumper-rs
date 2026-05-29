@@ -35,13 +35,6 @@ scriptable command-line tool. Both are built on the same engine crate.
 - **Offline and local.** The desktop app makes no network requests. A strict Content-Security-Policy
   blocks every remote origin, and the scan history lives in a local SQLite database.
 
-## Screenshots
-
-> Screenshots are not yet checked into the repository. See
-> [docs/assets/storyboard.md](docs/assets/storyboard.md) for the exact captures to add (workspace
-> scan, Signature Maker, history comparison, privacy mask). Until they are added, the rendered
-> architecture and workflow diagrams under [docs/assets](docs/assets) illustrate each flow.
-
 ## Feature highlights
 
 **Engine (`maple-core`)**
@@ -117,8 +110,6 @@ target is code in every build with matching callee fingerprints); **B** is reloc
 content-validated (a direct match, or a reference to stable data/import); **C** is weaker (absolute
 or unresolved references, or cross-build inconsistency); **D** means the inputs look packed; **F** is
 rejected (too few fixed bytes, low fixed-byte ratio, no opcode bytes, or an unsupported relocation).
-
-See [docs/Signature_Maker.md](docs/Signature_Maker.md) for the full design.
 
 ## Desktop workspace
 
@@ -233,8 +224,7 @@ Name suffixes select how a match is resolved:
 | `_HDR`   | Extract an immediate operand, for example a packet header opcode.       |
 | (none)   | Emit the match address itself.                                          |
 
-See [patterns.sample.txt](patterns.sample.txt) for a worked example, and
-[docs/MapleDumper_Guide.md](docs/MapleDumper_Guide.md) for the full pattern authoring guide.
+See [patterns.sample.txt](patterns.sample.txt) for a worked example.
 
 ## Architecture at a glance
 
@@ -243,10 +233,6 @@ See [patterns.sample.txt](patterns.sample.txt) for a worked example, and
 | `maple-core` | The engine: pattern parsing, the SIMD scanner, process memory access, the resolver, the scan pipeline, the Signature Maker, the PE disk reader, and the output writers. |
 | `maple-app`  | The desktop workspace: a Rust backend with an embedded web UI (Tauri v2).     |
 | `maple-cli`  | The command-line front end.                                                   |
-
-![Workspace architecture](docs/assets/01-workspace-architecture.svg)
-
-For the deep design, see [docs/Developer_Architecture.md](docs/Developer_Architecture.md).
 
 ## Performance
 
@@ -262,22 +248,7 @@ throughput` is a dependency-light equivalent.) These figures are synthetic and h
 reproduce them locally with `cargo bench`.
 
 Against a live process, `--profile` breaks the wall clock into its read, scan, and resolve phases
-(and sweeps work-unit sizes) so the tuning is measured, not guessed. See
-[docs/Performance_and_Optimization.md](docs/Performance_and_Optimization.md) for the full analysis,
-including which alternatives were deliberately not used and why.
-
-## Documentation
-
-| Document | Audience | Contents |
-|----------|----------|----------|
-| [docs/MapleDumper_Guide.md](docs/MapleDumper_Guide.md) | Everyone | Full long-form guide, suitable for PDF export. |
-| [docs/Signature_Maker.md](docs/Signature_Maker.md) | Users and developers | Deep dive into the cross-version Signature Maker. |
-| [docs/Developer_Architecture.md](docs/Developer_Architecture.md) | Developers | Workspace, modules, pipeline, internals, extension points. |
-| [docs/Performance_and_Optimization.md](docs/Performance_and_Optimization.md) | Developers | Optimizations, profiling, measurement. |
-| [docs/README_FOR_USERS.md](docs/README_FOR_USERS.md) | Non-developers | Short guide to launch, scan, generate, export, troubleshoot. |
-| [docs/README_FOR_DEVELOPERS.md](docs/README_FOR_DEVELOPERS.md) | Contributors | Build, test, codebase map, where to extend. |
-| [docs/CHANGELOG_DRAFT.md](docs/CHANGELOG_DRAFT.md) | Maintainers | Draft release notes for the Signature Maker release. |
-| [docs/pdf/build_pdf.md](docs/pdf/build_pdf.md) | Maintainers | Exact commands to build the PDF guide. |
+(and sweeps work-unit sizes) so the tuning is measured, not guessed.
 
 ## License
 
