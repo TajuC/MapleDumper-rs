@@ -58,16 +58,10 @@ const RESOLVE_MARGIN: usize = 24;
 // profiling a 143 MB module on 16 cores put the knee at 256 KiB (~6x faster than the old 4 MiB).
 const SCAN_CHUNK: usize = 1 << 18;
 
-#[allow(clippy::uninit_vec)]
 pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
-    let mut buf: Vec<u8> = Vec::with_capacity(len);
-    // SAFETY: read_into only writes into the buffer via the OS and never reads it; the length
-    // is set to the bytes actually written, so no uninitialized byte is ever exposed.
-    let read = {
-        let spare = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr(), len) };
-        source.read_into(base, spare).unwrap_or(0)
-    };
-    unsafe { buf.set_len(read) };
+    let mut buf = vec![0u8; len];
+    let read = source.read_into(base, &mut buf).unwrap_or(0);
+    buf.truncate(read);
     buf
 }
 

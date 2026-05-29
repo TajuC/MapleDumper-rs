@@ -1,6 +1,10 @@
 use std::io;
 
+/// A source of bytes addressed by absolute virtual address (a live process or a mapped file).
 pub trait MemorySource {
+    /// Read into `buf` starting at `address`, returning how many bytes were written. An
+    /// implementation writes only `buf[..n]` for the returned `n` and never reads `buf`. A short
+    /// return means the readable range ended; it is not an error.
     fn read_into(&self, address: usize, buf: &mut [u8]) -> io::Result<usize>;
 }
 
@@ -13,7 +17,7 @@ pub struct Region {
 impl Region {
     #[must_use]
     pub fn end(&self) -> usize {
-        self.base + self.size
+        self.base.saturating_add(self.size)
     }
 }
 
@@ -96,6 +100,15 @@ mod tests {
     #[test]
     fn empty_stays_empty() {
         assert!(coalesce(vec![]).is_empty());
+    }
+
+    #[test]
+    fn region_end_saturates_instead_of_overflowing() {
+        let r = Region {
+            base: usize::MAX - 4,
+            size: 16,
+        };
+        assert_eq!(r.end(), usize::MAX);
     }
 
     #[test]
