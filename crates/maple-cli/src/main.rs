@@ -653,6 +653,7 @@ struct JCand {
     aob: String,
     suffix: String,
     grade: String,
+    score: u32,
     bytes: usize,
     fixed: usize,
     wildcards: usize,
@@ -689,6 +690,7 @@ fn jcand(c: &SigCandidate) -> JCand {
         aob: c.aob.clone(),
         suffix: c.suffix.as_str().to_string(),
         grade: c.grade.letter().to_string(),
+        score: c.score,
         bytes: c.bytes_len,
         fixed: c.fixed,
         wildcards: c.wildcards,
@@ -745,8 +747,8 @@ fn print_candidate(tag: &str, c: &SigCandidate) {
         c.suffix.as_str()
     );
     println!(
-        "      {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
-        c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
+        "      score {}, {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
+        c.score, c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
     );
     for p in &c.per_version {
         let m = p
@@ -897,6 +899,7 @@ mod tests {
             aob: "48 8D 05 ?? ?? ?? ??".to_string(),
             suffix: Suffix::Ptr,
             grade: Grade::A,
+            score: 90,
             bytes_len: 7,
             fixed: 3,
             wildcards: 4,

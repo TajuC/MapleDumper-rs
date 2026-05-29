@@ -201,6 +201,7 @@ pub struct SigCandidate {
     pub aob: String,
     pub suffix: Suffix,
     pub grade: Grade,
+    pub score: u32,
     pub bytes_len: usize,
     pub fixed: usize,
     pub wildcards: usize,
@@ -430,8 +431,11 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 
 // Masked fingerprint of a callee's entry, so the same function matches across builds despite relocations.
 fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    let bytes = read_at(img.source, img.base, target_rva, 16);
-    let decoded = decode_masked(&bytes, img.arch, img.base, target_rva, img.reloc, 2);
+    // A 2-instruction prologue is too generic to tell functions apart across builds, so decode a
+    // longer window and fold the instruction count in. Operand bytes stay masked, so a relocation
+    // or a shifted call target inside the callee does not change its identity.
+    let bytes = read_at(img.source, img.base, target_rva, 48);
+    let decoded = decode_masked(&bytes, img.arch, img.base, target_rva, img.reloc, 8);
     let mut fp: Vec<u8> = Vec::new();
     let mut off = 0;
     for im in &decoded {
@@ -444,7 +448,27 @@ fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
         }
         off += im.len;
     }
-    format!("{fp:02X?}")
+    format!("{}:{fp:02X?}", decoded.len())
+}
+
+// A 0-100 confidence derived from the grade band and refined by signature density and the
+// corroborating signals, so the UI and sorting have a number, not only a letter.
+fn confidence_score(grade: Grade, fixed_ratio: f64, reloc_safe: bool, fp_consistent: bool) -> u32 {
+    let base = match grade {
+        Grade::A => 80.0,
+        Grade::B => 62.0,
+        Grade::C => 42.0,
+        Grade::D => 25.0,
+        Grade::F => return 0,
+    };
+    let mut s = base + fixed_ratio.clamp(0.0, 1.0) * 12.0;
+    if reloc_safe {
+        s += 3.0;
+    }
+    if fp_consistent {
+        s += 3.0;
+    }
+    s.round().min(100.0) as u32
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -607,12 +631,14 @@ fn finalize(
         }
     };
 
+    let score = confidence_score(grade, ratio, reloc_safe, fp_consistent);
     let aob = aob_of(&bytes, &fixed);
     bytes.truncate(len);
     Some(SigCandidate {
         aob,
         suffix,
         grade,
+        score,
         bytes_len: len,
         fixed: fixed_n,
         wildcards: wild_n,
@@ -1122,6 +1148,20 @@ pub fn generate_cross(
 mod tests {
     use super::*;
     use crate::memory::BufferSource;
+
+    #[test]
+    fn confidence_score_tracks_grade_and_signals() {
+        assert_eq!(confidence_score(Grade::F, 0.9, true, true), 0);
+        assert!(
+            confidence_score(Grade::A, 0.5, true, true)
+                > confidence_score(Grade::B, 0.5, true, true)
+        );
+        assert!(
+            confidence_score(Grade::A, 0.5, true, true)
+                > confidence_score(Grade::A, 0.5, false, false)
+        );
+        assert!(confidence_score(Grade::A, 1.0, true, true) <= 100);
+    }
 
     fn img<'a>(label: &str, src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
         ImageInput {
