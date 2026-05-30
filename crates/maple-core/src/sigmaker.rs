@@ -534,19 +534,31 @@ fn finalize(
         if is_anchor && let Some(site) = rva {
             match resolve_anchor(anchor, img, site as usize) {
                 Some(target_abs) => {
-                    let target_rva = target_abs.saturating_sub(img.base);
-                    let kind = img.classify(target_abs);
-                    resolved_target_rva = Some(target_rva as u64);
-                    target_kind = Some(kind);
-                    kinds.push(kind);
-                    if kind == TargetKind::Code {
-                        fingerprints.push(callee_fingerprint(img, target_rva));
-                    } else {
-                        all_code = false;
-                        if matches!(anchor, Anchor::Branch) {
-                            anchor_diags.push(Diag::TargetNotCode {
+                    match crate::domain::checked_rva(target_abs, img.base, img.size) {
+                        Ok(rva_u64) => {
+                            let target_rva = rva_u64 as usize;
+                            let kind = img.classify(target_abs);
+                            resolved_target_rva = Some(rva_u64);
+                            target_kind = Some(kind);
+                            kinds.push(kind);
+                            if kind == TargetKind::Code {
+                                fingerprints.push(callee_fingerprint(img, target_rva));
+                            } else {
+                                all_code = false;
+                                if matches!(anchor, Anchor::Branch) {
+                                    anchor_diags.push(Diag::TargetNotCode {
+                                        label: img.label.clone(),
+                                        rva: target_rva,
+                                    });
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // the target resolved outside the image; treat it as unresolvable rather
+                            // than recording a bounded numeric RVA that could look like a valid target.
+                            any_unresolved = true;
+                            anchor_diags.push(Diag::UnresolvableTarget {
                                 label: img.label.clone(),
-                                rva: target_rva,
                             });
                         }
                     }
@@ -1496,7 +1508,7 @@ mod tests {
             label: "a".to_string(),
             source: src,
             base,
-            size: 0x100,
+            size: 0x10000,
             code_hash: super::super::stamp::BuildStamp::capture(src, base, &code).hash,
             code_regions: code,
             regions,
