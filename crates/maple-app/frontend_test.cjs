@@ -103,7 +103,8 @@ const driver = `
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
-const code = fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
+const i18nCode = fs.readFileSync(path.join(__dirname, "frontend", "i18n.js"), "utf8");
+const code = i18nCode + fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
 try {
   vm.runInNewContext(code, sandbox, { filename: "app.js" });
 } catch (e) {
