@@ -453,6 +453,7 @@ impl MemorySource for FileImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // Minimal but valid PE: DOS + PE sig + optional header + one .text section, code at file 0x400.
     fn build_pe(pe32: bool, reloc_block: Option<(u32, &[u16])>) -> Vec<u8> {
@@ -699,5 +700,77 @@ mod tests {
             FileImage::parse(d).unwrap().import_range(),
             Some((0x1_4000_1000, 0x1_4000_1040))
         );
+    }
+
+    #[test]
+    fn opens_synthetic_pe32_from_disk() {
+        let bytes = build_pe(true, None);
+        let mut path = std::env::temp_dir();
+        path.push(format!("maple_fixture_pe32_{}.bin", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let opened = FileImage::open(&path);
+        let _ = std::fs::remove_file(&path);
+        let img = opened.unwrap();
+        assert_eq!(img.base(), 0x0040_0000);
+        assert_eq!(img.arch(), Arch::X86);
+        assert_eq!(
+            img.code_regions(),
+            vec![Region {
+                base: 0x0040_1000,
+                size: 0x20
+            }]
+        );
+    }
+
+    #[test]
+    fn read_into_clamps_when_raw_size_lies_past_eof() {
+        // A hostile image can claim a SizeOfRawData far larger than the file. The reader must
+        // back what the file actually holds and zero-fill the rest, never indexing past the buffer.
+        let mut d = build_pe(false, None);
+        let sec = (0x40 + 4 + 20) + 0xF0;
+        d[sec + 8..sec + 12].copy_from_slice(&0x4000u32.to_le_bytes()); // VirtualSize
+        d[sec + 0x10..sec + 0x14].copy_from_slice(&0x4000u32.to_le_bytes()); // SizeOfRawData past EOF
+        let img = FileImage::parse(d).unwrap();
+        let mut buf = [0xFFu8; 0x300];
+        let n = img.read_into(0x1_4000_1000, &mut buf).unwrap();
+        assert_eq!(n, 0x300);
+        let expected: Vec<u8> = (0..0x10u8).map(|i| 0xA0 + i).collect();
+        assert_eq!(&buf[..0x10], expected.as_slice());
+        assert!(buf[0x10..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn rejects_section_table_past_eof() {
+        let mut d = build_pe(false, None);
+        let coff = 0x40 + 4;
+        d[coff + 2..coff + 4].copy_from_slice(&64u16.to_le_bytes()); // 64 sections, table runs off EOF
+        assert!(FileImage::parse(d).is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn parse_never_panics_on_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..1500),
+        ) {
+            let _ = FileImage::parse(bytes);
+        }
+
+        #[test]
+        fn parse_never_panics_on_corrupted_pe(
+            muts in proptest::collection::vec((0usize..0x600, any::<u8>()), 0..40),
+            pe32 in any::<bool>(),
+        ) {
+            let mut d = build_pe(pe32, None);
+            for (i, v) in muts {
+                d[i] = v;
+            }
+            if let Ok(img) = FileImage::parse(d) {
+                let mut buf = [0u8; 0x80];
+                let _ = img.read_into(img.base(), &mut buf);
+                let _ = img.read_into(img.base() + img.size().saturating_sub(0x10), &mut buf);
+                let _ = img.regions();
+                let _ = img.pack_report();
+            }
+        }
     }
 }
