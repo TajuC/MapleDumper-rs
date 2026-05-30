@@ -225,6 +225,12 @@ pub struct InputInfo {
 }
 
 #[derive(Clone, Debug)]
+pub struct NegativeHit {
+    pub label: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct SigReport {
     pub arch: Arch,
     pub inputs: Vec<InputInfo>,
@@ -294,6 +300,30 @@ impl CodeCache {
         }
         (count, first)
     }
+}
+
+/// Scan a corpus of unrelated modules for `aob` and report any that contain it. Generation only
+/// proves a signature is unique among the supplied builds, so a short or low-entropy pattern can
+/// still collide inside some other module; a hit here means the signature is not specific enough to
+/// trust as an identity. Returns one entry per negative image that matched, with the match count.
+#[must_use]
+pub fn negative_corpus_hits(aob: &str, negatives: &[ImageInput]) -> Vec<NegativeHit> {
+    let Some(pat) = crate::pattern::try_signature_from_aob(aob)
+        .ok()
+        .and_then(|sig| CompiledPattern::new(&sig))
+    else {
+        return Vec::new();
+    };
+    negatives
+        .iter()
+        .filter_map(|img| {
+            let (count, _) = CodeCache::build(img).locate(&pat);
+            (count > 0).then_some(NegativeHit {
+                label: img.label.clone(),
+                count,
+            })
+        })
+        .collect()
 }
 
 struct InstrMask {
@@ -1231,6 +1261,36 @@ mod tests {
         assert!(cand.aob.contains("??"));
         assert!(cand.per_version.iter().all(|p| p.match_rva.is_some()));
         assert_eq!(cand.per_version.len(), 2);
+    }
+
+    #[test]
+    fn negative_corpus_flags_a_module_that_contains_the_signature() {
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let contains = BufferSource::new(0x5000, blob(0x77, 0xCC));
+        let clean = BufferSource::new(0x5000, vec![0x90u8; 64]);
+        let negs = [
+            img("contains", &contains, 0x5000, 49),
+            img("clean", &clean, 0x5000, 64),
+        ];
+        let hits = negative_corpus_hits(aob, &negs);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].label, "contains");
+        assert!(hits[0].count >= 1);
+    }
+
+    #[test]
+    fn negative_corpus_is_empty_for_an_unrelated_module() {
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let clean = BufferSource::new(0x5000, vec![0xCCu8; 128]);
+        let negs = [img("clean", &clean, 0x5000, 128)];
+        assert!(negative_corpus_hits(aob, &negs).is_empty());
+    }
+
+    #[test]
+    fn negative_corpus_ignores_an_unparseable_signature() {
+        let clean = BufferSource::new(0x5000, vec![0x90u8; 64]);
+        let negs = [img("clean", &clean, 0x5000, 64)];
+        assert!(negative_corpus_hits("not a signature", &negs).is_empty());
     }
 
     #[test]

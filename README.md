@@ -114,6 +114,11 @@ content-validated (a direct match, or a reference to stable data/import); **C** 
 or unresolved references, or cross-build inconsistency); **D** means the inputs look packed; **F** is
 rejected (too few fixed bytes, low fixed-byte ratio, no opcode bytes, or an unsupported relocation).
 
+Generation proves a signature is unique among the supplied builds, which does not by itself prove it
+is specific. Pass a negative corpus of unrelated modules (`--negative` / `--negative-dir`) and the
+chosen signature is scanned against each one; any match means the pattern is too generic to trust as
+an identity, and the hits are reported in the text and JSON output.
+
 ## Desktop workspace
 
 Launch `maple-app.exe`. In the Workspace view:
@@ -163,6 +168,7 @@ mksig:
   --sig <aob>        target: locate this existing AOB in each client and harden it
   --ref <exe> --rva <hex>   target: an address in one reference client
   --min-fixed-ratio <f>     reject signatures below this fixed-byte ratio (default 0.30)
+  --negative <exe> / --negative-dir <dir>   unrelated modules the result must not match
   --json / --json-out <path>   emit the full report as JSON
 
 mapledumper help <command>   prints the full options for one command.

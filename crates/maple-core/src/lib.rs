@@ -33,9 +33,9 @@ pub use pattern::{signature_from_aob, try_signature_from_aob};
 pub use resolver::Kind;
 pub use scanner::{CompiledPattern, find_all};
 pub use sigmaker::{
-    CrossReport, Diag, DupGroup, Grade, ImageInput, InputInfo, PerVersion, SigCandidate,
-    SigOptions, SigReport, SigStage, Suffix, TargetKind, TargetSpec, generate, generate_cross,
-    generate_cross_with_progress, generate_with_progress,
+    CrossReport, Diag, DupGroup, Grade, ImageInput, InputInfo, NegativeHit, PerVersion,
+    SigCandidate, SigOptions, SigReport, SigStage, Suffix, TargetKind, TargetSpec, generate,
+    generate_cross, generate_cross_with_progress, generate_with_progress, negative_corpus_hits,
 };
 pub use stamp::{BuildStamp, parse_stamp};
 

@@ -14,7 +14,8 @@ use maple_core::{
     profile, scan,
 };
 use maple_core::{
-    FileImage, ImageInput, SigCandidate, SigOptions, SigReport, TargetKind, TargetSpec, generate,
+    FileImage, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport, TargetKind,
+    TargetSpec, generate, negative_corpus_hits,
 };
 
 #[derive(Parser)]
@@ -156,6 +157,12 @@ struct MksigArgs {
     /// Reject signatures below this fixed-byte ratio (default 0.30)
     #[arg(long, value_name = "F")]
     min_fixed_ratio: Option<f64>,
+    /// An unrelated module the chosen signature must NOT match (repeatable)
+    #[arg(long = "negative", value_name = "EXE")]
+    negative: Vec<PathBuf>,
+    /// Add every .exe in a folder to the negative corpus
+    #[arg(long, value_name = "DIR")]
+    negative_dir: Option<PathBuf>,
     /// Print the full report as JSON
     #[arg(long)]
     json: bool,
@@ -787,6 +794,22 @@ fn collect_clients(
     Ok(clients)
 }
 
+fn gather_negatives(files: &[PathBuf], dir: Option<&Path>) -> Result<Vec<PathBuf>, String> {
+    let mut out = files.to_vec();
+    if let Some(d) = dir {
+        let rd = std::fs::read_dir(d).map_err(|e| format!("read dir {}: {e}", d.display()))?;
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 #[derive(Serialize)]
 struct JPer {
     label: String,
@@ -820,6 +843,11 @@ struct JDup {
     labels: Vec<String>,
 }
 #[derive(Serialize)]
+struct JNeg {
+    label: String,
+    count: usize,
+}
+#[derive(Serialize)]
 struct JReport {
     arch: String,
     unique_builds: usize,
@@ -828,6 +856,7 @@ struct JReport {
     chosen: Option<JCand>,
     alternates: Vec<JCand>,
     rejected: Vec<JCand>,
+    negative_hits: Vec<JNeg>,
     diagnostics: Vec<String>,
 }
 
@@ -856,7 +885,7 @@ fn jcand(c: &SigCandidate) -> JCand {
     }
 }
 
-fn json_report(r: &SigReport) -> String {
+fn json_report(r: &SigReport, negatives: &[NegativeHit]) -> String {
     let report = JReport {
         arch: arch_str(r.arch).to_string(),
         unique_builds: r.unique_builds,
@@ -880,6 +909,13 @@ fn json_report(r: &SigReport) -> String {
         chosen: r.chosen.as_ref().map(jcand),
         alternates: r.alternates.iter().map(jcand).collect(),
         rejected: r.rejected.iter().map(jcand).collect(),
+        negative_hits: negatives
+            .iter()
+            .map(|h| JNeg {
+                label: h.label.clone(),
+                count: h.count,
+            })
+            .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
     };
     serde_json::to_string_pretty(&report).unwrap_or_default()
@@ -1009,8 +1045,40 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
 
     let report = generate(&inputs, &spec, &opts);
 
+    let neg_paths = gather_negatives(&m.negative, m.negative_dir.as_deref())?;
+    let neg_hits = match &report.chosen {
+        Some(chosen) if !neg_paths.is_empty() => {
+            let neg_images: Vec<FileImage> = neg_paths
+                .iter()
+                .map(|p| {
+                    FileImage::open(p).map_err(|e| format!("open negative {}: {e}", p.display()))
+                })
+                .collect::<Result<_, _>>()?;
+            let neg_inputs: Vec<ImageInput> = neg_images
+                .iter()
+                .enumerate()
+                .map(|(k, img)| ImageInput {
+                    label: file_label(&neg_paths[k]),
+                    source: img,
+                    base: img.base(),
+                    size: img.size(),
+                    code_regions: img.code_regions(),
+                    regions: img.regions(),
+                    import: img.import_range(),
+                    arch: img.arch(),
+                    code_hash: img.code_hash(),
+                    packed: false,
+                    pack_reasons: Vec::new(),
+                    reloc: Some(img),
+                })
+                .collect();
+            negative_corpus_hits(&chosen.aob, &neg_inputs)
+        }
+        _ => Vec::new(),
+    };
+
     if m.json || m.json_out.is_some() {
-        let json = json_report(&report);
+        let json = json_report(&report, &neg_hits);
         if let Some(path) = &m.json_out {
             std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
             println!("[+] wrote {}", path.display());
@@ -1020,6 +1088,21 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         }
     } else {
         print_sig_report(&report, &opts);
+    }
+
+    if neg_hits.is_empty() {
+        if report.chosen.is_some() && !neg_paths.is_empty() {
+            println!("[+] clean against {} negative module(s)", neg_paths.len());
+        }
+    } else {
+        eprintln!(
+            "[!] the chosen signature also matches {} unrelated module(s):",
+            neg_hits.len()
+        );
+        for h in &neg_hits {
+            let plural = if h.count == 1 { "" } else { "es" };
+            eprintln!("      {} ({} match{plural})", h.label, h.count);
+        }
     }
     Ok(())
 }
@@ -1069,7 +1152,7 @@ mod tests {
             rejected: vec![cand],
             diagnostics: Vec::new(),
         };
-        let json = json_report(&report);
+        let json = json_report(&report, &[]);
         assert_eq!(
             json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
             3
@@ -1132,6 +1215,27 @@ mod tests {
                 assert_eq!(m.client.len(), 2);
                 assert_eq!(m.sig.as_deref(), Some("48 8B"));
             }
+            _ => panic!("expected mksig"),
+        }
+    }
+
+    #[test]
+    fn cli_mksig_collects_negatives() {
+        let cli = Cli::try_parse_from([
+            "mapledumper",
+            "mksig",
+            "--client",
+            "a.exe",
+            "--sig",
+            "48 8B",
+            "--negative",
+            "other.dll",
+            "--negative",
+            "more.dll",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Mksig(m) => assert_eq!(m.negative.len(), 2),
             _ => panic!("expected mksig"),
         }
     }
