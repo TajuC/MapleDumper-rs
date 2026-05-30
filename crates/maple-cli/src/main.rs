@@ -15,7 +15,7 @@ use maple_core::{
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport,
-    TargetKind, TargetSpec, generate, holdout_validate, negative_corpus_hits,
+    TargetKind, TargetSpec, generate, holdout_validate, make_string_anchor, negative_corpus_hits,
 };
 
 #[derive(Parser)]
@@ -885,6 +885,7 @@ struct JReport {
     rejected: Vec<JCand>,
     negative_hits: Vec<JNeg>,
     holdout: Vec<JHold>,
+    string_anchor: Option<String>,
     diagnostics: Vec<String>,
 }
 
@@ -913,7 +914,12 @@ fn jcand(c: &SigCandidate) -> JCand {
     }
 }
 
-fn json_report(r: &SigReport, negatives: &[NegativeHit], holdout: &[HoldoutResult]) -> String {
+fn json_report(
+    r: &SigReport,
+    negatives: &[NegativeHit],
+    holdout: &[HoldoutResult],
+    string_anchor: Option<&str>,
+) -> String {
     let report = JReport {
         arch: arch_str(r.arch).to_string(),
         unique_builds: r.unique_builds,
@@ -952,6 +958,7 @@ fn json_report(r: &SigReport, negatives: &[NegativeHit], holdout: &[HoldoutResul
                 matched: h.matched_holdout,
             })
             .collect(),
+        string_anchor: string_anchor.map(str::to_string),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
     };
     serde_json::to_string_pretty(&report).unwrap_or_default()
@@ -1081,6 +1088,18 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
 
     let report = generate(&inputs, &spec, &opts);
 
+    let anchor_line = report.chosen.as_ref().and_then(|c| {
+        let anchor = c.per_version.iter().find_map(|pv| {
+            let rva = pv.match_rva?;
+            let img = inputs.iter().find(|i| i.label == pv.label)?;
+            make_string_anchor(img, rva as usize)
+        })?;
+        Some(match &anchor.also {
+            Some(also) => format!("@string={} @also={also}", anchor.text),
+            None => format!("@string={}", anchor.text),
+        })
+    });
+
     let holdout = if m.holdout {
         holdout_validate(&inputs, &spec, &opts)
     } else {
@@ -1120,7 +1139,7 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
     };
 
     if m.json || m.json_out.is_some() {
-        let json = json_report(&report, &neg_hits, &holdout);
+        let json = json_report(&report, &neg_hits, &holdout, anchor_line.as_deref());
         if let Some(path) = &m.json_out {
             std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
             eprintln!("[+] wrote {}", path.display());
@@ -1130,6 +1149,10 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         }
     } else {
         print_sig_report(&report, &opts);
+    }
+
+    if let Some(line) = &anchor_line {
+        eprintln!("[+] string anchor (survives client patches): NewSig = {line}");
     }
 
     // Validation summaries go to stderr so a piped --json stdout stays pure JSON.
@@ -1217,7 +1240,7 @@ mod tests {
             rejected: vec![cand],
             diagnostics: Vec::new(),
         };
-        let json = json_report(&report, &[], &[]);
+        let json = json_report(&report, &[], &[], None);
         assert_eq!(
             json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
             3
