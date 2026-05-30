@@ -1903,6 +1903,83 @@ button.btn-ico:hover {
   background: rgba(239, 68, 68, 0.18);
   color: #f87171;
 }
+.scan-diag {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.diag-head {
+  font-size: 11px;
+  color: var(--t3);
+  margin-bottom: 8px;
+}
+.timeline {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--inset);
+}
+.tl-seg.tl-attach {
+  background: var(--blue);
+}
+.tl-seg.tl-scan {
+  background: var(--violet);
+}
+.tl-legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--t2);
+}
+.tl-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+}
+.tl-dot.tl-attach {
+  background: var(--blue);
+}
+.tl-dot.tl-scan {
+  background: var(--violet);
+}
+.sect-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sect-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.sect-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--inset);
+  overflow: hidden;
+}
+.sect-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--blue), var(--violet));
+}
+.sect-n {
+  min-width: 20px;
+  text-align: right;
+  color: var(--t1);
+}
 .hist-detail-head {
   display: flex;
   align-items: center;

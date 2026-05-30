@@ -133,3 +133,25 @@ function selectRow(name) {
     toast(t("toast.addressCopied"));
   };
 }
+
+function renderScanDiag(report) {
+  const host = $("scan-diag");
+  if (!report) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  const total = Math.max(1, report.elapsed_ms);
+  const seg = (cls, ms) => `<span class="tl-seg ${cls}" style="width:${(ms / total) * 100}%"></span>`;
+  const timeline = `<div class="diag-head">${t("diag.timeline")}</div><div class="timeline">${seg("tl-attach", report.attach_ms)}${seg("tl-scan", report.scan_ms)}</div><div class="tl-legend"><span><i class="tl-dot tl-attach"></i>${t("diag.attach")} ${fmtMs(report.attach_ms)}</span><span><i class="tl-dot tl-scan"></i>${t("diag.scanPhase")} ${fmtMs(report.scan_ms)}</span></div>`;
+  const regions = report.regions_detail || [];
+  const maxF = Math.max(1, ...regions.map((r) => r.findings));
+  const sect = regions
+    .map(
+      (r) =>
+        `<div class="sect-row"><span class="mono d-addr">${esc(r.base)}</span><span class="sect-bar"><span style="width:${(r.findings / maxF) * 100}%"></span></span><span class="sect-n">${r.findings}</span></div>`,
+    )
+    .join("");
+  const sectionMap = `<div class="diag-head">${t("diag.sectionMap")}</div><div class="sect-list">${sect || `<div class="muted">${t("diag.noRegions")}</div>`}</div>`;
+  host.innerHTML = `<div class="diag-col">${timeline}</div><div class="diag-col">${sectionMap}</div>`;
+}

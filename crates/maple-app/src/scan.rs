@@ -66,8 +66,16 @@ pub struct ScanReport {
     scan_ms: u128,
     bytes_scanned: u64,
     regions: usize,
+    regions_detail: Vec<RegionView>,
     build_hash: String,
     build_version: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RegionView {
+    base: String,
+    size: i64,
+    findings: i64,
 }
 
 #[tauri::command]
@@ -219,6 +227,30 @@ fn run_scan(
     let mut stamp = BuildStamp::capture(&target, target.module.base, &target.code_regions());
     stamp.version = target.file_version();
 
+    let module_addr = target.module.base;
+    let regions_detail: Vec<RegionView> = regions
+        .iter()
+        .map(|reg| {
+            let end = reg.base + reg.size;
+            let findings = result
+                .rows
+                .iter()
+                .filter(|r| {
+                    !r.is_offset
+                        && r.value.is_some_and(|v| {
+                            let abs = module_addr + v as usize;
+                            abs >= reg.base && abs < end
+                        })
+                })
+                .count();
+            RegionView {
+                base: format!("0x{:X}", reg.base),
+                size: reg.size as i64,
+                findings: findings as i64,
+            }
+        })
+        .collect();
+
     let report = ScanReport {
         module_name: module_name.clone(),
         module_base: format!("0x{module_base:X}"),
@@ -232,6 +264,7 @@ fn run_scan(
         scan_ms,
         bytes_scanned,
         regions: region_count,
+        regions_detail,
         build_hash: stamp.short(),
         build_version: stamp.version.clone(),
     };

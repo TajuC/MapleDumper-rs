@@ -109,6 +109,10 @@ const driver = `
   globalThis.__fake = fakeFor("name", "SendPacket");
   applyMask();
   globalThis.__maskOk = true;
+  renderScanDiag({ elapsed_ms: 100, attach_ms: 30, scan_ms: 70, regions_detail: [
+    { base: "0x1000", size: 4096, findings: 3 }, { base: "0x5000", size: 2048, findings: 1 },
+  ] });
+  globalThis.__scanDiag = document.getElementById("scan-diag").innerHTML;
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -169,6 +173,10 @@ check(inspDiag.includes("0x300") && inspDiag.includes("0x400"), "inspector candi
 check(inspDiag.includes("50/100"), "inspector confidence value missing");
 check(typeof sandbox.__fake === "string" && sandbox.__fake.length > 0, "fakeFor (masking) should produce a string");
 check(sandbox.__maskOk === true, "applyMask (masking) should run without throwing");
+const scanDiag = sandbox.__scanDiag || "";
+check(scanDiag.includes("Job timeline") && scanDiag.includes("Section map"), "scan diagnostics panels missing");
+check(scanDiag.includes("0x1000") && scanDiag.includes("0x5000"), "section map regions missing");
+check(scanDiag.includes("tl-attach") && scanDiag.includes("tl-scan"), "job timeline segments missing");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");
