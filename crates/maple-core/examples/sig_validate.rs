@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use maple_core::{
     BuildProfile, FileImage, ImageInput, Region, SigOptions, TargetSpec, fn_identity, generate,
-    holdout_validate, negative_corpus_hits, xref_count,
+    holdout_validate, make_string_anchor, negative_corpus_hits, resolve_string_anchor, xref_count,
 };
 
 struct Args {
@@ -346,6 +346,28 @@ fn report_cross(paths: &[PathBuf], samples: usize) {
     println!(
         "  string-anchored tracking: {str_tracked}/{str_total} distinctively string-referencing functions tracked uniquely across every build ({:.0}%) in {} ms",
         100.0 * str_tracked as f64 / str_total.max(1) as f64,
+        t.elapsed().as_millis()
+    );
+
+    let t = Instant::now();
+    let anchors: Vec<_> = targets
+        .iter()
+        .filter(|&&rva| !fn_identity(&inputs[0], rva).strings.is_empty())
+        .take(150)
+        .filter_map(|&rva| make_string_anchor(&inputs[0], rva))
+        .collect();
+    let survived = anchors
+        .iter()
+        .filter(|a| {
+            inputs
+                .iter()
+                .all(|inp| resolve_string_anchor(inp, a).is_some())
+        })
+        .count();
+    println!(
+        "  string-anchor signatures: {survived}/{} resolve uniquely in every build ({:.0}%) in {} ms",
+        anchors.len(),
+        100.0 * survived as f64 / anchors.len().max(1) as f64,
         t.elapsed().as_millis()
     );
 

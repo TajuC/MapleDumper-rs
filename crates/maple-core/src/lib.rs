@@ -34,9 +34,10 @@ pub use resolver::Kind;
 pub use scanner::{CompiledPattern, find_all};
 pub use sigmaker::{
     BuildProfile, CrossReport, Diag, DupGroup, FnIdentity, Grade, HoldoutResult, ImageInput,
-    InputInfo, NegativeHit, PerVersion, SigCandidate, SigOptions, SigReport, SigStage, Suffix,
-    TargetKind, TargetSpec, fn_identity, generate, generate_cross, generate_cross_with_progress,
-    generate_with_progress, holdout_validate, negative_corpus_hits, xref_count,
+    InputInfo, NegativeHit, PerVersion, SigCandidate, SigOptions, SigReport, SigStage,
+    StringAnchor, Suffix, TargetKind, TargetSpec, fn_identity, generate, generate_cross,
+    generate_cross_with_progress, generate_with_progress, holdout_validate, make_string_anchor,
+    negative_corpus_hits, resolve_string_anchor, xref_count,
 };
 pub use stamp::{BuildStamp, parse_stamp};
 

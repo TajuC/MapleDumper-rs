@@ -747,6 +747,82 @@ pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
         .sum()
 }
 
+/// A signature that anchors on a read-only string a function references rather than on its raw bytes.
+/// The string content survives a recompile that shifts every surrounding byte, so it locates the same
+/// function across client versions where a byte pattern would not: find the string in data, then the
+/// unique code reference to it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringAnchor {
+    pub text: String,
+}
+
+fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
+    let ascii = text.as_bytes();
+    let utf16: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();
+    img.regions.iter().find_map(|r| {
+        let bytes = read_region(img.source, r.base, r.size);
+        [ascii, &utf16]
+            .into_iter()
+            .find_map(|needle| bytes.windows(needle.len()).position(|w| w == needle))
+            .map(|pos| r.base + pos)
+    })
+}
+
+fn string_ref_sites(bytes: &[u8], base: usize, data_abs: usize, arch: Arch) -> Vec<usize> {
+    match arch {
+        Arch::X86 => {
+            let key = (data_abs as u32).to_le_bytes();
+            bytes
+                .windows(4)
+                .enumerate()
+                .filter(|(_, w)| *w == key)
+                .map(|(i, _)| base + i)
+                .collect()
+        }
+        Arch::X64 => bytes
+            .windows(7)
+            .enumerate()
+            .filter_map(|(i, w)| {
+                let lea = w[0] == 0x48 && w[1] == 0x8D && w[2] & 0xC7 == 0x05;
+                let disp = i32::from_le_bytes([w[3], w[4], w[5], w[6]]) as i64;
+                (lea && (base + i + 7) as i64 + disp == data_abs as i64).then_some(base + i)
+            })
+            .collect(),
+    }
+}
+
+fn unique_xref_site(img: &ImageInput, data_abs: usize) -> Option<usize> {
+    let mut site = None;
+    for region in &img.code_regions {
+        let bytes = read_region(img.source, region.base, region.size);
+        for s in string_ref_sites(&bytes, region.base, data_abs, img.arch) {
+            if site.replace(s).is_some() {
+                return None;
+            }
+        }
+    }
+    site
+}
+
+#[must_use]
+pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
+    let data_abs = find_string_in_data(img, &anchor.text)?;
+    Some(unique_xref_site(img, data_abs)? - img.base)
+}
+
+/// Build a string anchor for the function at `target_rva`, preferring its longest referenced string
+/// and keeping the first that resolves to a unique code site. Returns `None` if the function
+/// references no string that pins down a single site.
+#[must_use]
+pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringAnchor> {
+    let mut strings = fn_identity(img, target_rva).strings;
+    strings.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    strings
+        .into_iter()
+        .map(|text| StringAnchor { text })
+        .find(|a| resolve_string_anchor(img, a).is_some())
+}
+
 // A 0-100 confidence derived from the grade band and refined by signature density and the
 // corroborating signals, so the UI and sorting have a number, not only a letter.
 fn confidence_score(grade: Grade, fixed_ratio: f64, reloc_safe: bool, fp_consistent: bool) -> u32 {
@@ -1674,6 +1750,51 @@ mod tests {
         }
         let src = BufferSource::new(base, code);
         assert_eq!(xref_count(&img("x", &src, base, 0x80), 0x40), 2);
+    }
+
+    #[test]
+    fn string_anchor_locates_a_function_by_its_string() {
+        let base = 0x1000;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100] = 0x68; // push imm32 of the string address
+        mem[0x101..0x105].copy_from_slice(&0x1010u32.to_le_bytes());
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let anchor = make_string_anchor(&input, 0x100).expect("a string anchor");
+        assert_eq!(anchor.text, "MapleStory");
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x101));
+        assert!(
+            resolve_string_anchor(
+                &input,
+                &StringAnchor {
+                    text: "absent".to_string()
+                }
+            )
+            .is_none()
+        );
     }
 
     #[test]
