@@ -78,11 +78,14 @@ scriptable command-line tool. Both are built on the same engine crate.
 
 **Command line (`maple-cli`)**
 
-- The same scan and output pipeline, suitable for scripting and CI.
-- Offline helpers that need no target: `--lint` flags weak signatures, `--diff` reports which offsets
-  moved between two dumps, and `--profile` breaks a live scan into read/scan/resolve timing.
-- `--asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
-- `--mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
+- A subcommand per task (`scan`, `lint`, `diff`, `asm`, `mksig`, `profile`), suitable for scripting
+  and CI. Run `mapledumper help <command>` for the flags of any one.
+- Offline helpers that need no target: `lint` flags weak signatures, `diff` reports which offsets
+  moved between two dumps, and `profile` breaks a live scan into read/scan/resolve timing.
+- `asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
+- `mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
+- A `maple.conf` in the working directory (or `--config <file>`) supplies defaults for the process,
+  module, arch, pattern file, and output directory; explicit flags always win.
 
 ## Signature Maker
 
@@ -102,7 +105,7 @@ The Signature Maker addresses this by working across builds:
 The desktop **Signature Maker** view runs the whole flow interactively: queue many targets in a single
 run (one signature or address per line), and switch on **Cross-validate** to pair each signature with
 the address it should resolve to and confirm they agree, the quickest way to check that a hand-written
-AOB still lands where you expect. The command-line `--mksig` drives the same generator for scripting
+AOB still lands where you expect. The command-line `mksig` drives the same generator for scripting
 and CI.
 
 Grades, in short: **A** is a content-validated anchor (a branch or RIP-relative reference whose
@@ -130,57 +133,66 @@ blur or the showcase randomizer in Settings.
 ## Command line
 
 ```
-mapledumper (--process <name> | --class <window-class>) [options]
+mapledumper <command> [options]      ( --config <file> is accepted on any command )
 
+  scan      attach to a process and dump offsets from a pattern file
+  lint      check a pattern file for weak signatures
+  diff      compare two saved dumps and report what moved
+  asm       scan a live process by assembly instructions
+  mksig     build a cross-version signature from client files on disk
+  profile   measure the read/scan/resolve split against a live target
+
+scan / profile share the attach and pattern options:
   --process <name>   attach by process name (e.g. MapleStory.exe)
   --class <class>    attach by top-level window class
+  --pid <pid>        attach by process id (when several share a name)
   --module <name>    module to scan (default: process name)
   --patterns <file>  pattern file (default: patterns.txt)
   --arch <32|64>     architecture section to load (default: 64)
+  --no-wait          do not wait for the process; fail if it is not running
+  --timeout <secs>   give up waiting after this many seconds
+  --lenient          accept malformed pattern lines instead of failing
+scan also takes:
   --out <dir>        output directory (default: .)
   --ce               write update.txt as a Cheat Engine table
   --no-offsets       do not write offsets.h
-  --no-wait          do not wait for the process; fail if it is not running
-  --timeout <secs>   give up waiting after this many seconds
-  --profile          measure the read/scan/resolve split against the live target and exit
-  --lint             check the pattern file for weak signatures and exit
-  --diff <a> <b>     compare two saved dumps and report what moved, then exit
-  --asm <file>       scan by assembly instructions (one per line, wildcards * ? ^ $), then exit
-  --from <addr>      with --asm, only report matches at or above this address (hex)
-  --to <addr>        with --asm, only report matches below this address (hex)
-  --mksig            generate a cross-version signature from client files, then exit
+asm takes a positional <file> plus --from/--to <addr> to clip the address range.
+mksig:
   --client <exe>     a client binary (repeat for each version)
   --client-dir <dir> add every .exe in a folder as a client
   --sig <aob>        target: locate this existing AOB in each client and harden it
   --ref <exe> --rva <hex>   target: an address in one reference client
   --min-fixed-ratio <f>     reject signatures below this fixed-byte ratio (default 0.30)
-  --json             print the full report as JSON
-  --json-out <path>  write the JSON report to a file
-  -h, --help         print help
-  -V, --version      print version
+  --json / --json-out <path>   emit the full report as JSON
+
+mapledumper help <command>   prints the full options for one command.
 ```
 
 ```
-mapledumper --process MapleStory.exe --patterns patterns.txt --out .
+mapledumper scan --process MapleStory.exe --patterns patterns.txt --out .
 
 # check signature quality without attaching to anything
-mapledumper --lint --patterns patterns.txt
+mapledumper lint --patterns patterns.txt
 
 # see which offsets moved between two game versions
-mapledumper --diff old/update.txt new/update.txt
+mapledumper diff old/update.txt new/update.txt
 
 # find code by instruction: every push, then a call, then test eax,eax (one instruction per line)
-mapledumper --process MapleStory.exe --asm find.asm
+mapledumper asm --process MapleStory.exe find.asm
 
 # generate a cross-version signature from several client builds
-mapledumper --mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
+mapledumper mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
+
+# keep the common settings in maple.conf and just run the verb
+printf 'process = MapleStory.exe\narch = 64\nout = dump\n' > maple.conf
+mapledumper scan
 ```
 
 ## Quick start
 
 1. Build the workspace: `cargo build --release`.
 2. Desktop: run `target/release/maple-app.exe`, set a target process, press Start Scan.
-3. CLI: run `target/release/mapledumper.exe --process <name> --patterns patterns.txt`.
+3. CLI: run `target/release/mapledumper.exe scan --process <name> --patterns patterns.txt`.
 4. Run elevated so `OpenProcess` and `SeDebugPrivilege` succeed against a protected target.
 
 ## Build
