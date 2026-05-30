@@ -115,15 +115,16 @@ struct Stats {
     constants: f64,
     strings: f64,
     with_string: usize,
-    examples: Vec<String>,
+    examples: Vec<(usize, String)>,
 }
 
 fn analyze(input: &ImageInput, targets: &[usize]) -> Stats {
     let ids: Vec<_> = targets.iter().map(|&rva| fn_identity(input, rva)).collect();
     let n = ids.len().max(1) as f64;
-    let examples = ids
+    let examples = targets
         .iter()
-        .filter_map(|id| id.strings.first().cloned())
+        .zip(&ids)
+        .filter_map(|(&rva, id)| id.strings.first().map(|s| (rva, s.clone())))
         .take(8)
         .collect();
     Stats {
@@ -187,8 +188,8 @@ fn report_unpacked(input: &ImageInput, img: &FileImage, targets: &[usize], sampl
         s.with_string,
         pct(s.with_string)
     );
-    if !s.examples.is_empty() {
-        println!("    example strings: {:?}", s.examples);
+    for (rva, text) in &s.examples {
+        println!("    string function 0x{rva:X} -> {text:?}");
     }
 
     let t = Instant::now();
