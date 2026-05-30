@@ -748,7 +748,7 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
             row.pattern = pattern;
             if let Some(rva) = resolved {
                 row.value = Some(rva as u64);
-                row.is_offset = true;
+                row.is_offset = false;
                 row.matches = 1;
                 row.status = FindingStatus::FoundUnique;
                 row.candidates = vec![rva as u64];
@@ -768,7 +768,7 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
                 name: base.to_string(),
                 category,
                 value: rva as u64,
-                is_offset: true,
+                is_offset: false,
             });
         }
     }
@@ -1127,7 +1127,7 @@ mod tests {
         assert_eq!(result.rows[0].status, FindingStatus::FoundUnique);
         let stat = result.findings.iter().find(|f| f.name == "Stat").unwrap();
         assert_eq!(stat.value, 0x101);
-        assert!(stat.is_offset);
+        assert!(!stat.is_offset);
     }
 
     #[test]

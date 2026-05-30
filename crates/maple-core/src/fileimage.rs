@@ -172,10 +172,17 @@ impl FileImage {
                 return Err(bad("sections not ascending"));
             }
             prev_rva = Some(rva as usize);
+            let mapped = if vsize == 0 { raw_size } else { vsize };
+            let end = (rva as usize)
+                .checked_add(mapped as usize)
+                .ok_or_else(|| bad("section end overflows"))?;
+            if end > size_of_image {
+                return Err(bad("section extends past image"));
+            }
             sections.push(Section {
                 name,
                 rva,
-                mapped_size: if vsize == 0 { raw_size } else { vsize },
+                mapped_size: mapped,
                 raw_ptr,
                 raw_size,
                 executable: chars & 0x2000_0000 != 0,
@@ -188,8 +195,12 @@ impl FileImage {
         let dir_base = opt + if magic == 0x10B { 0x60 } else { 0x70 };
         let imp_rva = rd_u32(&data, dir_base + 8).unwrap_or(0);
         let imp_size = rd_u32(&data, dir_base + 12).unwrap_or(0);
-        let import =
-            (num_dirs >= 2 && imp_rva != 0 && imp_size != 0).then_some((imp_rva, imp_size));
+        let import = (num_dirs >= 2 && imp_rva != 0 && imp_size != 0)
+            .then_some((imp_rva, imp_size))
+            .filter(|&(rva, size)| {
+                rva.checked_add(size)
+                    .is_some_and(|end| end as usize <= size_of_image)
+            });
 
         let headers_raw_len = size_of_headers.min(data.len());
         let mut image = Self {
@@ -545,6 +556,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_section_extending_past_image() {
+        let mut d = build_pe(false, None);
+        let sec = (0x40 + 4 + 20) + 0xF0;
+        d[sec + 8..sec + 12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        assert!(FileImage::parse(d).is_err());
+    }
+
+    #[test]
+    fn import_range_rejects_overflowing_directory() {
+        let opt = 0x40 + 4 + 20;
+        let dir1 = opt + 0x70 + 8; // PE32+ data directory entry #1 (import)
+        let mut d = build_pe(false, None);
+        d[dir1..dir1 + 4].copy_from_slice(&0xFFFF_FF00u32.to_le_bytes());
+        d[dir1 + 4..dir1 + 8].copy_from_slice(&0x200u32.to_le_bytes());
+        assert!(FileImage::parse(d).unwrap().import_range().is_none());
+    }
+
+    #[test]
     fn code_regions_at_virtual_addresses() {
         let img = FileImage::parse(build_pe(false, None)).unwrap();
         assert_eq!(
@@ -728,7 +757,7 @@ mod tests {
         // back what the file actually holds and zero-fill the rest, never indexing past the buffer.
         let mut d = build_pe(false, None);
         let sec = (0x40 + 4 + 20) + 0xF0;
-        d[sec + 8..sec + 12].copy_from_slice(&0x4000u32.to_le_bytes()); // VirtualSize
+        d[sec + 8..sec + 12].copy_from_slice(&0x3000u32.to_le_bytes()); // VirtualSize (fits image)
         d[sec + 0x10..sec + 0x14].copy_from_slice(&0x4000u32.to_le_bytes()); // SizeOfRawData past EOF
         let img = FileImage::parse(d).unwrap();
         let mut buf = [0xFFu8; 0x300];
