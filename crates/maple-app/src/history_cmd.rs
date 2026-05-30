@@ -63,7 +63,9 @@ fn meta_label(meta: &history::ScanRow) -> String {
 }
 
 #[tauri::command]
-pub fn history_builds(state: tauri::State<'_, AppState>) -> Result<Vec<history::BuildGroup>, String> {
+pub fn history_builds(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<history::BuildGroup>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     history::group_by_build(&conn).map_err(|e| e.to_string())
 }
@@ -154,7 +156,10 @@ pub fn history_export(
 }
 
 #[tauri::command]
-pub fn history_matrix(state: tauri::State<'_, AppState>, ids: Vec<i64>) -> Result<MatrixView, String> {
+pub fn history_matrix(
+    state: tauri::State<'_, AppState>,
+    ids: Vec<i64>,
+) -> Result<MatrixView, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut columns = Vec::new();
     let mut per_scan: Vec<HashMap<String, Option<String>>> = Vec::new();
