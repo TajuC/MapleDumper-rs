@@ -487,6 +487,10 @@ const SIG_I18N = {
     "sig.gradeLegend": "Grade legend",
     "sig.holdout": "Holdout validation", "sig.holdoutOk": "matched the held-out build",
     "sig.holdoutMiss": "did not match the held-out build", "sig.holdoutNone": "no signature without this build",
+    "sig.stringAnchor": "String anchor (survives patches)", "sig.stringAnchorHint": "Paste this into your pattern file as a name = ... line; it locates the function by a referenced string, surviving version changes that move the bytes.",
+    "sig.copy": "Copy", "sig.copied": "Copied",
+    "sig.negHits": "Negative corpus matches", "sig.negHitCount": "{n} match(es)",
+    "sig.negatives": "Negative modules", "sig.addNegatives": "Add negatives", "sig.negativesHint": "Unrelated modules the signature must NOT match",
     "sig.gradeA": "Content-validated anchor, relocation-safe.", "sig.gradeB": "Relocation-safe, not content-validated.",
     "sig.gradeC": "Weak: absolute or unresolved reference, or cross-build mismatch.", "sig.gradeD": "An input looks packed or protected; provisional.",
     "sig.gradeF": "Rejected: too few fixed bytes, low ratio, or unsupported relocation.",
@@ -1309,7 +1313,7 @@ $("asm-search").addEventListener("input", () => {
   if (asmState.report) renderAsmResults(asmState.report);
 });
 
-const sigState = { files: [], response: null, mode: "aob", cross: "separate", showJson: false, alertDismissed: false };
+const sigState = { files: [], negatives: [], response: null, mode: "aob", cross: "separate", showJson: false, alertDismissed: false };
 
 function renderSigFiles() {
   const host = $("sig-files");
@@ -1381,6 +1385,39 @@ function sigRemoveFile(path) {
   sigState.alertDismissed = false;
   renderSigFiles();
   sigUpdateValidity();
+}
+
+function renderSigNegatives() {
+  const host = $("sig-negatives");
+  if (!host) return;
+  if (!sigState.negatives.length) {
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = `<span class="muted">${esc(t("sig.negatives"))}:</span> ` +
+    sigState.negatives
+      .map((n) => `<span class="sig-chip"><span class="d-name">${esc(n.name)}</span><button class="sig-chip-x" data-rmneg="${escAttr(n.path)}" title="remove">✕</button></span>`)
+      .join("");
+  host.querySelectorAll("[data-rmneg]").forEach((b) => b.addEventListener("click", () => sigRemoveNegative(b.dataset.rmneg)));
+}
+
+async function sigPickNegatives() {
+  let paths;
+  try {
+    paths = await invoke("pick_open_files");
+  } catch {
+    return;
+  }
+  for (const p of paths) {
+    if (sigState.negatives.some((n) => n.path === p)) continue;
+    sigState.negatives.push({ path: p, name: p.split(/[\\/]/).pop() || p });
+  }
+  renderSigNegatives();
+}
+
+function sigRemoveNegative(path) {
+  sigState.negatives = sigState.negatives.filter((n) => n.path !== path);
+  renderSigNegatives();
 }
 
 function sigSetMode(mode) {
@@ -1482,7 +1519,7 @@ async function runSigGen() {
     const r = sigLines("sig-rva").length;
     if (a !== r) toast(t("sig.crossUneven", { sigs: a, rvas: r }));
   }
-  const req = { clients: sigState.files.map((f) => f.path), jobs };
+  const req = { clients: sigState.files.map((f) => f.path), jobs, negatives: sigState.negatives.map((n) => n.path) };
   $("sig-gen").disabled = true;
   const setStatus = (msg) => {
     $("sig-results").innerHTML = `<div class="insp-hint">${esc(msg)}</div>`;
@@ -1582,6 +1619,18 @@ function reportInnerHtml(r) {
         .join("") +
       "</ul>";
   }
+  if (r.string_anchor) {
+    html += `<div class="sig-section-h">${t("sig.stringAnchor")}</div>` +
+      `<div class="sig-anchor"><code class="mono">${esc(r.string_anchor)}</code><button class="icon-btn sig-copy" data-aob="${escAttr(r.string_anchor)}" title="${escAttr(t("sig.copy"))}">⧉</button></div>` +
+      `<div class="insp-hint">${esc(t("sig.stringAnchorHint"))}</div>`;
+  }
+  if (r.negative_hits && r.negative_hits.length) {
+    html += `<div class="sig-section-h">${t("sig.negHits")} (${r.negative_hits.length})</div><ul class="sig-diags">` +
+      r.negative_hits
+        .map((h) => `<li class="sig-holdout bad"><span class="mono">${esc(h.label)}</span> ${esc(t("sig.negHitCount", { n: h.count }))}</li>`)
+        .join("") +
+      "</ul>";
+  }
   return html;
 }
 
@@ -1657,6 +1706,7 @@ function sigSaveAsPattern(aob, suffix) {
 }
 
 $("sig-pick").addEventListener("click", sigPickFiles);
+$("sig-pick-neg").addEventListener("click", sigPickNegatives);
 $("sig-gen").addEventListener("click", runSigGen);
 $("sig-json").addEventListener("click", () => {
   sigState.showJson = !sigState.showJson;

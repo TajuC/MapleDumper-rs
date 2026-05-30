@@ -241,11 +241,13 @@
                 <div><h2 data-i18n="sig.title">Signature maker</h2><p class="muted" data-i18n="sig.sub">Generate a cross-version signature from client files</p></div>
                 <div class="head-actions">
                   <button id="sig-pick" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="sig.pick">Pick files</span></button>
+                  <button id="sig-pick-neg" class="btn btn-soft" title="Unrelated modules the signature must NOT match"><span class="ico" data-icon="folder"></span><span data-i18n="sig.addNegatives">Add negatives</span></button>
                   <button id="sig-json" class="btn btn-soft" hidden><span class="ico" data-icon="file-code"></span><span data-i18n="sig.json">JSON</span></button>
                   <button id="sig-gen" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="sig.generate">Generate</span></button>
                 </div>
               </div>
               <div id="sig-files" class="sig-files"></div>
+              <div id="sig-negatives" class="sig-files"></div>
               <div id="sig-alert" class="sig-alert" hidden></div>
               <div class="sig-modes">
                 <div id="sig-mode-tabs" class="tabs">

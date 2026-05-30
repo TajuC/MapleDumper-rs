@@ -86,6 +86,8 @@ const driver = `
       { held_out: "a.exe", generated: true, matched: true },
       { held_out: "b.exe", generated: true, matched: false },
     ],
+    string_anchor: "@string=UI/UIWindow2.img/Stat",
+    negative_hits: [{ label: "other.dll", count: 2 }],
   };
   sigState.response = { jobs: [
     { label: "E8 ?? ?? ?? ?? 48 83 C4 ??", report: fakeReport, cross: null, error: null },
@@ -125,6 +127,8 @@ check(rep.includes("Diagnostics"), "diagnostics section missing");
 check(rep.includes("Holdout validation") && rep.includes("(1/2)"), "holdout section/summary missing");
 check(rep.includes("matched the held-out build"), "holdout pass verdict missing");
 check(rep.includes("did not match the held-out build"), "holdout miss verdict missing");
+check(rep.includes("String anchor") && rep.includes("@string=UI/UIWindow2.img/Stat"), "string anchor suggestion missing");
+check(rep.includes("Negative corpus matches") && rep.includes("other.dll"), "negative corpus hits missing");
 check(rep.includes("2 file(s)") && rep.includes("2 unique build(s)"), "input summary missing");
 check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "per-job framing/numbers missing");
 check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");

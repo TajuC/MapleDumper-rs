@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use maple_core::{
     Arch, FileImage, ImageInput, SigCandidate, SigOptions, SigReport, SigStage, TargetKind,
-    TargetSpec, generate_cross_with_progress, generate_with_progress, try_signature_from_aob,
+    TargetSpec, generate_cross_with_progress, generate_with_progress, make_string_anchor,
+    negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
 
@@ -31,6 +32,8 @@ enum SigJob {
 pub struct SigGenRequest {
     clients: Vec<String>,
     jobs: Vec<SigJob>,
+    #[serde(default)]
+    negatives: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -79,6 +82,12 @@ struct SigHoldoutView {
 }
 
 #[derive(Serialize)]
+struct NegHitView {
+    label: String,
+    count: usize,
+}
+
+#[derive(Serialize)]
 struct SigReportView {
     arch: String,
     unique_builds: usize,
@@ -89,6 +98,8 @@ struct SigReportView {
     rejected: Vec<SigCandView>,
     diagnostics: Vec<String>,
     holdout: Vec<SigHoldoutView>,
+    string_anchor: Option<String>,
+    negative_hits: Vec<NegHitView>,
 }
 
 #[derive(Serialize)]
@@ -172,6 +183,8 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         rejected: r.rejected.iter().map(sig_cand_view).collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
         holdout: Vec::new(),
+        string_anchor: None,
+        negative_hits: Vec::new(),
     }
 }
 
@@ -190,15 +203,65 @@ fn holdout_views(
         .collect()
 }
 
-fn sig_report_view_with_holdout(
+// A string-anchored pattern for the chosen target: locate its matched build and rva and read the
+// distinctive string the function references, so the user gets the patch-survivable form too.
+fn string_anchor_line(r: &SigReport, inputs: &[ImageInput]) -> Option<String> {
+    let chosen = r.chosen.as_ref()?;
+    let anchor = chosen.per_version.iter().find_map(|pv| {
+        let rva = pv.match_rva?;
+        let img = inputs.iter().find(|i| i.label == pv.label)?;
+        make_string_anchor(img, rva as usize)
+    })?;
+    Some(match &anchor.also {
+        Some(also) => format!("@string={} @also={also}", anchor.text),
+        None => format!("@string={}", anchor.text),
+    })
+}
+
+fn enrich_report(
     r: &SigReport,
     inputs: &[ImageInput],
+    negatives: &[ImageInput],
     spec: &TargetSpec,
     opts: &SigOptions,
 ) -> SigReportView {
     let mut view = sig_report_view(r);
     view.holdout = holdout_views(inputs, spec, opts);
+    view.string_anchor = string_anchor_line(r, inputs);
+    if let Some(chosen) = &r.chosen
+        && !negatives.is_empty()
+    {
+        view.negative_hits = negative_corpus_hits(&chosen.aob, negatives)
+            .into_iter()
+            .map(|h| NegHitView {
+                label: h.label,
+                count: h.count,
+            })
+            .collect();
+    }
     view
+}
+
+fn image_input(
+    label: String,
+    img: &FileImage,
+    packed: bool,
+    reasons: Vec<String>,
+) -> ImageInput<'_> {
+    ImageInput {
+        label,
+        source: img,
+        base: img.base(),
+        size: img.size(),
+        code_regions: img.code_regions(),
+        regions: img.regions(),
+        import: img.import_range(),
+        arch: img.arch(),
+        code_hash: img.code_hash(),
+        packed,
+        pack_reasons: reasons,
+        reloc: Some(img),
+    }
 }
 
 #[tauri::command]
@@ -287,23 +350,31 @@ fn run_generate_signature(
     emit("pack", String::new(), 0, 0, 0);
     let reports: Vec<_> = images.iter().map(FileImage::pack_report).collect();
 
-    let mut inputs = Vec::with_capacity(images.len());
-    for (k, img) in images.iter().enumerate() {
-        inputs.push(ImageInput {
-            label: label_of(&req.clients[k]),
-            source: img,
-            base: img.base(),
-            size: img.size(),
-            code_regions: img.code_regions(),
-            regions: img.regions(),
-            import: img.import_range(),
-            arch: img.arch(),
-            code_hash: img.code_hash(),
-            packed: reports[k].likely_packed,
-            pack_reasons: reports[k].reasons.clone(),
-            reloc: Some(img),
-        });
-    }
+    let inputs: Vec<ImageInput> = images
+        .iter()
+        .enumerate()
+        .map(|(k, img)| {
+            image_input(
+                label_of(&req.clients[k]),
+                img,
+                reports[k].likely_packed,
+                reports[k].reasons.clone(),
+            )
+        })
+        .collect();
+
+    let neg_images: Vec<FileImage> = req
+        .negatives
+        .iter()
+        .map(|p| {
+            FileImage::open(std::path::Path::new(p)).map_err(|e| format!("open negative {p}: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let neg_inputs: Vec<ImageInput> = neg_images
+        .iter()
+        .zip(&req.negatives)
+        .map(|(img, p)| image_input(label_of(p), img, false, Vec::new()))
+        .collect();
 
     let ref_index = |ref_path: &str| -> Result<usize, String> {
         req.clients
@@ -334,8 +405,12 @@ fn run_generate_signature(
                         let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                         SigJobResultView {
                             label: sig,
-                            report: Some(sig_report_view_with_holdout(
-                                &report, &inputs, &spec, &opts,
+                            report: Some(enrich_report(
+                                &report,
+                                &inputs,
+                                &neg_inputs,
+                                &spec,
+                                &opts,
                             )),
                             cross: None,
                             error: None,
@@ -352,7 +427,7 @@ fn run_generate_signature(
                     let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                     SigJobResultView {
                         label: format!("0x{rva_val:X}"),
-                        report: Some(sig_report_view_with_holdout(&report, &inputs, &spec, &opts)),
+                        report: Some(enrich_report(&report, &inputs, &neg_inputs, &spec, &opts)),
                         cross: None,
                         error: None,
                     }
@@ -376,9 +451,10 @@ fn run_generate_signature(
                         );
                         SigJobResultView {
                             label: format!("0x{rva_val:X}"),
-                            report: Some(sig_report_view_with_holdout(
+                            report: Some(enrich_report(
                                 &cr.report,
                                 &inputs,
+                                &neg_inputs,
                                 &TargetSpec::Aob(sig.clone()),
                                 &opts,
                             )),
