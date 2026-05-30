@@ -18,6 +18,26 @@ pub struct PatternRow {
     pub matches: usize,
     pub status: FindingStatus,
     pub note: String,
+    pub candidates: Vec<u64>,
+    pub confidence: u8,
+    pub trace: Option<String>,
+}
+
+// A 0-100 trust score for a row's resolved value, separate from uniqueness: matches that all resolve
+// to the same target stay high even when the byte signature is not unique, while genuinely conflicting
+// targets drop in proportion to how many distinct ones there are.
+fn confidence_of(status: &FindingStatus, candidates: &[u64]) -> u8 {
+    match status {
+        FindingStatus::FoundUnique => 100,
+        FindingStatus::FoundAmbiguous { .. } => {
+            let mut distinct = candidates.to_vec();
+            distinct.sort_unstable();
+            distinct.dedup();
+            let n = u32::try_from(distinct.len().max(1)).unwrap_or(u32::MAX);
+            u8::try_from((100 / n).min(100)).unwrap_or(0)
+        }
+        FindingStatus::NotFound | FindingStatus::Failed(_) => 0,
+    }
 }
 
 pub struct ScanResult {
@@ -283,6 +303,9 @@ where
                 matches: 0,
                 status: FindingStatus::NotFound,
                 note,
+                candidates: Vec::new(),
+                confidence: 0,
+                trace: None,
             });
             continue;
         }
@@ -310,6 +333,15 @@ where
                     is_offset,
                 });
             }
+            let candidates: Vec<u64> = group
+                .iter()
+                .filter_map(|h| h.outcome.as_ref().ok().map(|r| r.value()))
+                .collect();
+            let confidence = confidence_of(&status, &candidates);
+            let trace = Some(format!(
+                "{} resolved to 0x{value:X}",
+                compiled[idx].0.label()
+            ));
             rows.push(PatternRow {
                 name: base.to_string(),
                 category,
@@ -319,6 +351,9 @@ where
                 matches: match_count,
                 status,
                 note,
+                candidates,
+                confidence,
+                trace,
             });
         } else {
             // matched but nothing resolved: surface an out-of-module target distinctly from a
@@ -331,6 +366,11 @@ where
                 })
                 .unwrap_or(FailureReason::Unresolved);
             matched_unresolved.push(pattern.name.clone());
+            let trace = Some(format!(
+                "{} failed: {}",
+                compiled[idx].0.label(),
+                reason.label()
+            ));
             rows.push(PatternRow {
                 name: base.to_string(),
                 category,
@@ -340,6 +380,9 @@ where
                 matches: match_count,
                 status: FindingStatus::Failed(reason),
                 note,
+                candidates: Vec::new(),
+                confidence: 0,
+                trace,
             });
         }
     }
@@ -393,6 +436,9 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
                 row.is_offset = true;
                 row.matches = 1;
                 row.status = FindingStatus::FoundUnique;
+                row.candidates = vec![rva as u64];
+                row.confidence = 100;
+                row.trace = Some(format!("string anchor resolved to 0x{rva:X}"));
             }
         }
         if let Some(rva) = resolved {

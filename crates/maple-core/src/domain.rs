@@ -150,6 +150,18 @@ impl ResolverSpec {
             _ => None,
         }
     }
+
+    /// Human-readable name of the resolution strategy, for diagnostic traces.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            ResolverSpec::MatchAddress => "match address",
+            ResolverSpec::MemoryPointer => "memory pointer",
+            ResolverSpec::StructOffset => "struct offset",
+            ResolverSpec::Immediate => "immediate",
+            ResolverSpec::NestedCall => "nested call",
+        }
+    }
 }
 
 /// How many matches a pattern is expected to produce.
