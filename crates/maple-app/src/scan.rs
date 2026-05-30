@@ -249,6 +249,15 @@ fn run_scan(
                 matches: r.matches as i64,
                 note: r.note.clone(),
                 bytes,
+                confidence: i64::from(r.confidence),
+                trace: r.trace.clone(),
+                candidates: (r.candidates.len() > 1).then(|| {
+                    r.candidates
+                        .iter()
+                        .map(|v| format!("0x{v:X}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }),
             }
         })
         .collect();

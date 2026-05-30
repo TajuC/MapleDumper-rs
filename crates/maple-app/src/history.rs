@@ -29,6 +29,9 @@ pub struct NewFinding {
     pub matches: i64,
     pub note: String,
     pub bytes: Option<String>,
+    pub confidence: i64,
+    pub trace: Option<String>,
+    pub candidates: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -64,6 +67,9 @@ pub struct FindingRow {
     pub matches: i64,
     pub note: String,
     pub bytes: Option<String>,
+    pub confidence: Option<i64>,
+    pub trace: Option<String>,
+    pub candidates: Option<String>,
 }
 
 #[must_use]
@@ -76,7 +82,7 @@ pub fn default_db_path() -> PathBuf {
     dir.join("history.db")
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -112,7 +118,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                status TEXT NOT NULL,
                matches INTEGER NOT NULL,
                note TEXT NOT NULL,
-               bytes TEXT
+               bytes TEXT,
+               confidence INTEGER,
+               trace TEXT,
+               candidates TEXT
              );
              CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
              CREATE INDEX IF NOT EXISTS idx_scans_build ON scans(build_hash);
@@ -128,6 +137,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // digests so a stale value can never collide with a new query and dedup two real scans.
         conn.execute("UPDATE scans SET result_hash = NULL", [])?;
         version = 2;
+    }
+    if version < 3 {
+        // Per-finding diagnostics. Nullable so rows written before this version read back as unknown
+        // rather than a fabricated zero confidence.
+        add_column_if_missing(conn, "findings", "confidence", "INTEGER")?;
+        add_column_if_missing(conn, "findings", "trace", "TEXT")?;
+        add_column_if_missing(conn, "findings", "candidates", "TEXT")?;
+        version = 3;
     }
 
     conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
@@ -239,8 +256,8 @@ pub fn insert_scan(
     let id = tx.last_insert_rowid();
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )?;
         for f in findings {
             stmt.execute(params![
@@ -253,6 +270,9 @@ pub fn insert_scan(
                 f.matches,
                 f.note,
                 f.bytes,
+                f.confidence,
+                f.trace,
+                f.candidates,
             ])?;
         }
     }
@@ -333,7 +353,7 @@ pub fn scan_row(conn: &Connection, scan_id: i64) -> rusqlite::Result<Option<Scan
 
 pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<FindingRow>> {
     let mut stmt = conn.prepare(
-        "SELECT name, category, value, is_offset, status, matches, note, bytes
+        "SELECT name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates
          FROM findings WHERE scan_id = ?1 ORDER BY category, name",
     )?;
     let rows = stmt.query_map([scan_id], |r| {
@@ -346,6 +366,9 @@ pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<Finding
             matches: r.get(5)?,
             note: r.get(6)?,
             bytes: r.get(7)?,
+            confidence: r.get(8)?,
+            trace: r.get(9)?,
+            candidates: r.get(10)?,
         })
     })?;
     rows.collect()
@@ -374,6 +397,9 @@ mod tests {
             matches: 1,
             note: String::new(),
             bytes: None,
+            confidence: 100,
+            trace: None,
+            candidates: None,
         }
     }
 
@@ -410,6 +436,24 @@ mod tests {
         let f = findings(&conn, a).unwrap();
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].name, "Foo");
+    }
+
+    #[test]
+    fn diagnostic_columns_round_trip() {
+        let mut conn = open_memory();
+        let mut f = finding("Amb", Some("0x10"));
+        f.status = "found (ambiguous)".to_string();
+        f.confidence = 50;
+        f.trace = Some("memory pointer resolved to 0x10".to_string());
+        f.candidates = Some("0x10,0x20".to_string());
+        let id = insert_scan(&mut conn, &scan("AAAA"), &[f]).unwrap();
+        let rows = findings(&conn, id).unwrap();
+        assert_eq!(rows[0].confidence, Some(50));
+        assert_eq!(
+            rows[0].trace.as_deref(),
+            Some("memory pointer resolved to 0x10")
+        );
+        assert_eq!(rows[0].candidates.as_deref(), Some("0x10,0x20"));
     }
 
     #[test]
