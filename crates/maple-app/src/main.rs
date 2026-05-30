@@ -284,7 +284,7 @@ fn run_scan(
     let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
     let region_count = regions.len();
     let scan_started = Instant::now();
-    let result = maple_core::scan(
+    let mut result = maple_core::scan(
         &target,
         target.module.base,
         target.module.size,
@@ -292,6 +292,23 @@ fn run_scan(
         &patterns,
         arch,
     );
+    if patterns.iter().any(|p| p.string_anchor.is_some()) {
+        let img = maple_core::ImageInput {
+            label: String::new(),
+            source: &target,
+            base: target.module.base,
+            size: target.module.size,
+            code_regions: target.code_regions(),
+            regions: target.regions(),
+            import: None,
+            arch,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        maple_core::apply_string_anchors(&mut result, &img, &patterns);
+    }
     let scan_ms = scan_started.elapsed().as_millis();
     let elapsed_ms = started.elapsed().as_millis();
 

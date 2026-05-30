@@ -10,8 +10,8 @@ use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patterns_file_strict};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
-    ScanResult, Target, assembly_scan, diff, lint, parse_asm_patterns, parse_dump, parse_stamp,
-    profile, resolve_string_anchors, scan,
+    ScanResult, Target, apply_string_anchors, assembly_scan, diff, lint, parse_asm_patterns,
+    parse_dump, parse_stamp, profile, scan,
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport,
@@ -496,7 +496,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
             pack_reasons: Vec::new(),
             reloc: None,
         };
-        result.merge(resolve_string_anchors(&img, &patterns));
+        apply_string_anchors(&mut result, &img, &patterns);
     }
 
     println!();

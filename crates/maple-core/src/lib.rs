@@ -23,7 +23,7 @@ pub use diff::{DiffReport, Moved, diff, parse_dump};
 pub use domain::{
     ExpectedHits, FailureReason, FindingStatus, ResolvePlan, ResolverSpec, SectionKind, checked_rva,
 };
-pub use engine::{PatternRow, ProfileReport, ScanResult, profile, resolve_string_anchors, scan};
+pub use engine::{PatternRow, ProfileReport, ScanResult, apply_string_anchors, profile, scan};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};
 pub use memory::{MemorySource, Region};

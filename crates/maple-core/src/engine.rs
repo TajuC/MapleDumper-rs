@@ -371,81 +371,46 @@ fn compile_patterns(patterns: &[Pattern]) -> Vec<CompiledPat> {
         .collect()
 }
 
-impl ScanResult {
-    pub fn merge(&mut self, other: ScanResult) {
-        self.findings.extend(other.findings);
-        self.rows.extend(other.rows);
-        self.found.extend(other.found);
-        self.matched_unresolved.extend(other.matched_unresolved);
-        self.not_found.extend(other.not_found);
-        self.total_matches += other.total_matches;
-    }
-}
-
-/// Resolve the string-anchored patterns against an image view, live target or file. Byte-scanned
-/// patterns are ignored here; run [`scan`] for those and [`ScanResult::merge`] the two results.
-#[must_use]
-pub fn resolve_string_anchors(img: &ImageInput, patterns: &[Pattern]) -> ScanResult {
-    let mut out = ScanResult {
-        findings: Vec::new(),
-        rows: Vec::new(),
-        found: Vec::new(),
-        matched_unresolved: Vec::new(),
-        not_found: Vec::new(),
-        total_matches: 0,
-    };
-    for p in patterns {
+/// Resolve string-anchored patterns against an image view, live target or file, and fold the results
+/// into a [`ScanResult`] from [`scan`]. The byte scan leaves each empty-signature anchored pattern as
+/// a placeholder not-found row; this rewrites that row in place by index, so the one-row-per-pattern
+/// shape is preserved and a resolved anchor moves from not-found to found.
+pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns: &[Pattern]) {
+    for (idx, p) in patterns.iter().enumerate() {
         let Some(anchor) = &p.string_anchor else {
             continue;
         };
         let (_, base) = Kind::classify(&p.name);
-        let category = p
-            .category
-            .clone()
-            .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
-        let note = p.note.clone().unwrap_or_default();
         let pattern = match &anchor.also {
             Some(also) => format!("@string={} @also={also}", anchor.text),
             None => format!("@string={}", anchor.text),
         };
-        match resolve_string_anchor(img, anchor) {
-            Some(rva) => {
-                let value = rva as u64;
-                out.found.push(p.name.clone());
-                out.total_matches += 1;
-                out.findings.push(Finding {
-                    name: base.to_string(),
-                    category: category.clone(),
-                    value,
-                    is_offset: true,
-                });
-                out.rows.push(PatternRow {
-                    name: base.to_string(),
-                    category,
-                    pattern,
-                    value: Some(value),
-                    is_offset: true,
-                    matches: 1,
-                    status: FindingStatus::FoundUnique,
-                    note,
-                });
-            }
-            None => {
-                out.not_found.push(p.name.clone());
-                out.rows.push(PatternRow {
-                    name: base.to_string(),
-                    category,
-                    pattern,
-                    value: None,
-                    is_offset: false,
-                    matches: 0,
-                    status: FindingStatus::NotFound,
-                    note,
-                });
+        let resolved = resolve_string_anchor(img, anchor);
+        if let Some(row) = result.rows.get_mut(idx) {
+            row.pattern = pattern;
+            if let Some(rva) = resolved {
+                row.value = Some(rva as u64);
+                row.is_offset = true;
+                row.matches = 1;
+                row.status = FindingStatus::FoundUnique;
             }
         }
+        if let Some(rva) = resolved {
+            let category = p
+                .category
+                .clone()
+                .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+            result.not_found.retain(|n| n != &p.name);
+            result.found.push(p.name.clone());
+            result.total_matches += 1;
+            result.findings.push(Finding {
+                name: base.to_string(),
+                category,
+                value: rva as u64,
+                is_offset: true,
+            });
+        }
     }
-    out
 }
 
 #[derive(Clone, Copy)]
@@ -784,8 +749,14 @@ mod tests {
             reloc: None,
         };
         let patterns = parse_patterns("Stat = @string=MapleStory", Arch::X86);
-        let result = resolve_string_anchors(&img, &patterns);
+        let regions = [Region { base, size: 0x200 }];
+        let mut result = scan(&source, base, 0x200, &regions, &patterns, Arch::X86);
+        assert_eq!(result.not_found, vec!["Stat".to_string()]);
+        apply_string_anchors(&mut result, &img, &patterns);
         assert_eq!(result.found, vec!["Stat".to_string()]);
+        assert!(result.not_found.is_empty());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].status, FindingStatus::FoundUnique);
         let stat = result.findings.iter().find(|f| f.name == "Stat").unwrap();
         assert_eq!(stat.value, 0x101);
         assert!(stat.is_offset);
