@@ -288,18 +288,21 @@ where
         if let Some(resolved) = group.iter().find_map(|h| h.outcome.as_ref().ok().copied()) {
             let value = resolved.value();
             let is_offset = resolved.is_offset();
-            findings.push(Finding {
-                name: base.to_string(),
-                category: category.clone(),
-                value,
-                is_offset,
-            });
             found.push(pattern.name.clone());
+            // Only a unique match is exported as a normal offset. An ambiguous match is shown in the
+            // results for inspection but kept out of findings, so it cannot silently become an entry
+            // in offsets.h or a Cheat Engine table.
             let status = if match_count > 1 {
                 FindingStatus::FoundAmbiguous {
                     candidates: match_count,
                 }
             } else {
+                findings.push(Finding {
+                    name: base.to_string(),
+                    category: category.clone(),
+                    value,
+                    is_offset,
+                });
                 FindingStatus::FoundUnique
             };
             rows.push(PatternRow {
@@ -721,6 +724,8 @@ mod tests {
             result.rows[0].status,
             FindingStatus::FoundAmbiguous { candidates: 6 }
         ));
+        // an ambiguous match is reported but never exported as a normal offset
+        assert!(result.findings.is_empty());
     }
 
     #[test]

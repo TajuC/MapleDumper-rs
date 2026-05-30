@@ -68,7 +68,7 @@ Missing [globals] not found value=- offset=false matches=0
 Qux [globals] found value=0x10 offset=true matches=1
 Straddle [globals] found value=0x3FFFE offset=false matches=1
 total_matches=8
-findings=7
+findings=6
 ";
 
 #[test]
