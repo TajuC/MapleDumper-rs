@@ -18,3 +18,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  msrv:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the declared minimum toolchain
+        run: rustup toolchain install 1.95 --profile minimal
+      - name: Check against MSRV
+        run: cargo +1.95 check --workspace
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit dependencies for security advisories
+        run: cargo audit
