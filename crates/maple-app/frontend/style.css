@@ -2315,6 +2315,17 @@ button.btn-ico:hover {
 .sig-holdout.bad {
   color: #ffc9d1;
 }
+.sig-anchor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.sig-anchor code {
+  flex: 1;
+  word-break: break-all;
+  color: var(--green);
+}
 [dir="rtl"] .sig-diags {
   padding-left: 0;
   padding-right: 18px;
