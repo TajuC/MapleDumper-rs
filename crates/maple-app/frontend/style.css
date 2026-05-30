@@ -2309,6 +2309,12 @@ button.btn-ico:hover {
   background: rgba(251, 113, 133, 0.12);
   border: 1px solid rgba(251, 113, 133, 0.4);
 }
+.sig-holdout.ok {
+  color: var(--green);
+}
+.sig-holdout.bad {
+  color: #ffc9d1;
+}
 [dir="rtl"] .sig-diags {
   padding-left: 0;
   padding-right: 18px;

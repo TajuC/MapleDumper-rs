@@ -82,6 +82,10 @@ const driver = `
     alternates: [ { aob: "48 89 5C 24 ??", suffix: "", grade: "B", bytes: 5, fixed: 4, wildcards: 1, fixed_ratio: 0.8, reloc_safe: true, per_version: [ { label: "a.exe", match_rva: "0x24190", resolved_target_rva: null, target_type: null } ], diags: [] } ],
     rejected: [ { aob: "90", suffix: "", grade: "F", bytes: 1, fixed: 1, wildcards: 0, fixed_ratio: 1, reloc_safe: true, per_version: [], diags: ["too few fixed bytes (1)"] } ],
     diagnostics: ["packed input b.exe: high entropy 7.90 in .text"],
+    holdout: [
+      { held_out: "a.exe", generated: true, matched: true },
+      { held_out: "b.exe", generated: true, matched: false },
+    ],
   };
   sigState.response = { jobs: [
     { label: "E8 ?? ?? ?? ?? 48 83 C4 ??", report: fakeReport, cross: null, error: null },
@@ -118,6 +122,9 @@ check(rep.includes("0x24190"), "resolved target RVA missing from per-version tab
 check(rep.includes("Alternates") && rep.includes("Rejected"), "alternates/rejected sections missing");
 check(rep.includes("Duplicate builds") && rep.includes("DEADBEEFCAFE0001"), "duplicate-build section missing");
 check(rep.includes("Diagnostics"), "diagnostics section missing");
+check(rep.includes("Holdout validation") && rep.includes("(1/2)"), "holdout section/summary missing");
+check(rep.includes("matched the held-out build"), "holdout pass verdict missing");
+check(rep.includes("did not match the held-out build"), "holdout miss verdict missing");
 check(rep.includes("2 file(s)") && rep.includes("2 unique build(s)"), "input summary missing");
 check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "per-job framing/numbers missing");
 check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");

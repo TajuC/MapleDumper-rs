@@ -963,6 +963,13 @@ struct SigInputView {
 }
 
 #[derive(Serialize)]
+struct SigHoldoutView {
+    held_out: String,
+    generated: bool,
+    matched: bool,
+}
+
+#[derive(Serialize)]
 struct SigReportView {
     arch: String,
     unique_builds: usize,
@@ -972,6 +979,7 @@ struct SigReportView {
     alternates: Vec<SigCandView>,
     rejected: Vec<SigCandView>,
     diagnostics: Vec<String>,
+    holdout: Vec<SigHoldoutView>,
 }
 
 #[derive(Serialize)]
@@ -1054,7 +1062,34 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         alternates: r.alternates.iter().map(sig_cand_view).collect(),
         rejected: r.rejected.iter().map(sig_cand_view).collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
+        holdout: Vec::new(),
     }
+}
+
+fn holdout_views(
+    inputs: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> Vec<SigHoldoutView> {
+    maple_core::holdout_validate(inputs, spec, opts)
+        .into_iter()
+        .map(|h| SigHoldoutView {
+            held_out: h.held_out,
+            generated: h.generated,
+            matched: h.matched_holdout,
+        })
+        .collect()
+}
+
+fn sig_report_view_with_holdout(
+    r: &SigReport,
+    inputs: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> SigReportView {
+    let mut view = sig_report_view(r);
+    view.holdout = holdout_views(inputs, spec, opts);
+    view
 }
 
 #[tauri::command]
@@ -1204,15 +1239,13 @@ fn run_generate_signature(
                 match try_signature_from_aob(&sig) {
                     Err(e) => job_error(sig.clone(), format!("invalid signature: {e}")),
                     Ok(_) => {
-                        let report = generate_with_progress(
-                            &inputs,
-                            &TargetSpec::Aob(sig.clone()),
-                            &opts,
-                            &mut on_stage,
-                        );
+                        let spec = TargetSpec::Aob(sig.clone());
+                        let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                         SigJobResultView {
                             label: sig,
-                            report: Some(sig_report_view(&report)),
+                            report: Some(sig_report_view_with_holdout(
+                                &report, &inputs, &spec, &opts,
+                            )),
                             cross: None,
                             error: None,
                         }
@@ -1221,18 +1254,14 @@ fn run_generate_signature(
             }
             SigJob::Ref { ref_path, rva } => match (ref_index(ref_path), parse_rva(rva)) {
                 (Ok(idx), Ok(rva_val)) => {
-                    let report = generate_with_progress(
-                        &inputs,
-                        &TargetSpec::Ref {
-                            image: idx,
-                            rva: rva_val,
-                        },
-                        &opts,
-                        &mut on_stage,
-                    );
+                    let spec = TargetSpec::Ref {
+                        image: idx,
+                        rva: rva_val,
+                    };
+                    let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                     SigJobResultView {
                         label: format!("0x{rva_val:X}"),
-                        report: Some(sig_report_view(&report)),
+                        report: Some(sig_report_view_with_holdout(&report, &inputs, &spec, &opts)),
                         cross: None,
                         error: None,
                     }
@@ -1256,7 +1285,12 @@ fn run_generate_signature(
                         );
                         SigJobResultView {
                             label: format!("0x{rva_val:X}"),
-                            report: Some(sig_report_view(&cr.report)),
+                            report: Some(sig_report_view_with_holdout(
+                                &cr.report,
+                                &inputs,
+                                &TargetSpec::Aob(sig.clone()),
+                                &opts,
+                            )),
                             cross: Some(CrossView {
                                 expected_rva: format!("0x{:X}", cr.expected_rva),
                                 matched_rva: cr.matched_rva.map(|v| format!("0x{v:X}")),
