@@ -4,6 +4,7 @@ use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
 use crate::resolver::{self, Kind, ResolverSpec};
 use crate::scanner::{self, CompiledPattern, ScannerIndex};
+use crate::sigmaker::{ImageInput, resolve_string_anchor};
 use rayon::prelude::*;
 use std::hint::black_box;
 use std::time::Instant;
@@ -59,8 +60,10 @@ const RESOLVE_MARGIN: usize = 24;
 const SCAN_CHUNK: usize = 1 << 18;
 // Above this many patterns the per-pattern AVX2 scan (one buffer pass per pattern) is replaced by a
 // single-pass multi-pattern index, so cost grows with the buffer plus matches, not buffer times
-// pattern count. Below it the tuned AVX2 path is kept.
-const MULTI_PATTERN_THRESHOLD: usize = 64;
+// pattern count. The crossover is benchmark-driven (examples/scan_matrix.rs): on an 8 MiB code-like
+// buffer the index is roughly break-even at 10 patterns and 2x to 14x faster by 50, so 32 keeps the
+// well-tested AVX2 path for small sets while switching early enough to win on large ones.
+const MULTI_PATTERN_THRESHOLD: usize = 32;
 
 pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
@@ -73,7 +76,7 @@ pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -
 type Block = (usize, usize, Vec<u8>);
 
 fn resolve<S: MemorySource>(
-    kind: Kind,
+    spec: ResolverSpec,
     source: &S,
     module_base: usize,
     module_size: usize,
@@ -83,7 +86,7 @@ fn resolve<S: MemorySource>(
 ) -> Result<Resolved, FailureReason> {
     let addr_rva =
         |target: usize| checked_rva(target, module_base, module_size).map(Resolved::Addr);
-    match kind.spec() {
+    match spec {
         ResolverSpec::MatchAddress => addr_rva(addr),
         ResolverSpec::MemoryPointer => resolver::extract_pointer(bytes, addr, arch)
             .ok_or(FailureReason::Unresolved)
@@ -197,9 +200,9 @@ where
                 if let Some(index) = index.as_ref() {
                     index.scan(&buf, accept_len, |idx, off| {
                         let addr = base + off;
-                        let kind = compiled[idx].0;
+                        let spec = compiled[idx].0;
                         let outcome = resolve(
-                            kind,
+                            spec,
                             source,
                             module_base,
                             module_size,
@@ -214,7 +217,7 @@ where
                         });
                     });
                 } else {
-                    for (idx, (kind, cp)) in compiled.iter().enumerate() {
+                    for (idx, (spec, cp)) in compiled.iter().enumerate() {
                         let Some(cp) = cp else { continue };
                         if buf.len() < cp.len() {
                             continue;
@@ -225,7 +228,7 @@ where
                             }
                             let addr = base + off;
                             let outcome = resolve(
-                                *kind,
+                                *spec,
                                 source,
                                 module_base,
                                 module_size,
@@ -297,14 +300,16 @@ where
                     candidates: match_count,
                 }
             } else {
+                FindingStatus::FoundUnique
+            };
+            if status.is_exportable() {
                 findings.push(Finding {
                     name: base.to_string(),
                     category: category.clone(),
                     value,
                     is_offset,
                 });
-                FindingStatus::FoundUnique
-            };
+            }
             rows.push(PatternRow {
                 name: base.to_string(),
                 category,
@@ -349,16 +354,63 @@ where
     }
 }
 
-type CompiledPat = (Kind, Option<CompiledPattern>);
+type CompiledPat = (ResolverSpec, Option<CompiledPattern>);
 
 fn compile_patterns(patterns: &[Pattern]) -> Vec<CompiledPat> {
     patterns
         .iter()
         .map(|p| {
-            let (kind, _) = Kind::classify(&p.name);
-            (kind, CompiledPattern::new(&p.signature))
+            // An explicit schema sets the resolver kind directly; otherwise it is derived from the
+            // name suffix (the legacy form).
+            let spec = p
+                .resolve
+                .as_ref()
+                .map_or_else(|| Kind::classify(&p.name).0.spec(), |plan| plan.kind);
+            (spec, CompiledPattern::new(&p.signature))
         })
         .collect()
+}
+
+/// Resolve string-anchored patterns against an image view, live target or file, and fold the results
+/// into a [`ScanResult`] from [`scan`]. The byte scan leaves each empty-signature anchored pattern as
+/// a placeholder not-found row; this rewrites that row in place by index, so the one-row-per-pattern
+/// shape is preserved and a resolved anchor moves from not-found to found.
+pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns: &[Pattern]) {
+    for (idx, p) in patterns.iter().enumerate() {
+        let Some(anchor) = &p.string_anchor else {
+            continue;
+        };
+        let (_, base) = Kind::classify(&p.name);
+        let pattern = match &anchor.also {
+            Some(also) => format!("@string={} @also={also}", anchor.text),
+            None => format!("@string={}", anchor.text),
+        };
+        let resolved = resolve_string_anchor(img, anchor);
+        if let Some(row) = result.rows.get_mut(idx) {
+            row.pattern = pattern;
+            if let Some(rva) = resolved {
+                row.value = Some(rva as u64);
+                row.is_offset = true;
+                row.matches = 1;
+                row.status = FindingStatus::FoundUnique;
+            }
+        }
+        if let Some(rva) = resolved {
+            let category = p
+                .category
+                .clone()
+                .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+            result.not_found.retain(|n| n != &p.name);
+            result.found.push(p.name.clone());
+            result.total_matches += 1;
+            result.findings.push(Finding {
+                name: base.to_string(),
+                category,
+                value: rva as u64,
+                is_offset: true,
+            });
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -474,13 +526,13 @@ fn resolve_pass<S: MemorySource>(
     let mut acc = 0u64;
     let t = Instant::now();
     for p in found {
-        let kind = compiled[p.pat].0;
-        if kind == Kind::Call {
+        let spec = compiled[p.pat].0;
+        if spec == ResolverSpec::NestedCall {
             call_hits += 1;
         }
         let addr = bufs[p.buf].0 + p.off;
         let outcome = resolve(
-            kind,
+            spec,
             source,
             module_base,
             module_size,
@@ -663,6 +715,51 @@ mod tests {
                 .iter()
                 .all(|r| r.status == FindingStatus::FoundUnique)
         );
+    }
+
+    #[test]
+    fn resolves_a_string_anchored_pattern() {
+        let base = 0x1000usize;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100] = 0x68;
+        mem[0x101..0x105].copy_from_slice(&0x1010u32.to_le_bytes());
+        let source = BufferSource::new(base, mem);
+        let img = ImageInput {
+            label: String::new(),
+            source: &source,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let patterns = parse_patterns("Stat = @string=MapleStory", Arch::X86);
+        let regions = [Region { base, size: 0x200 }];
+        let mut result = scan(&source, base, 0x200, &regions, &patterns, Arch::X86);
+        assert_eq!(result.not_found, vec!["Stat".to_string()]);
+        apply_string_anchors(&mut result, &img, &patterns);
+        assert_eq!(result.found, vec!["Stat".to_string()]);
+        assert!(result.not_found.is_empty());
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].status, FindingStatus::FoundUnique);
+        let stat = result.findings.iter().find(|f| f.name == "Stat").unwrap();
+        assert_eq!(stat.value, 0x101);
+        assert!(stat.is_offset);
     }
 
     #[test]

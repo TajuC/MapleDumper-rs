@@ -1,6 +1,6 @@
 use crate::memory::MemorySource;
 use crate::pattern::Arch;
-use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind};
+use iced_x86::{Decoder, DecoderOptions, Instruction, OpKind, Register};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -41,17 +41,7 @@ impl Kind {
     }
 }
 
-/// How a matched site turns into a reported value. Today this is derived from the pattern name
-/// suffix via [`Kind::spec`], but it is an explicit type so behavior is driven by a value, not by a
-/// string, and a future pattern format can set it directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolverSpec {
-    MatchAddress,
-    MemoryPointer,
-    StructOffset,
-    Immediate,
-    NestedCall,
-}
+pub use crate::domain::ResolverSpec;
 
 fn bitness(arch: Arch) -> u32 {
     if matches!(arch, Arch::X64) { 64 } else { 32 }
@@ -59,10 +49,6 @@ fn bitness(arch: Arch) -> u32 {
 
 fn rel32(bytes: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
-}
-
-fn abs32(bytes: &[u8], at: usize) -> usize {
-    rel32(bytes, at) as u32 as usize
 }
 
 #[must_use]
@@ -94,62 +80,59 @@ pub fn decode_rel_target(bytes: &[u8], ip: usize) -> Option<usize> {
     None
 }
 
-fn decode_rip_relative(p: &[u8], ip: usize) -> Option<usize> {
-    if p.len() >= 7 && p[0] == 0x48 && (p[1] == 0x8B || p[1] == 0x8D) && (p[2] & 0xC7) == 0x05 {
-        return Some(ip.wrapping_add(7).wrapping_add_signed(rel32(p, 3) as isize));
+const MAX_PTR_INSTRS: usize = 8;
+
+// The target named by one instruction: a near branch, a RIP-relative memory operand, or (x86) an
+// absolute memory operand. None for anything else.
+fn instr_target(instr: &Instruction, arch: Arch) -> Option<usize> {
+    if matches!(
+        instr.op0_kind(),
+        OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+    ) {
+        return Some(instr.near_branch_target() as usize);
     }
-    if p.len() >= 8 && (p[0] & 0xF8) == 0x40 && p[1] == 0x83 && p[2] == 0x3D {
-        return Some(ip.wrapping_add(8).wrapping_add_signed(rel32(p, 3) as isize));
+    if !(0..instr.op_count()).any(|i| instr.op_kind(i) == OpKind::Memory) {
+        return None;
     }
-    if p.len() >= 8
-        && p[0] == 0xF2
-        && p[1] == 0x0F
-        && matches!(p[2], 0x10 | 0x58 | 0x59 | 0x5E)
-        && p[3] == 0x05
+    if instr.is_ip_rel_memory_operand() {
+        return Some(instr.ip_rel_memory_address() as usize);
+    }
+    if matches!(arch, Arch::X86)
+        && instr.memory_base() == Register::None
+        && instr.memory_index() == Register::None
     {
-        return Some(ip.wrapping_add(8).wrapping_add_signed(rel32(p, 4) as isize));
+        return Some(instr.memory_displacement64() as usize);
     }
     None
 }
 
-fn decode_absolute_x86(p: &[u8]) -> Option<usize> {
-    if p.len() >= 5 && p[0] == 0xA1 {
-        return Some(abs32(p, 1));
-    }
-    if p.len() >= 6 && (p[0] == 0x8B || p[0] == 0x8D) && (p[1] & 0xC7) == 0x05 {
-        return Some(abs32(p, 2));
-    }
-    if p.len() >= 7 && p[0] == 0x83 && p[1] == 0x3D {
-        return Some(abs32(p, 2));
-    }
-    if p.len() >= 8
-        && p[0] == 0xF2
-        && p[1] == 0x0F
-        && matches!(p[2], 0x10 | 0x58 | 0x59 | 0x5E)
-        && p[3] == 0x05
-    {
-        return Some(abs32(p, 4));
-    }
-    None
-}
-
+/// Resolve the target a `_PTR` pattern points at: a RIP-relative load or a rel jmp/call, or an
+/// absolute load on x86. Decodes whole instructions from the match site and reads real operands, so
+/// a displacement or immediate whose bytes merely look like a RIP-relative load is never mistaken
+/// for one (which a raw byte scan could do).
 #[must_use]
 pub fn extract_pointer(data: &[u8], instr_addr: usize, arch: Arch) -> Option<usize> {
     if data.len() < 2 {
         return None;
     }
-    for i in 0..data.len() {
-        let p = &data[i..];
-        let ip = instr_addr.wrapping_add(i);
-        if let Some(target) = decode_rel_target(p, ip) {
-            return Some(target);
+    let mut decoder =
+        Decoder::with_ip(bitness(arch), data, instr_addr as u64, DecoderOptions::NONE);
+    let mut instr = Instruction::default();
+    for _ in 0..MAX_PTR_INSTRS {
+        if !decoder.can_decode() {
+            break;
         }
-        let target = match arch {
-            Arch::X64 => decode_rip_relative(p, ip),
-            Arch::X86 => decode_absolute_x86(p),
-        };
-        if target.is_some() {
-            return target;
+        let start = decoder.position();
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() {
+            if decoder.set_position(start + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(instr_addr.wrapping_add(start + 1) as u64);
+            continue;
+        }
+        if let Some(target) = instr_target(&instr, arch) {
+            return Some(target);
         }
     }
     None
@@ -364,6 +347,14 @@ mod tests {
         assert_eq!(extract_pointer(&lea, 0x1000, Arch::X86), Some(0x1234_5678));
         let moffs = [0xA1, 0x78, 0x56, 0x34, 0x12];
         assert_eq!(extract_pointer(&moffs, 0, Arch::X86), Some(0x1234_5678));
+    }
+
+    #[test]
+    fn rip_relative_bytes_inside_an_immediate_do_not_resolve() {
+        // mov rax, 0x058B480D0D0D0D0D: the 8-byte immediate contains 48 8B 0D 05, which a byte scan
+        // would misread as a rip-relative mov. Decoding the real instruction must resolve nothing.
+        let bytes = [0x48, 0xB8, 0x0D, 0x0D, 0x0D, 0x0D, 0x48, 0x8B, 0x0D, 0x05];
+        assert_eq!(extract_pointer(&bytes, 0x1000, Arch::X64), None);
     }
 
     #[test]

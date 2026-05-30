@@ -224,11 +224,21 @@ fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
                 .category
                 .clone()
                 .unwrap_or_else(|| maple_core::categorizer::builtin_category(base).to_string());
+            let (r#type, aob) = match &p.string_anchor {
+                Some(anchor) => {
+                    let aob = match &anchor.also {
+                        Some(also) => format!("@string={} @also={also}", anchor.text),
+                        None => format!("@string={}", anchor.text),
+                    };
+                    ("string".to_string(), aob)
+                }
+                None => (kind_label(kind).to_string(), p.signature.to_aob()),
+            };
             PatternView {
                 name: p.name.clone(),
-                r#type: kind_label(kind).to_string(),
+                r#type,
                 category,
-                aob: p.signature.to_aob(),
+                aob,
                 note: p.note.clone().unwrap_or_default(),
             }
         })
@@ -284,7 +294,7 @@ fn run_scan(
     let bytes_scanned: u64 = regions.iter().map(|r| r.size as u64).sum();
     let region_count = regions.len();
     let scan_started = Instant::now();
-    let result = maple_core::scan(
+    let mut result = maple_core::scan(
         &target,
         target.module.base,
         target.module.size,
@@ -292,6 +302,23 @@ fn run_scan(
         &patterns,
         arch,
     );
+    if patterns.iter().any(|p| p.string_anchor.is_some()) {
+        let img = maple_core::ImageInput {
+            label: String::new(),
+            source: &target,
+            base: target.module.base,
+            size: target.module.size,
+            code_regions: target.code_regions(),
+            regions: target.regions(),
+            import: None,
+            arch,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        maple_core::apply_string_anchors(&mut result, &img, &patterns);
+    }
     let scan_ms = scan_started.elapsed().as_millis();
     let elapsed_ms = started.elapsed().as_millis();
 
@@ -680,6 +707,25 @@ fn history_builds(state: tauri::State<'_, AppState>) -> Result<Vec<history::Buil
     history::group_by_build(&conn).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+struct HistoryPage {
+    total: i64,
+    scans: Vec<history::ScanRow>,
+}
+
+#[tauri::command]
+fn history_page(
+    state: tauri::State<'_, AppState>,
+    limit: i64,
+    offset: i64,
+) -> Result<HistoryPage, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let total = history::count_scans(&conn).map_err(|e| e.to_string())?;
+    let scans = history::list_scans_page(&conn, limit.clamp(1, 500), offset.max(0))
+        .map_err(|e| e.to_string())?;
+    Ok(HistoryPage { total, scans })
+}
+
 #[tauri::command]
 fn history_findings(
     state: tauri::State<'_, AppState>,
@@ -944,6 +990,13 @@ struct SigInputView {
 }
 
 #[derive(Serialize)]
+struct SigHoldoutView {
+    held_out: String,
+    generated: bool,
+    matched: bool,
+}
+
+#[derive(Serialize)]
 struct SigReportView {
     arch: String,
     unique_builds: usize,
@@ -953,6 +1006,7 @@ struct SigReportView {
     alternates: Vec<SigCandView>,
     rejected: Vec<SigCandView>,
     diagnostics: Vec<String>,
+    holdout: Vec<SigHoldoutView>,
 }
 
 #[derive(Serialize)]
@@ -1035,7 +1089,34 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         alternates: r.alternates.iter().map(sig_cand_view).collect(),
         rejected: r.rejected.iter().map(sig_cand_view).collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
+        holdout: Vec::new(),
     }
+}
+
+fn holdout_views(
+    inputs: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> Vec<SigHoldoutView> {
+    maple_core::holdout_validate(inputs, spec, opts)
+        .into_iter()
+        .map(|h| SigHoldoutView {
+            held_out: h.held_out,
+            generated: h.generated,
+            matched: h.matched_holdout,
+        })
+        .collect()
+}
+
+fn sig_report_view_with_holdout(
+    r: &SigReport,
+    inputs: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> SigReportView {
+    let mut view = sig_report_view(r);
+    view.holdout = holdout_views(inputs, spec, opts);
+    view
 }
 
 #[tauri::command]
@@ -1185,15 +1266,13 @@ fn run_generate_signature(
                 match try_signature_from_aob(&sig) {
                     Err(e) => job_error(sig.clone(), format!("invalid signature: {e}")),
                     Ok(_) => {
-                        let report = generate_with_progress(
-                            &inputs,
-                            &TargetSpec::Aob(sig.clone()),
-                            &opts,
-                            &mut on_stage,
-                        );
+                        let spec = TargetSpec::Aob(sig.clone());
+                        let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                         SigJobResultView {
                             label: sig,
-                            report: Some(sig_report_view(&report)),
+                            report: Some(sig_report_view_with_holdout(
+                                &report, &inputs, &spec, &opts,
+                            )),
                             cross: None,
                             error: None,
                         }
@@ -1202,18 +1281,14 @@ fn run_generate_signature(
             }
             SigJob::Ref { ref_path, rva } => match (ref_index(ref_path), parse_rva(rva)) {
                 (Ok(idx), Ok(rva_val)) => {
-                    let report = generate_with_progress(
-                        &inputs,
-                        &TargetSpec::Ref {
-                            image: idx,
-                            rva: rva_val,
-                        },
-                        &opts,
-                        &mut on_stage,
-                    );
+                    let spec = TargetSpec::Ref {
+                        image: idx,
+                        rva: rva_val,
+                    };
+                    let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                     SigJobResultView {
                         label: format!("0x{rva_val:X}"),
-                        report: Some(sig_report_view(&report)),
+                        report: Some(sig_report_view_with_holdout(&report, &inputs, &spec, &opts)),
                         cross: None,
                         error: None,
                     }
@@ -1237,7 +1312,12 @@ fn run_generate_signature(
                         );
                         SigJobResultView {
                             label: format!("0x{rva_val:X}"),
-                            report: Some(sig_report_view(&cr.report)),
+                            report: Some(sig_report_view_with_holdout(
+                                &cr.report,
+                                &inputs,
+                                &TargetSpec::Aob(sig.clone()),
+                                &opts,
+                            )),
                             cross: Some(CrossView {
                                 expected_rva: format!("0x{:X}", cr.expected_rva),
                                 matched_rva: cr.matched_rva.map(|v| format!("0x{v:X}")),
@@ -1305,6 +1385,7 @@ fn main() {
             export_text,
             diff_dumps,
             history_builds,
+            history_page,
             history_findings,
             history_diff,
             history_delete,

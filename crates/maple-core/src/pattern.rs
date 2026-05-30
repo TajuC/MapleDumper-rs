@@ -1,3 +1,5 @@
+use crate::domain::{ExpectedHits, ResolvePlan, ResolverSpec, SectionKind, StringAnchor};
+use crate::resolver::Kind;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -47,6 +49,12 @@ pub struct Pattern {
     pub category: Option<String>,
     pub note: Option<String>,
     pub signature: Signature,
+    /// An explicit, typed resolution plan from a pattern schema. `None` means the resolver kind is
+    /// derived from the name suffix (the legacy form).
+    pub resolve: Option<ResolvePlan>,
+    /// A string-anchored target (located by referenced strings, not bytes). When set, `signature` is
+    /// empty and the engine resolves this by string reference instead of scanning.
+    pub string_anchor: Option<StringAnchor>,
 }
 
 enum Token {
@@ -164,6 +172,92 @@ fn split_name_aob(line: &str) -> Option<(String, String, String)> {
     Some((name.to_string(), aob.to_string(), note.to_string()))
 }
 
+// Split `@key=value` schema directives out of an AOB, returning the AOB without them and the
+// directive list. Tokens without a leading `@` are signature bytes.
+fn split_directives(aob: &str) -> (String, Vec<(String, String)>) {
+    let mut sig = Vec::new();
+    let mut directives = Vec::new();
+    for tok in aob.split_whitespace() {
+        if let Some(rest) = tok.strip_prefix('@') {
+            let (k, v) = rest.split_once('=').unwrap_or((rest, ""));
+            directives.push((k.to_ascii_lowercase(), v.to_string()));
+        } else {
+            sig.push(tok);
+        }
+    }
+    (sig.join(" "), directives)
+}
+
+// Build a typed resolve plan from schema directives. With no directives the resolver kind stays
+// derived from the name suffix (returns `None`). A directive sets the kind explicitly and refines
+// how the target is read and validated.
+fn build_resolve_plan(
+    name: &str,
+    directives: &[(String, String)],
+) -> Result<Option<ResolvePlan>, String> {
+    if directives.is_empty() {
+        return Ok(None);
+    }
+    let (suffix_kind, _) = Kind::classify(name);
+    let mut plan = ResolvePlan::new(suffix_kind.spec());
+    for (k, v) in directives {
+        match k.as_str() {
+            "kind" => {
+                plan.kind = ResolverSpec::from_keyword(v)
+                    .ok_or_else(|| format!("unknown resolver kind '{v}'"))?;
+            }
+            "instr" | "instruction" => {
+                plan.instruction_offset = v
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid instruction offset '{v}'"))?;
+            }
+            "operand" => {
+                plan.operand_index = Some(
+                    v.trim()
+                        .parse()
+                        .map_err(|_| format!("invalid operand index '{v}'"))?,
+                );
+            }
+            "section" => {
+                plan.expected_section = Some(
+                    SectionKind::from_keyword(v).ok_or_else(|| format!("unknown section '{v}'"))?,
+                );
+            }
+            "hits" => {
+                plan.expected_hits =
+                    ExpectedHits::from_keyword(v).ok_or_else(|| format!("invalid hits '{v}'"))?;
+            }
+            other => return Err(format!("unknown directive '@{other}'")),
+        }
+    }
+    Ok(Some(plan))
+}
+
+fn build_string_anchor(directives: &[(String, String)]) -> Option<StringAnchor> {
+    let find = |key: &str| {
+        directives
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    find("string")
+        .filter(|t| !t.is_empty())
+        .map(|text| StringAnchor {
+            text,
+            also: find("also").filter(|t| !t.is_empty()),
+        })
+}
+
+fn partition_anchor_directives(
+    directives: Vec<(String, String)>,
+) -> (Option<StringAnchor>, Vec<(String, String)>) {
+    let (anchor, resolve): (Vec<_>, Vec<_>) = directives
+        .into_iter()
+        .partition(|(k, _)| matches!(k.as_str(), "string" | "also"));
+    (build_string_anchor(&anchor), resolve)
+}
+
 #[must_use]
 pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -196,13 +290,18 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
             continue;
         }
         if let Some((name, aob, note)) = split_name_aob(line) {
+            let (aob, directives) = split_directives(&aob);
+            let (string_anchor, directives) = partition_anchor_directives(directives);
+            let resolve = build_resolve_plan(&name, &directives).ok().flatten();
             let signature = parse_signature(&aob);
-            if !signature.is_empty() {
+            if !signature.is_empty() || string_anchor.is_some() {
                 out.push(Pattern {
                     name,
                     category: category.clone(),
                     note: (!note.is_empty()).then_some(note),
                     signature,
+                    resolve,
+                    string_anchor,
                 });
             }
         }
@@ -309,6 +408,43 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
             continue;
         };
 
+        let (aob, directives) = split_directives(&aob);
+        let (string_anchor, directives) = partition_anchor_directives(directives);
+        if let Some(anchor) = string_anchor {
+            if let Some(prev) = seen_names.get(&name) {
+                issues.push(ParseIssue {
+                    line: line_no,
+                    severity: ParseSeverity::Error,
+                    message: format!("duplicate pattern name '{name}' (first seen on line {prev})"),
+                });
+                continue;
+            }
+            seen_names.insert(name.clone(), line_no);
+            out.push(Pattern {
+                name,
+                category: category.clone(),
+                note: (!note.is_empty()).then_some(note),
+                signature: Signature {
+                    bytes: Vec::new(),
+                    mask: Vec::new(),
+                },
+                resolve: None,
+                string_anchor: Some(anchor),
+            });
+            continue;
+        }
+        let resolve = match build_resolve_plan(&name, &directives) {
+            Ok(plan) => plan,
+            Err(msg) => {
+                issues.push(ParseIssue {
+                    line: line_no,
+                    severity: ParseSeverity::Error,
+                    message: format!("{name}: {msg}"),
+                });
+                continue;
+            }
+        };
+
         let mut bytes = Vec::new();
         let mut mask = Vec::new();
         let mut token_error = false;
@@ -386,6 +522,8 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
             category: category.clone(),
             note: (!note.is_empty()).then_some(note),
             signature,
+            resolve,
+            string_anchor: None,
         });
     }
 
@@ -616,5 +754,80 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.patterns.len(), 2);
         assert!(parsed.warnings.is_empty());
+    }
+
+    #[test]
+    fn schema_kind_overrides_the_suffix() {
+        let parsed = parse_patterns_strict("Foo_CALL = AA BB CC DD @kind=ptr", Arch::X64).unwrap();
+        assert_eq!(
+            parsed.patterns[0].resolve.as_ref().unwrap().kind,
+            ResolverSpec::MemoryPointer
+        );
+    }
+
+    #[test]
+    fn schema_refinements_parse() {
+        let parsed = parse_patterns_strict(
+            "Foo = AA BB CC DD @kind=ptr @section=code @hits=unique @instr=1 @operand=0",
+            Arch::X64,
+        )
+        .unwrap();
+        let plan = parsed.patterns[0].resolve.as_ref().unwrap();
+        assert_eq!(plan.kind, ResolverSpec::MemoryPointer);
+        assert_eq!(plan.expected_section, Some(SectionKind::Code));
+        assert_eq!(plan.expected_hits, ExpectedHits::Unique);
+        assert_eq!(plan.instruction_offset, 1);
+        assert_eq!(plan.operand_index, Some(0));
+    }
+
+    #[test]
+    fn schema_unknown_directive_is_an_error() {
+        assert!(parse_patterns_strict("Foo = AA BB CC DD @kind=bogus", Arch::X64).is_err());
+        assert!(parse_patterns_strict("Foo = AA BB CC DD @whatever=1", Arch::X64).is_err());
+    }
+
+    #[test]
+    fn no_directives_means_legacy_suffix() {
+        let parsed = parse_patterns_strict("Foo_PTR = AA BB CC DD", Arch::X64).unwrap();
+        assert!(parsed.patterns[0].resolve.is_none());
+    }
+
+    #[test]
+    fn directives_are_stripped_from_the_signature() {
+        let p = parse_patterns("Foo = AA BB @kind=call CC DD", Arch::X64);
+        assert_eq!(p[0].signature.bytes.len(), 4);
+        assert_eq!(
+            p[0].resolve.as_ref().unwrap().kind,
+            ResolverSpec::NestedCall
+        );
+    }
+
+    #[test]
+    fn parses_a_string_anchored_pattern() {
+        let pats = parse_patterns("Stat = @string=UI/UIWindow2.img/Stat", Arch::X86);
+        assert_eq!(pats.len(), 1);
+        let anchor = pats[0].string_anchor.as_ref().unwrap();
+        assert_eq!(anchor.text, "UI/UIWindow2.img/Stat");
+        assert!(anchor.also.is_none());
+        assert!(pats[0].signature.is_empty());
+    }
+
+    #[test]
+    fn parses_a_paired_string_anchor() {
+        let pats = parse_patterns("Stat = @string=pathA @also=pathB", Arch::X86);
+        let anchor = pats[0].string_anchor.as_ref().unwrap();
+        assert_eq!(anchor.text, "pathA");
+        assert_eq!(anchor.also.as_deref(), Some("pathB"));
+    }
+
+    #[test]
+    fn strict_accepts_a_string_anchored_pattern() {
+        let parsed = parse_patterns_strict("Stat = @string=UI/Foo", Arch::X86).unwrap();
+        assert_eq!(parsed.patterns.len(), 1);
+        assert_eq!(
+            parsed.patterns[0].string_anchor.as_ref().unwrap().text,
+            "UI/Foo"
+        );
+        assert!(parsed.patterns[0].signature.is_empty());
     }
 }

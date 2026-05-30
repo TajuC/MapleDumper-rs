@@ -76,46 +76,85 @@ pub fn default_db_path() -> PathBuf {
     dir.join("history.db")
 }
 
-fn init(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA foreign_keys=ON;
-         CREATE TABLE IF NOT EXISTS scans (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           created_at INTEGER NOT NULL,
-           module TEXT NOT NULL,
-           module_base TEXT NOT NULL,
-           arch TEXT NOT NULL,
-           build_hash TEXT NOT NULL,
-           build_version TEXT,
-           build_timestamp INTEGER NOT NULL,
-           bytes INTEGER NOT NULL,
-           regions INTEGER NOT NULL,
-           found INTEGER NOT NULL,
-           unresolved INTEGER NOT NULL,
-           not_found INTEGER NOT NULL,
-           total_matches INTEGER NOT NULL,
-           scan_ms INTEGER NOT NULL,
-           result_hash TEXT
-         );
-         CREATE TABLE IF NOT EXISTS findings (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-           name TEXT NOT NULL,
-           category TEXT NOT NULL,
-           value TEXT,
-           is_offset INTEGER NOT NULL,
-           status TEXT NOT NULL,
-           matches INTEGER NOT NULL,
-           note TEXT NOT NULL,
-           bytes TEXT
-         );
-         CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
-         CREATE INDEX IF NOT EXISTS idx_scans_build ON scans(build_hash);",
-    )?;
-    let _ = conn.execute("ALTER TABLE scans ADD COLUMN result_hash TEXT", []);
-    let _ = conn.execute("ALTER TABLE findings ADD COLUMN bytes TEXT", []);
+const SCHEMA_VERSION: i64 = 2;
+
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    let mut version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    if version < 1 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scans (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               created_at INTEGER NOT NULL,
+               module TEXT NOT NULL,
+               module_base TEXT NOT NULL,
+               arch TEXT NOT NULL,
+               build_hash TEXT NOT NULL,
+               build_version TEXT,
+               build_timestamp INTEGER NOT NULL,
+               bytes INTEGER NOT NULL,
+               regions INTEGER NOT NULL,
+               found INTEGER NOT NULL,
+               unresolved INTEGER NOT NULL,
+               not_found INTEGER NOT NULL,
+               total_matches INTEGER NOT NULL,
+               scan_ms INTEGER NOT NULL,
+               result_hash TEXT
+             );
+             CREATE TABLE IF NOT EXISTS findings (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+               name TEXT NOT NULL,
+               category TEXT NOT NULL,
+               value TEXT,
+               is_offset INTEGER NOT NULL,
+               status TEXT NOT NULL,
+               matches INTEGER NOT NULL,
+               note TEXT NOT NULL,
+               bytes TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
+             CREATE INDEX IF NOT EXISTS idx_scans_build ON scans(build_hash);
+             CREATE INDEX IF NOT EXISTS idx_scans_created ON scans(created_at DESC, id DESC);",
+        )?;
+        // A database created before versioning may predate these two columns.
+        add_column_if_missing(conn, "scans", "result_hash", "TEXT")?;
+        add_column_if_missing(conn, "findings", "bytes", "TEXT")?;
+        version = 1;
+    }
+    if version < 2 {
+        // The content hash moved from FNV-1a to BLAKE3, which are not comparable. Clear the old
+        // digests so a stale value can never collide with a new query and dedup two real scans.
+        conn.execute("UPDATE scans SET result_hash = NULL", [])?;
+        version = 2;
+    }
+
+    conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+    debug_assert_eq!(version, SCHEMA_VERSION);
     Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    ty: &str,
+) -> rusqlite::Result<()> {
+    let present = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !present {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"), [])?;
+    }
+    Ok(())
+}
+
+#[must_use]
+pub fn content_hash(data: &[u8]) -> String {
+    blake3::hash(data).to_hex().to_string()
 }
 
 fn result_hash(scan: &NewScan, findings: &[NewFinding]) -> String {
@@ -141,24 +180,19 @@ fn result_hash(scan: &NewScan, findings: &[NewFinding]) -> String {
         scan.arch,
         parts.join("\u{2}")
     );
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in canonical.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016X}")
+    content_hash(canonical.as_bytes())
 }
 
 pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
-    init(&conn)?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
 #[must_use]
 pub fn open_memory() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory database");
-    let _ = init(&conn);
+    let _ = migrate(&conn);
     conn
 }
 
@@ -233,6 +267,24 @@ pub fn list_scans(conn: &Connection) -> rusqlite::Result<Vec<ScanRow>> {
          FROM scans ORDER BY created_at DESC, id DESC",
     )?;
     let rows = stmt.query_map([], map_scan_row)?;
+    rows.collect()
+}
+
+pub fn count_scans(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM scans", [], |r| r.get(0))
+}
+
+pub fn list_scans_page(
+    conn: &Connection,
+    limit: i64,
+    offset: i64,
+) -> rusqlite::Result<Vec<ScanRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, created_at, module, arch, module_base, build_hash, build_version,
+            found, not_found, total_matches, bytes, scan_ms
+         FROM scans ORDER BY created_at DESC, id DESC LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = stmt.query_map(params![limit, offset], map_scan_row)?;
     rows.collect()
 }
 
@@ -394,5 +446,56 @@ mod tests {
         assert_eq!(scan_row(&conn, id1).unwrap().unwrap().build_hash, "AAAA");
         assert_eq!(scan_row(&conn, id2).unwrap().unwrap().build_hash, "BBBB");
         assert!(scan_row(&conn, 9999).unwrap().is_none());
+    }
+
+    #[test]
+    fn migration_stamps_the_schema_version() {
+        let conn = open_memory();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let conn = open_memory();
+        // Running it again must not error or change the version.
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn content_hash_is_blake3_and_distinguishes_inputs() {
+        let h = content_hash(b"abc");
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, blake3::hash(b"abc").to_hex().to_string());
+        assert_ne!(content_hash(b"abc"), content_hash(b"abd"));
+    }
+
+    #[test]
+    fn pagination_slices_in_recency_order() {
+        let mut conn = open_memory();
+        for k in 0..5 {
+            let mut s = scan("AAAA");
+            s.created_at = i64::from(k);
+            insert_scan(&mut conn, &s, &[finding("Foo", Some(&format!("0x{k}")))]).unwrap();
+        }
+        assert_eq!(count_scans(&conn).unwrap(), 5);
+        let first_two = list_scans_page(&conn, 2, 0).unwrap();
+        assert_eq!(first_two.len(), 2);
+        // newest first: created_at 4 then 3
+        assert_eq!(first_two[0].created_at, 4);
+        assert_eq!(first_two[1].created_at, 3);
+        let next_two = list_scans_page(&conn, 2, 2).unwrap();
+        assert_eq!(next_two[0].created_at, 2);
+        let tail = list_scans_page(&conn, 10, 4).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].created_at, 0);
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::fileimage::{RelocKind, RelocLookup};
 use crate::memory::{MemorySource, Region};
 use crate::pattern::{Arch, Signature, try_signature_from_aob};
@@ -158,6 +160,7 @@ impl Default for SigOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct ImageInput<'a> {
     pub label: String,
     pub source: &'a dyn MemorySource,
@@ -222,6 +225,50 @@ pub struct InputInfo {
     pub label: String,
     pub packed: bool,
     pub reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NegativeHit {
+    pub label: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HoldoutResult {
+    pub held_out: String,
+    pub generated: bool,
+    pub matched_holdout: bool,
+}
+
+/// The reliably detectable identity of a client build: arch, pack state, code size, and code hash.
+/// A human variant label (GMS, KMS, a private fork) stays operator-supplied, not derived here.
+#[derive(Clone, Debug)]
+pub struct BuildProfile {
+    pub arch: Arch,
+    pub packed: bool,
+    pub code_bytes: usize,
+    pub code_hash: u64,
+}
+
+impl BuildProfile {
+    #[must_use]
+    pub fn of(img: &ImageInput) -> Self {
+        Self {
+            arch: img.arch,
+            packed: img.packed,
+            code_bytes: img.code_regions.iter().map(|r| r.size).sum(),
+            code_hash: img.code_hash,
+        }
+    }
+
+    /// Same lane = same arch and pack state; a cross-version comparison must not cross either.
+    #[must_use]
+    pub fn same_variant(&self, other: &Self) -> bool {
+        matches!(
+            (self.arch, other.arch),
+            (Arch::X64, Arch::X64) | (Arch::X86, Arch::X86)
+        ) && self.packed == other.packed
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -294,6 +341,78 @@ impl CodeCache {
         }
         (count, first)
     }
+}
+
+/// Scan a corpus of unrelated modules for `aob` and report any that contain it. Generation only
+/// proves a signature is unique among the supplied builds, so a short or low-entropy pattern can
+/// still collide inside some other module; a hit here means the signature is not specific enough to
+/// trust as an identity. Returns one entry per negative image that matched, with the match count.
+#[must_use]
+pub fn negative_corpus_hits(aob: &str, negatives: &[ImageInput]) -> Vec<NegativeHit> {
+    let Some(pat) = crate::pattern::try_signature_from_aob(aob)
+        .ok()
+        .and_then(|sig| CompiledPattern::new(&sig))
+    else {
+        return Vec::new();
+    };
+    negatives
+        .iter()
+        .filter_map(|img| {
+            let (count, _) = CodeCache::build(img).locate(&pat);
+            (count > 0).then_some(NegativeHit {
+                label: img.label.clone(),
+                count,
+            })
+        })
+        .collect()
+}
+
+/// Leave-one-out validation: for each build, regenerate the signature from the others and check it
+/// still uniquely matches the held-out build. Generation only proves a signature fits the builds it
+/// was trained on; a signature that fits those but fails a build it never saw is overfit to the
+/// corpus. Needs at least three builds (two to train on, one to hold out) and returns one result per
+/// eligible held-out build. A reference build that defines the target cannot itself be held out.
+#[must_use]
+pub fn holdout_validate(
+    images: &[ImageInput],
+    spec: &TargetSpec,
+    opts: &SigOptions,
+) -> Vec<HoldoutResult> {
+    if images.len() < 3 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for i in 0..images.len() {
+        let adjusted = match spec {
+            TargetSpec::Aob(s) => TargetSpec::Aob(s.clone()),
+            TargetSpec::Ref { image, rva } => {
+                if i == *image {
+                    continue; // the reference defines the target, so it cannot be held out
+                }
+                let image = if i < *image { image - 1 } else { *image };
+                TargetSpec::Ref { image, rva: *rva }
+            }
+        };
+        let train: Vec<ImageInput> = images
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, img)| img.clone())
+            .collect();
+        let report = generate(&train, &adjusted, opts);
+        let matched = report.chosen.as_ref().is_some_and(|c| {
+            crate::pattern::try_signature_from_aob(&c.aob)
+                .ok()
+                .and_then(|sig| CompiledPattern::new(&sig))
+                .is_some_and(|pat| CodeCache::build(&images[i]).locate(&pat).0 == 1)
+        });
+        out.push(HoldoutResult {
+            held_out: images[i].label.clone(),
+            generated: report.chosen.is_some(),
+            matched_holdout: matched,
+        });
+    }
+    out
 }
 
 struct InstrMask {
@@ -429,26 +548,327 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
-// Masked fingerprint of a callee's entry, so the same function matches across builds despite relocations.
-fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    // A 2-instruction prologue is too generic to tell functions apart across builds, so decode a
-    // longer window and fold the instruction count in. Operand bytes stay masked, so a relocation
-    // or a shifted call target inside the callee does not change its identity.
-    let bytes = read_at(img.source, img.base, target_rva, 48);
-    let decoded = decode_masked(&bytes, img.arch, img.base, target_rva, img.reloc, 8);
-    let mut fp: Vec<u8> = Vec::new();
-    let mut off = 0;
-    for im in &decoded {
-        for k in 0..im.len {
-            fp.push(if im.fixed[k] {
-                bytes.get(off + k).copied().unwrap_or(0)
-            } else {
-                0xFF
-            });
-        }
-        off += im.len;
+const ID_WINDOW: usize = 256;
+const ID_MAX_INSTRS: usize = 24;
+
+/// Recompile-stable identity of a function entry: mnemonic stream, CFG-lite block count, distinctive
+/// constants, and referenced strings. The cross-build consistency check compares these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FnIdentity {
+    pub instr_count: usize,
+    pub blocks: usize,
+    pub calls: usize,
+    pub branches: usize,
+    pub returns: usize,
+    pub constants: Vec<u64>,
+    pub strings: Vec<String>,
+    mnemonics: Vec<u32>,
+}
+
+fn fnv_fold(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    format!("{}:{fp:02X?}", decoded.len())
+}
+
+fn is_immediate_kind(k: OpKind) -> bool {
+    matches!(
+        k,
+        OpKind::Immediate8
+            | OpKind::Immediate8_2nd
+            | OpKind::Immediate16
+            | OpKind::Immediate32
+            | OpKind::Immediate64
+            | OpKind::Immediate8to16
+            | OpKind::Immediate8to32
+            | OpKind::Immediate8to64
+            | OpKind::Immediate32to64
+    )
+}
+
+fn in_image(img: &ImageInput, v: u64) -> bool {
+    (img.base as u64..(img.base + img.size) as u64).contains(&v)
+}
+
+// Tuned: below this, an immediate is a stack or struct offset, not an identifying magic number.
+fn is_distinctive_const(v: u64) -> bool {
+    (v as i64).unsigned_abs() > 0xFFFF && v != u64::MAX
+}
+
+fn read_string_ref(img: &ImageInput, abs: usize) -> Option<String> {
+    let rva = abs.checked_sub(img.base).filter(|&r| r < img.size)?;
+    let bytes = read_at(img.source, img.base, rva, 64);
+    let printable = |b: u8| (0x20..=0x7E).contains(&b);
+    let ascii: String = bytes
+        .iter()
+        .copied()
+        .take_while(|&b| printable(b))
+        .map(char::from)
+        .take(48)
+        .collect();
+    if ascii.len() >= 4 {
+        return Some(ascii);
+    }
+    let wide: String = bytes
+        .chunks_exact(2)
+        .take_while(|c| c[1] == 0 && printable(c[0]))
+        .map(|c| char::from(c[0]))
+        .take(48)
+        .collect();
+    (wide.len() >= 4).then_some(wide)
+}
+
+#[must_use]
+pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
+    let bytes = read_at(img.source, img.base, target_rva, ID_WINDOW);
+    let ip0 = (img.base + target_rva) as u64;
+    let end_ip = ip0 + bytes.len() as u64;
+    let mut decoder = Decoder::with_ip(bitness(img.arch), &bytes, ip0, DecoderOptions::NONE);
+    let mut instr = Instruction::default();
+    let mut mnemonics: Vec<u32> = Vec::new();
+    let mut constants: Vec<u64> = Vec::new();
+    let mut strings: Vec<String> = Vec::new();
+    let mut blocks: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    let (mut calls, mut branches, mut returns) = (0usize, 0usize, 0usize);
+    blocks.insert(ip0);
+    while decoder.can_decode() && mnemonics.len() < ID_MAX_INSTRS {
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() || instr.len() == 0 {
+            break;
+        }
+        mnemonics.push(instr.mnemonic() as u32);
+        let immediates = (0..instr.op_count())
+            .filter(|&i| is_immediate_kind(instr.op_kind(i)))
+            .map(|i| instr.immediate(i));
+        let refs = immediates.chain(mem_target(&instr, img.arch).map(|a| a as u64));
+        for v in refs {
+            if let Some(s) = read_string_ref(img, v as usize) {
+                strings.push(s);
+            } else if !in_image(img, v) && is_distinctive_const(v) {
+                constants.push(v);
+            }
+        }
+        match instr.flow_control() {
+            FlowControl::Call | FlowControl::IndirectCall => calls += 1,
+            FlowControl::ConditionalBranch => {
+                branches += 1;
+                let t = instr.near_branch_target();
+                if (ip0..end_ip).contains(&t) {
+                    blocks.insert(t);
+                }
+                blocks.insert(instr.next_ip());
+            }
+            FlowControl::UnconditionalBranch => {
+                branches += 1;
+                let t = instr.near_branch_target();
+                if (ip0..end_ip).contains(&t) {
+                    blocks.insert(t);
+                }
+            }
+            FlowControl::Return => {
+                returns += 1;
+                break;
+            }
+            _ => {}
+        }
+    }
+    constants.sort_unstable();
+    constants.dedup();
+    strings.sort();
+    strings.dedup();
+    FnIdentity {
+        instr_count: mnemonics.len(),
+        blocks: blocks.len(),
+        calls,
+        branches,
+        returns,
+        constants,
+        strings,
+        mnemonics,
+    }
+}
+
+impl FnIdentity {
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for m in &self.mnemonics {
+            fnv_fold(&mut h, &m.to_le_bytes());
+        }
+        for c in &self.constants {
+            fnv_fold(&mut h, &c.to_le_bytes());
+        }
+        for s in &self.strings {
+            fnv_fold(&mut h, s.as_bytes());
+            fnv_fold(&mut h, &[0]);
+        }
+        format!(
+            "{}:{:016X}:b{}c{}j{}r{}",
+            self.instr_count, h, self.blocks, self.calls, self.branches, self.returns
+        )
+    }
+}
+
+fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
+    fn_identity(img, target_rva).fingerprint()
+}
+
+/// Approximate references to `target_rva`: rel32 call/jmp and x64 rip-relative lea landing on the
+/// entry. A byte scan, so it can miscount at a boundary; kept out of the fingerprint since the
+/// referencing code shifts per build, but a useful "hot function" signal on its own.
+#[must_use]
+pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
+    let target = (img.base + target_rva) as i64;
+    let rel32 = |w: &[u8]| i32::from_le_bytes([w[0], w[1], w[2], w[3]]) as i64;
+    let x64 = matches!(img.arch, Arch::X64);
+    img.code_regions
+        .iter()
+        .map(|region| {
+            let bytes = read_region(img.source, region.base, region.size);
+            let calls = bytes
+                .windows(5)
+                .enumerate()
+                .filter(|(i, w)| {
+                    matches!(w[0], 0xE8 | 0xE9)
+                        && (region.base + i + 5) as i64 + rel32(&w[1..]) == target
+                })
+                .count();
+            let leas = bytes
+                .windows(7)
+                .enumerate()
+                .filter(|(j, w)| {
+                    x64 && w[0] == 0x48
+                        && w[1] == 0x8D
+                        && w[2] & 0xC7 == 0x05
+                        && (region.base + j + 7) as i64 + rel32(&w[3..]) == target
+                })
+                .count();
+            calls + leas
+        })
+        .sum()
+}
+
+pub use crate::domain::StringAnchor;
+
+fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
+    let ascii = text.as_bytes();
+    let utf16: Vec<u8> = ascii.iter().flat_map(|&b| [b, 0]).collect();
+    img.regions.iter().find_map(|r| {
+        let bytes = read_region(img.source, r.base, r.size);
+        [ascii, &utf16]
+            .into_iter()
+            .find_map(|needle| bytes.windows(needle.len()).position(|w| w == needle))
+            .map(|pos| r.base + pos)
+    })
+}
+
+fn string_ref_sites(bytes: &[u8], base: usize, data_abs: usize, arch: Arch) -> Vec<usize> {
+    match arch {
+        Arch::X86 => {
+            let key = (data_abs as u32).to_le_bytes();
+            bytes
+                .windows(4)
+                .enumerate()
+                .filter(|(_, w)| *w == key)
+                .map(|(i, _)| base + i)
+                .collect()
+        }
+        Arch::X64 => bytes
+            .windows(7)
+            .enumerate()
+            .filter_map(|(i, w)| {
+                let lea = w[0] & 0xFB == 0x48 && w[1] == 0x8D && w[2] & 0xC7 == 0x05;
+                let disp = i32::from_le_bytes([w[3], w[4], w[5], w[6]]) as i64;
+                (lea && (base + i + 7) as i64 + disp == data_abs as i64).then_some(base + i)
+            })
+            .collect(),
+    }
+}
+
+fn xref_sites(img: &ImageInput, data_abs: usize) -> Vec<usize> {
+    img.code_regions
+        .iter()
+        .flat_map(|region| {
+            let bytes = read_region(img.source, region.base, region.size);
+            string_ref_sites(&bytes, region.base, data_abs, img.arch)
+        })
+        .collect()
+}
+
+// Walk back to the nearest standard x86 frame prologue so an anchor resolves to the function entry,
+// not the mid-body reference. This also collapses several references inside one function to a single
+// site. x64 prologues vary too much to pin this way, so there the reference site stands.
+fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
+    if !matches!(img.arch, Arch::X86) {
+        return site_rva;
+    }
+    let start = site_rva.saturating_sub(1024);
+    let bytes = read_at(img.source, img.base, start, site_rva - start + 3);
+    bytes
+        .windows(3)
+        .enumerate()
+        .rev()
+        .find(|(_, w)| *w == [0x55, 0x8B, 0xEC])
+        .map_or(site_rva, |(i, _)| start + i)
+}
+
+fn functions_referencing(img: &ImageInput, text: &str) -> Option<BTreeSet<usize>> {
+    let data_abs = find_string_in_data(img, text)?;
+    let set: BTreeSet<usize> = xref_sites(img, data_abs)
+        .into_iter()
+        .map(|site| enclosing_function(img, site - img.base))
+        .collect();
+    (!set.is_empty()).then_some(set)
+}
+
+fn only(set: BTreeSet<usize>) -> Option<usize> {
+    let mut it = set.into_iter();
+    it.next().filter(|_| it.next().is_none())
+}
+
+#[must_use]
+pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
+    let primary = functions_referencing(img, &anchor.text)?;
+    match &anchor.also {
+        None => only(primary),
+        Some(second) => {
+            let secondary = functions_referencing(img, second)?;
+            only(primary.intersection(&secondary).copied().collect())
+        }
+    }
+}
+
+/// Build a string anchor for the function at `target_rva`. Prefers a single string that already pins
+/// down one enclosing function (longest first); failing that, a pair whose referencing sets intersect
+/// to exactly that function. Returns `None` if its strings cannot isolate it.
+#[must_use]
+pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringAnchor> {
+    let mut strings = fn_identity(img, target_rva).strings;
+    strings.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    strings.truncate(6);
+    let sets: Vec<(String, BTreeSet<usize>)> = strings
+        .into_iter()
+        .filter_map(|s| functions_referencing(img, &s).map(|f| (s, f)))
+        .collect();
+
+    if let Some((text, _)) = sets.iter().find(|(_, f)| f.len() == 1) {
+        return Some(StringAnchor {
+            text: text.clone(),
+            also: None,
+        });
+    }
+    for (i, (a, fa)) in sets.iter().enumerate() {
+        for (b, fb) in &sets[i + 1..] {
+            if fa.intersection(fb).count() == 1 {
+                return Some(StringAnchor {
+                    text: a.clone(),
+                    also: Some(b.clone()),
+                });
+            }
+        }
+    }
+    None
 }
 
 // A 0-100 confidence derived from the grade band and refined by signature density and the
@@ -534,19 +954,31 @@ fn finalize(
         if is_anchor && let Some(site) = rva {
             match resolve_anchor(anchor, img, site as usize) {
                 Some(target_abs) => {
-                    let target_rva = target_abs.saturating_sub(img.base);
-                    let kind = img.classify(target_abs);
-                    resolved_target_rva = Some(target_rva as u64);
-                    target_kind = Some(kind);
-                    kinds.push(kind);
-                    if kind == TargetKind::Code {
-                        fingerprints.push(callee_fingerprint(img, target_rva));
-                    } else {
-                        all_code = false;
-                        if matches!(anchor, Anchor::Branch) {
-                            anchor_diags.push(Diag::TargetNotCode {
+                    match crate::domain::checked_rva(target_abs, img.base, img.size) {
+                        Ok(rva_u64) => {
+                            let target_rva = rva_u64 as usize;
+                            let kind = img.classify(target_abs);
+                            resolved_target_rva = Some(rva_u64);
+                            target_kind = Some(kind);
+                            kinds.push(kind);
+                            if kind == TargetKind::Code {
+                                fingerprints.push(callee_fingerprint(img, target_rva));
+                            } else {
+                                all_code = false;
+                                if matches!(anchor, Anchor::Branch) {
+                                    anchor_diags.push(Diag::TargetNotCode {
+                                        label: img.label.clone(),
+                                        rva: target_rva,
+                                    });
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // the target resolved outside the image; treat it as unresolvable rather
+                            // than recording a bounded numeric RVA that could look like a valid target.
+                            any_unresolved = true;
+                            anchor_diags.push(Diag::UnresolvableTarget {
                                 label: img.label.clone(),
-                                rva: target_rva,
                             });
                         }
                     }
@@ -1163,6 +1595,22 @@ mod tests {
         assert!(confidence_score(Grade::A, 1.0, true, true) <= 100);
     }
 
+    #[test]
+    fn callee_fingerprint_is_register_invariant_but_mnemonic_sensitive() {
+        let base = 0x2000;
+        let a = BufferSource::new(base, vec![0x48, 0x89, 0xD8, 0xC3]); // mov rax, rbx ; ret
+        let b = BufferSource::new(base, vec![0x48, 0x89, 0xD1, 0xC3]); // mov rcx, rdx ; ret
+        let c = BufferSource::new(base, vec![0x48, 0x01, 0xD8, 0xC3]); // add rax, rbx ; ret
+        let fa = callee_fingerprint(&img("a", &a, base, 4), 0);
+        let fb = callee_fingerprint(&img("b", &b, base, 4), 0);
+        let fc = callee_fingerprint(&img("c", &c, base, 4), 0);
+        assert_eq!(fa, fb, "register allocation must not change the identity");
+        assert_ne!(
+            fa, fc,
+            "a different mnemonic stream must change the identity"
+        );
+    }
+
     fn img<'a>(label: &str, src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
         ImageInput {
             label: label.to_string(),
@@ -1219,6 +1667,268 @@ mod tests {
         assert!(cand.aob.contains("??"));
         assert!(cand.per_version.iter().all(|p| p.match_rva.is_some()));
         assert_eq!(cand.per_version.len(), 2);
+    }
+
+    #[test]
+    fn negative_corpus_flags_a_module_that_contains_the_signature() {
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let contains = BufferSource::new(0x5000, blob(0x77, 0xCC));
+        let clean = BufferSource::new(0x5000, vec![0x90u8; 64]);
+        let negs = [
+            img("contains", &contains, 0x5000, 49),
+            img("clean", &clean, 0x5000, 64),
+        ];
+        let hits = negative_corpus_hits(aob, &negs);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].label, "contains");
+        assert!(hits[0].count >= 1);
+    }
+
+    #[test]
+    fn negative_corpus_is_empty_for_an_unrelated_module() {
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let clean = BufferSource::new(0x5000, vec![0xCCu8; 128]);
+        let negs = [img("clean", &clean, 0x5000, 128)];
+        assert!(negative_corpus_hits(aob, &negs).is_empty());
+    }
+
+    #[test]
+    fn negative_corpus_ignores_an_unparseable_signature() {
+        let clean = BufferSource::new(0x5000, vec![0x90u8; 64]);
+        let negs = [img("clean", &clean, 0x5000, 64)];
+        assert!(negative_corpus_hits("not a signature", &negs).is_empty());
+    }
+
+    #[test]
+    fn holdout_passes_when_the_signature_generalizes() {
+        // Three builds of the same function, differing only in the masked call target. A signature
+        // generated from any two must still uniquely match the third.
+        let a = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let b = BufferSource::new(0x1000, blob(0x20, 0xBB));
+        let c = BufferSource::new(0x1000, blob(0x30, 0xCC));
+        let images = [
+            img("a", &a, 0x1000, 49),
+            img("b", &b, 0x1000, 49),
+            img("c", &c, 0x1000, 49),
+        ];
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        let results = holdout_validate(
+            &images,
+            &TargetSpec::Aob(aob.to_string()),
+            &SigOptions::default(),
+        );
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.generated && r.matched_holdout));
+    }
+
+    #[test]
+    fn holdout_is_skipped_below_three_builds() {
+        let a = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let b = BufferSource::new(0x1000, blob(0x20, 0xBB));
+        let images = [img("a", &a, 0x1000, 49), img("b", &b, 0x1000, 49)];
+        let aob = "48 8D 05 ?? ?? ?? ?? E8 ?? ?? ?? ?? 33 C0 C3";
+        assert!(
+            holdout_validate(
+                &images,
+                &TargetSpec::Aob(aob.to_string()),
+                &SigOptions::default()
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn fn_identity_captures_distinctive_constants() {
+        let base = 0x4000;
+        // mov eax, 0xDEADBEEF ; ret
+        let src = BufferSource::new(base, vec![0xB8, 0xEF, 0xBE, 0xAD, 0xDE, 0xC3]);
+        let id = fn_identity(&img("c", &src, base, 6), 0);
+        assert!(
+            id.constants.contains(&0xDEAD_BEEF),
+            "got {:?}",
+            id.constants
+        );
+        assert_eq!(id.returns, 1);
+        // a small struct offset is not distinctive
+        let small = BufferSource::new(base, vec![0x83, 0xC0, 0x08, 0xC3]); // add eax, 8 ; ret
+        assert!(
+            fn_identity(&img("s", &small, base, 4), 0)
+                .constants
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fn_identity_captures_string_references() {
+        let base = 0x6000;
+        // lea rax, [rip+9] ; ret ; pad ; "Hello\0" at rva 16
+        let mut code = vec![0x48, 0x8D, 0x05, 0x09, 0x00, 0x00, 0x00, 0xC3];
+        code.resize(16, 0x00);
+        code.extend_from_slice(b"Hello\0");
+        let src = BufferSource::new(base, code);
+        let id = fn_identity(&img("str", &src, base, 22), 0);
+        assert!(
+            id.strings.iter().any(|s| s == "Hello"),
+            "got {:?}",
+            id.strings
+        );
+    }
+
+    #[test]
+    fn build_profile_separates_arch_and_pack_lanes() {
+        let src = BufferSource::new(0x1000, blob(0x10, 0xAA));
+        let mut a = img("a", &src, 0x1000, 49);
+        let mut b = img("b", &src, 0x1000, 49);
+        assert!(BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
+        b.arch = Arch::X86;
+        assert!(!BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
+        b.arch = Arch::X64;
+        a.packed = true;
+        assert!(!BuildProfile::of(&a).same_variant(&BuildProfile::of(&b)));
+    }
+
+    #[test]
+    fn xref_count_finds_rel32_calls() {
+        let base = 0x10000;
+        let mut code = vec![0x90u8; 0x80];
+        for site in [0x10usize, 0x20] {
+            code[site] = 0xE8;
+            let rel = 0x40i32 - (site as i32 + 5);
+            code[site + 1..site + 5].copy_from_slice(&rel.to_le_bytes());
+        }
+        let src = BufferSource::new(base, code);
+        assert_eq!(xref_count(&img("x", &src, base, 0x80), 0x40), 2);
+    }
+
+    #[test]
+    fn string_anchor_locates_a_function_by_its_string() {
+        let base = 0x1000;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x1B].copy_from_slice(b"MapleStory\0");
+        mem[0x100] = 0x68; // push imm32 of the string address
+        mem[0x101..0x105].copy_from_slice(&0x1010u32.to_le_bytes());
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let anchor = make_string_anchor(&input, 0x100).expect("a string anchor");
+        assert_eq!(anchor.text, "MapleStory");
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x101));
+        assert!(
+            resolve_string_anchor(
+                &input,
+                &StringAnchor {
+                    text: "absent".to_string(),
+                    also: None,
+                }
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn string_anchor_collapses_repeats_to_the_x86_entry() {
+        let base = 0x2000;
+        let mut mem = vec![0u8; 0x300];
+        mem[0x10..0x1B].copy_from_slice(b"DistinctStr");
+        mem[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp, esp
+        for site in [0x110usize, 0x120] {
+            mem[site] = 0x68; // push the same string address twice in one function
+            mem[site + 1..site + 5].copy_from_slice(&0x2010u32.to_le_bytes());
+        }
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x300,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x200,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x200,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let anchor = make_string_anchor(&input, 0x110).expect("a string anchor");
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
+    }
+
+    #[test]
+    fn string_anchor_uses_a_pair_when_each_string_is_shared() {
+        let base = 0x3000;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x10..0x16].copy_from_slice(b"alpha\0");
+        mem[0x20..0x25].copy_from_slice(b"beta\0");
+        let push = |mem: &mut [u8], at: usize, addr: u32| {
+            mem[at] = 0x68;
+            mem[at + 1..at + 5].copy_from_slice(&addr.to_le_bytes());
+        };
+        for entry in [0x100usize, 0x140, 0x180] {
+            mem[entry..entry + 3].copy_from_slice(&[0x55, 0x8B, 0xEC]);
+        }
+        push(&mut mem, 0x103, 0x3010); // F1 references alpha
+        push(&mut mem, 0x108, 0x3020); // F1 references beta
+        push(&mut mem, 0x143, 0x3010); // F2 references alpha
+        push(&mut mem, 0x183, 0x3020); // F3 references beta
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x100,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        // neither string alone is unique, but only F1 references both
+        let anchor = make_string_anchor(&input, 0x103).expect("a paired anchor");
+        assert!(anchor.also.is_some());
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
     }
 
     #[test]
@@ -1496,7 +2206,7 @@ mod tests {
             label: "a".to_string(),
             source: src,
             base,
-            size: 0x100,
+            size: 0x10000,
             code_hash: super::super::stamp::BuildStamp::capture(src, base, &code).hash,
             code_regions: code,
             regions,

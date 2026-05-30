@@ -485,6 +485,8 @@ const SIG_I18N = {
     "sig.refColumn": "reference", "sig.diagnostics": "Diagnostics", "sig.saved": "Added to pattern list",
     "sig.summary": "{arch} · {files} file(s) · {builds} unique build(s)", "sig.dupBuilds": "Duplicate builds",
     "sig.gradeLegend": "Grade legend",
+    "sig.holdout": "Holdout validation", "sig.holdoutOk": "matched the held-out build",
+    "sig.holdoutMiss": "did not match the held-out build", "sig.holdoutNone": "no signature without this build",
     "sig.gradeA": "Content-validated anchor, relocation-safe.", "sig.gradeB": "Relocation-safe, not content-validated.",
     "sig.gradeC": "Weak: absolute or unresolved reference, or cross-build mismatch.", "sig.gradeD": "An input looks packed or protected; provisional.",
     "sig.gradeF": "Rejected: too few fixed bytes, low ratio, or unsupported relocation.",
@@ -1568,6 +1570,17 @@ function reportInnerHtml(r) {
   }
   if (r.diagnostics.length) {
     html += `<div class="sig-section-h">${t("sig.diagnostics")}</div><ul class="sig-diags">` + r.diagnostics.map((d) => `<li>${esc(d)}</li>`).join("") + "</ul>";
+  }
+  if (r.holdout && r.holdout.length) {
+    const passed = r.holdout.filter((h) => h.matched).length;
+    html += `<div class="sig-section-h">${t("sig.holdout")} (${passed}/${r.holdout.length})</div><ul class="sig-diags">` +
+      r.holdout
+        .map((h) => {
+          const verdict = h.matched ? t("sig.holdoutOk") : h.generated ? t("sig.holdoutMiss") : t("sig.holdoutNone");
+          return `<li class="sig-holdout ${h.matched ? "ok" : "bad"}"><span class="mono">${esc(h.held_out)}</span> ${esc(verdict)}</li>`;
+        })
+        .join("") +
+      "</ul>";
   }
   return html;
 }

@@ -32,8 +32,8 @@ scriptable command-line tool. Both are built on the same engine crate.
   wildcards instead of brittle fixed bytes.
 - **Deterministic output.** Scans and generated signatures sort and de-duplicate to a stable order,
   which makes diffs and version comparisons meaningful.
-- **Offline and local.** The desktop app makes no network requests. A strict Content-Security-Policy
-  blocks every remote origin, and the scan history lives in a local SQLite database.
+- **Offline and local.** The desktop app makes no network requests. A Content-Security-Policy blocks
+  every remote origin, and the scan history lives in a local SQLite database.
 
 ## Feature highlights
 
@@ -73,16 +73,19 @@ scriptable command-line tool. Both are built on the same engine crate.
   Pick blur, or a showcase mode that swaps in realistic fake values instead. Visual only; the real
   data is untouched.
 - Five interface languages: English, Japanese, Chinese, Korean, and Hebrew (right to left).
-- Fully offline. The editor and the history database are local, and a strict Content-Security-Policy
-  blocks every remote origin.
+- Fully offline. The editor and the history database are local, and a Content-Security-Policy blocks
+  every remote origin.
 
 **Command line (`maple-cli`)**
 
-- The same scan and output pipeline, suitable for scripting and CI.
-- Offline helpers that need no target: `--lint` flags weak signatures, `--diff` reports which offsets
-  moved between two dumps, and `--profile` breaks a live scan into read/scan/resolve timing.
-- `--asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
-- `--mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
+- A subcommand per task (`scan`, `lint`, `diff`, `asm`, `mksig`, `profile`), suitable for scripting
+  and CI. Run `mapledumper help <command>` for the flags of any one.
+- Offline helpers that need no target: `lint` flags weak signatures, `diff` reports which offsets
+  moved between two dumps, and `profile` breaks a live scan into read/scan/resolve timing.
+- `asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
+- `mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
+- A `maple.conf` in the working directory (or `--config <file>`) supplies defaults for the process,
+  module, arch, pattern file, and output directory; explicit flags always win.
 
 ## Signature Maker
 
@@ -102,7 +105,7 @@ The Signature Maker addresses this by working across builds:
 The desktop **Signature Maker** view runs the whole flow interactively: queue many targets in a single
 run (one signature or address per line), and switch on **Cross-validate** to pair each signature with
 the address it should resolve to and confirm they agree, the quickest way to check that a hand-written
-AOB still lands where you expect. The command-line `--mksig` drives the same generator for scripting
+AOB still lands where you expect. The command-line `mksig` drives the same generator for scripting
 and CI.
 
 Grades, in short: **A** is a content-validated anchor (a branch or RIP-relative reference whose
@@ -110,6 +113,11 @@ target is code in every build with matching callee fingerprints); **B** is reloc
 content-validated (a direct match, or a reference to stable data/import); **C** is weaker (absolute
 or unresolved references, or cross-build inconsistency); **D** means the inputs look packed; **F** is
 rejected (too few fixed bytes, low fixed-byte ratio, no opcode bytes, or an unsupported relocation).
+
+Generation proves a signature is unique among the supplied builds, which does not by itself prove it
+is specific. Pass a negative corpus of unrelated modules (`--negative` / `--negative-dir`) and the
+chosen signature is scanned against each one; any match means the pattern is too generic to trust as
+an identity, and the hits are reported in the text and JSON output.
 
 ## Desktop workspace
 
@@ -130,57 +138,68 @@ blur or the showcase randomizer in Settings.
 ## Command line
 
 ```
-mapledumper (--process <name> | --class <window-class>) [options]
+mapledumper <command> [options]      ( --config <file> is accepted on any command )
 
+  scan      attach to a process and dump offsets from a pattern file
+  lint      check a pattern file for weak signatures
+  diff      compare two saved dumps and report what moved
+  asm       scan a live process by assembly instructions
+  mksig     build a cross-version signature from client files on disk
+  profile   measure the read/scan/resolve split against a live target
+
+scan / profile share the attach and pattern options:
   --process <name>   attach by process name (e.g. MapleStory.exe)
   --class <class>    attach by top-level window class
+  --pid <pid>        attach by process id (when several share a name)
   --module <name>    module to scan (default: process name)
   --patterns <file>  pattern file (default: patterns.txt)
   --arch <32|64>     architecture section to load (default: 64)
+  --no-wait          do not wait for the process; fail if it is not running
+  --timeout <secs>   give up waiting after this many seconds
+  --lenient          accept malformed pattern lines instead of failing
+scan also takes:
   --out <dir>        output directory (default: .)
   --ce               write update.txt as a Cheat Engine table
   --no-offsets       do not write offsets.h
-  --no-wait          do not wait for the process; fail if it is not running
-  --timeout <secs>   give up waiting after this many seconds
-  --profile          measure the read/scan/resolve split against the live target and exit
-  --lint             check the pattern file for weak signatures and exit
-  --diff <a> <b>     compare two saved dumps and report what moved, then exit
-  --asm <file>       scan by assembly instructions (one per line, wildcards * ? ^ $), then exit
-  --from <addr>      with --asm, only report matches at or above this address (hex)
-  --to <addr>        with --asm, only report matches below this address (hex)
-  --mksig            generate a cross-version signature from client files, then exit
+asm takes a positional <file> plus --from/--to <addr> to clip the address range.
+mksig:
   --client <exe>     a client binary (repeat for each version)
   --client-dir <dir> add every .exe in a folder as a client
   --sig <aob>        target: locate this existing AOB in each client and harden it
   --ref <exe> --rva <hex>   target: an address in one reference client
   --min-fixed-ratio <f>     reject signatures below this fixed-byte ratio (default 0.30)
-  --json             print the full report as JSON
-  --json-out <path>  write the JSON report to a file
-  -h, --help         print help
-  -V, --version      print version
+  --negative <exe> / --negative-dir <dir>   unrelated modules the result must not match
+  --holdout          leave-one-out: regenerate per subset and confirm each held-out build matches
+  --json / --json-out <path>   emit the full report as JSON
+
+mapledumper help <command>   prints the full options for one command.
 ```
 
 ```
-mapledumper --process MapleStory.exe --patterns patterns.txt --out .
+mapledumper scan --process MapleStory.exe --patterns patterns.txt --out .
 
 # check signature quality without attaching to anything
-mapledumper --lint --patterns patterns.txt
+mapledumper lint --patterns patterns.txt
 
 # see which offsets moved between two game versions
-mapledumper --diff old/update.txt new/update.txt
+mapledumper diff old/update.txt new/update.txt
 
 # find code by instruction: every push, then a call, then test eax,eax (one instruction per line)
-mapledumper --process MapleStory.exe --asm find.asm
+mapledumper asm --process MapleStory.exe find.asm
 
 # generate a cross-version signature from several client builds
-mapledumper --mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
+mapledumper mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
+
+# keep the common settings in maple.conf and just run the verb
+printf 'process = MapleStory.exe\narch = 64\nout = dump\n' > maple.conf
+mapledumper scan
 ```
 
 ## Quick start
 
 1. Build the workspace: `cargo build --release`.
 2. Desktop: run `target/release/maple-app.exe`, set a target process, press Start Scan.
-3. CLI: run `target/release/mapledumper.exe --process <name> --patterns patterns.txt`.
+3. CLI: run `target/release/mapledumper.exe scan --process <name> --patterns patterns.txt`.
 4. Run elevated so `OpenProcess` and `SeDebugPrivilege` succeed against a protected target.
 
 ## Build
@@ -214,7 +233,8 @@ Name AA ?? CC
 - Category sections: `[name]` sets the namespace used for the following symbols in `offsets.h`
   (default `globals`).
 
-Name suffixes select how a match is resolved:
+A name suffix selects how a match is resolved. This is the compatibility form, kept so existing
+pattern files keep working:
 
 | Suffix   | Meaning                                                                 |
 |----------|-------------------------------------------------------------------------|
@@ -224,7 +244,43 @@ Name suffixes select how a match is resolved:
 | `_HDR`   | Extract an immediate operand, for example a packet header opcode.       |
 | (none)   | Emit the match address itself.                                          |
 
+For an explicit, typed plan, append `@key=value` directives instead of relying on the name. `@kind`
+selects the resolver as a value rather than parsing it from a suffix, and the strict loader parses
+and validates every directive into the pattern's typed plan, rejecting an unknown key or value with
+a line number:
+
+```
+CUserLocal = 48 8B 0D ?? ?? ?? ?? @kind=ptr @section=code @hits=unique
+```
+
+| Directive   | Values                                | Meaning |
+|-------------|---------------------------------------|---------|
+| `@kind`     | `ptr`, `call`, `off`, `hdr`, `direct` | The resolver kind, overriding any suffix. Drives resolution. |
+| `@section`  | `code`, `data`, `rodata`, `import`    | The section the resolved target is expected to land in. |
+| `@hits`     | `unique`, `any`, `>=N`                | How many matches the pattern should produce. |
+| `@instr`    | a number                              | Which decoded instruction in the match window to resolve from. |
+| `@operand`  | a number                              | Which operand of that instruction to read. |
+
 See [patterns.sample.txt](patterns.sample.txt) for a worked example.
+
+**String-anchored patterns.** Instead of bytes, a pattern can name a read-only string the target
+function references. The string survives a recompile that shifts the surrounding bytes, so it locates
+the same function across client versions where a byte signature breaks:
+
+```
+StatWindow = @string=UI/UIWindow2.img/Stat
+```
+
+If no single string is unique to the function, add a second with `@also`; the target is the one
+referencing both:
+
+```
+StatWindow = @string=UI/UIWindow2.img/Stat @also=UI/UIWindow2.img/Stat/main
+```
+
+The engine finds the string in data, follows the unique code reference to it, and resolves to the
+enclosing function entry. On real multi-version MapleStory clients these resolve to the same function
+72-100% of the time across versions, against 0-2% for byte signatures.
 
 ## Architecture at a glance
 
@@ -238,8 +294,9 @@ See [patterns.sample.txt](patterns.sample.txt) for a worked example.
 
 The matcher anchors each pattern on its rarest fixed byte (a static frequency table), not the first
 one, so common bytes like `0x48` (REX.W) do not flood the prefilter. It uses an AVX2 path chosen at
-runtime via `is_x86_feature_detected!` with a scalar fallback, and read buffers use uninitialized
-capacity to skip a redundant zeroing pass.
+runtime via `is_x86_feature_detected!` with a scalar fallback. For large pattern sets it switches to
+a single-pass multi-pattern index, so cost grows with the buffer plus matches rather than the buffer
+times the pattern count.
 
 Synthetic throughput (criterion `cargo bench`, 8 MiB code-like buffer): the rarest-byte anchor scans
 at roughly 29 GiB/s, versus roughly 0.8 GiB/s when forced onto a common byte like `0x48`, about a 37x

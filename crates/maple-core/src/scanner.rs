@@ -4,6 +4,7 @@ pub struct CompiledPattern {
     bytes: Vec<u8>,
     mask: Vec<bool>,
     anchor: Option<(usize, u8)>,
+    secondary: Option<(usize, u8)>,
 }
 
 impl CompiledPattern {
@@ -12,18 +13,29 @@ impl CompiledPattern {
         if signature.is_empty() {
             return None;
         }
-        let anchor = signature
-            .mask
-            .iter()
-            .enumerate()
-            .filter(|&(_, &significant)| significant)
-            .map(|(i, _)| (i, signature.bytes[i]))
-            .min_by_key(|&(_, byte)| byte_frequency(byte))?;
+        let fixed = |skip: Option<usize>| {
+            signature
+                .mask
+                .iter()
+                .enumerate()
+                .filter(|&(_, &significant)| significant)
+                .filter(|&(i, _)| Some(i) != skip)
+                .map(|(i, _)| (i, signature.bytes[i]))
+                .min_by_key(|&(_, byte)| byte_frequency(byte))
+        };
+        let anchor = fixed(None)?;
+        let secondary = fixed(Some(anchor.0));
         Some(Self {
             bytes: signature.bytes.clone(),
             mask: signature.mask.clone(),
             anchor: Some(anchor),
+            secondary,
         })
+    }
+
+    #[must_use]
+    pub fn secondary_anchor(&self) -> Option<(usize, u8)> {
+        self.secondary
     }
 
     #[must_use]
@@ -151,6 +163,7 @@ unsafe fn find_all_avx2(haystack: &[u8], pat: &CompiledPattern) -> Vec<usize> {
 struct Anchored<'a> {
     idx: usize,
     anchor_pos: usize,
+    secondary: Option<(usize, u8)>,
     pat: &'a CompiledPattern,
 }
 
@@ -158,6 +171,13 @@ struct Anchored<'a> {
 /// pattern. Each pattern is bucketed by its anchor byte; a position whose byte hits a bucket is
 /// verified against only the patterns in that bucket, so the work is proportional to the buffer
 /// plus the matches, not to the buffer times the pattern count.
+///
+/// When many patterns share a common anchor byte (the worst case for an anchor-only index, for
+/// example a corpus of `48 ...` x64 prologues), the single byte stops discriminating and every
+/// position in that bucket pays a full verification. Each bucket entry therefore also carries a
+/// second fixed byte at a different offset, the next rarest in the pattern, and the scan rejects a
+/// candidate on that one extra comparison before the full compare. The accepted match set is
+/// unchanged; the second byte is part of the pattern that the full compare would check regardless.
 pub struct ScannerIndex<'a> {
     by_anchor: Vec<Vec<Anchored<'a>>>,
 }
@@ -171,6 +191,7 @@ impl<'a> ScannerIndex<'a> {
                 by_anchor[anchor_byte as usize].push(Anchored {
                     idx,
                     anchor_pos,
+                    secondary: pat.secondary,
                     pat,
                 });
             }
@@ -192,9 +213,15 @@ impl<'a> ScannerIndex<'a> {
                 if start >= accept_len {
                     continue;
                 }
-                if start + a.pat.bytes.len() <= n
-                    && matches_at(&a.pat.bytes, &a.pat.mask, haystack, start)
+                if start + a.pat.bytes.len() > n {
+                    continue;
+                }
+                if let Some((sec_pos, sec_byte)) = a.secondary
+                    && haystack[start + sec_pos] != sec_byte
                 {
+                    continue;
+                }
+                if matches_at(&a.pat.bytes, &a.pat.mask, haystack, start) {
                     hit(a.idx, start);
                 }
             }
@@ -338,6 +365,68 @@ mod tests {
             for _ in 0..count {
                 let plen = (rng.next_u64() % 8) as usize + 1;
                 let bytes: Vec<u8> = (0..plen).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+                let mut mask: Vec<bool> = (0..plen).map(|_| rng.next_u64() & 1 == 0).collect();
+                mask[0] = true;
+                cps.push(CompiledPattern::new(&sig(&bytes, &mask)).unwrap());
+            }
+            let mut expected: Vec<(usize, usize)> = Vec::new();
+            for (i, cp) in cps.iter().enumerate() {
+                for off in find_all(&haystack, cp) {
+                    expected.push((i, off));
+                }
+            }
+            expected.sort_unstable();
+            let index = ScannerIndex::build(cps.iter().enumerate());
+            let mut actual: Vec<(usize, usize)> = Vec::new();
+            index.scan(&haystack, n, |idx, start| actual.push((idx, start)));
+            actual.sort_unstable();
+            assert_eq!(actual, expected, "n={n}");
+        }
+    }
+
+    #[test]
+    fn secondary_anchor_is_a_distinct_fixed_byte() {
+        let s = sig(&[0x48, 0x8B, 0x0D, 0x00], &[true, true, true, false]);
+        let cp = CompiledPattern::new(&s).unwrap();
+        let (ap, _) = cp.anchor.unwrap();
+        let (sp, sb) = cp.secondary_anchor().expect("a second fixed byte exists");
+        assert_ne!(
+            sp, ap,
+            "secondary must sit at a different offset than the anchor"
+        );
+        assert!(cp.mask[sp], "secondary must land on a fixed byte");
+        assert_eq!(cp.bytes[sp], sb);
+    }
+
+    #[test]
+    fn single_fixed_byte_pattern_has_no_secondary() {
+        let s = sig(&[0x48, 0x00, 0x00], &[true, false, false]);
+        let cp = CompiledPattern::new(&s).unwrap();
+        assert!(cp.secondary_anchor().is_none());
+    }
+
+    #[test]
+    fn scanner_index_matches_when_patterns_share_an_anchor() {
+        let mut rng = XorShift(0x0FEE_1DAD_5EED_C0DE);
+        for _ in 0..1000 {
+            let n = (rng.next_u64() % 400) as usize + 8;
+            // A narrow byte alphabet plus a forced common anchor makes buckets collide, which is
+            // the case the secondary pre-filter exists for.
+            let haystack: Vec<u8> = (0..n)
+                .map(|_| {
+                    if rng.next_u64() & 3 == 0 {
+                        0x48
+                    } else {
+                        (rng.next_u64() & 0x7) as u8
+                    }
+                })
+                .collect();
+            let count = (rng.next_u64() % 8) as usize + 4;
+            let mut cps = Vec::new();
+            for _ in 0..count {
+                let plen = (rng.next_u64() % 6) as usize + 2;
+                let mut bytes: Vec<u8> = (0..plen).map(|_| (rng.next_u64() & 0x7) as u8).collect();
+                bytes[0] = 0x48;
                 let mut mask: Vec<bool> = (0..plen).map(|_| rng.next_u64() & 1 == 0).collect();
                 mask[0] = true;
                 cps.push(CompiledPattern::new(&sig(&bytes, &mask)).unwrap());
