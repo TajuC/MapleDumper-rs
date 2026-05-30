@@ -100,11 +100,18 @@ const driver = `
   globalThis.__confHi = confChip(95);
   globalThis.__confLo = confChip(10);
   globalThis.__confNone = confChip(null);
+  state.rows = [
+    { name: "Amb", category: "globals", type: "pointer", value: "0x300", is_offset: false, matches: 2, status: "found (ambiguous)", note: "", pattern: "CA FE", confidence: 50, trace: "match address resolved to 0x300", candidates: ["0x300", "0x400"] },
+  ];
+  state.report = { module_name: "MapleStory.exe", module_base: "0x140000000" };
+  selectRow("Amb");
+  globalThis.__inspDiag = document.getElementById("insp-diag").innerHTML;
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
 const i18nCode = fs.readFileSync(path.join(__dirname, "frontend", "i18n.js"), "utf8");
-const code = i18nCode + fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
+const iconsCode = fs.readFileSync(path.join(__dirname, "frontend", "icons.js"), "utf8");
+const code = i18nCode + iconsCode + fs.readFileSync(path.join(__dirname, "frontend", "app.js"), "utf8") + driver;
 try {
   vm.runInNewContext(code, sandbox, { filename: "app.js" });
 } catch (e) {
@@ -146,6 +153,10 @@ check(diag.includes("50/100"), "diagnostics confidence value missing");
 check((sandbox.__confHi || "").includes("conf-chip hi"), "high-confidence chip missing");
 check((sandbox.__confLo || "").includes("conf-chip lo"), "low-confidence chip missing");
 check(sandbox.__confNone === "", "null confidence should yield no chip");
+const inspDiag = sandbox.__inspDiag || "";
+check(inspDiag.includes("match address resolved to 0x300"), "inspector trace missing");
+check(inspDiag.includes("0x300") && inspDiag.includes("0x400"), "inspector candidate list missing");
+check(inspDiag.includes("50/100"), "inspector confidence value missing");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");
