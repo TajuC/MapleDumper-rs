@@ -1,4 +1,3 @@
-
 use crate::fileimage::{RelocKind, RelocLookup};
 use crate::memory::MemorySource;
 use crate::pattern::{Arch, Signature, try_signature_from_aob};
@@ -1037,7 +1036,11 @@ mod tests {
             readable: 7,
         };
         let region = read_region(&src, 0x4000, 64);
-        assert_eq!(region.len(), 7, "tail past the readable range must be dropped");
+        assert_eq!(
+            region.len(),
+            7,
+            "tail past the readable range must be dropped"
+        );
         assert!(region.iter().all(|&b| b == 0xCC));
 
         let at = read_at(&src, 0x4000, 0, 64);

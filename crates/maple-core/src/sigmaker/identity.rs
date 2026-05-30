@@ -4,8 +4,8 @@ use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, OpKind};
 
 use super::types::ImageInput;
 use super::{bitness, mem_target, read_at, read_region};
-use crate::pattern::Arch;
 pub use crate::domain::StringAnchor;
+use crate::pattern::Arch;
 
 const ID_WINDOW: usize = 256;
 const ID_MAX_INSTRS: usize = 24;
