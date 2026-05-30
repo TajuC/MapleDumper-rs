@@ -783,7 +783,7 @@ fn string_ref_sites(bytes: &[u8], base: usize, data_abs: usize, arch: Arch) -> V
             .windows(7)
             .enumerate()
             .filter_map(|(i, w)| {
-                let lea = w[0] == 0x48 && w[1] == 0x8D && w[2] & 0xC7 == 0x05;
+                let lea = w[0] & 0xFB == 0x48 && w[1] == 0x8D && w[2] & 0xC7 == 0x05;
                 let disp = i32::from_le_bytes([w[3], w[4], w[5], w[6]]) as i64;
                 (lea && (base + i + 7) as i64 + disp == data_abs as i64).then_some(base + i)
             })
@@ -791,28 +791,51 @@ fn string_ref_sites(bytes: &[u8], base: usize, data_abs: usize, arch: Arch) -> V
     }
 }
 
-fn unique_xref_site(img: &ImageInput, data_abs: usize) -> Option<usize> {
-    let mut site = None;
-    for region in &img.code_regions {
-        let bytes = read_region(img.source, region.base, region.size);
-        for s in string_ref_sites(&bytes, region.base, data_abs, img.arch) {
-            if site.replace(s).is_some() {
-                return None;
-            }
-        }
+fn xref_sites(img: &ImageInput, data_abs: usize) -> Vec<usize> {
+    img.code_regions
+        .iter()
+        .flat_map(|region| {
+            let bytes = read_region(img.source, region.base, region.size);
+            string_ref_sites(&bytes, region.base, data_abs, img.arch)
+        })
+        .collect()
+}
+
+// Walk back to the nearest standard x86 frame prologue so an anchor resolves to the function entry,
+// not the mid-body reference. This also collapses several references inside one function to a single
+// site. x64 prologues vary too much to pin this way, so there the reference site stands.
+fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
+    if !matches!(img.arch, Arch::X86) {
+        return site_rva;
     }
-    site
+    let start = site_rva.saturating_sub(1024);
+    let bytes = read_at(img.source, img.base, start, site_rva - start + 3);
+    bytes
+        .windows(3)
+        .enumerate()
+        .rev()
+        .find(|(_, w)| *w == [0x55, 0x8B, 0xEC])
+        .map_or(site_rva, |(i, _)| start + i)
 }
 
 #[must_use]
 pub fn resolve_string_anchor(img: &ImageInput, anchor: &StringAnchor) -> Option<usize> {
     let data_abs = find_string_in_data(img, &anchor.text)?;
-    Some(unique_xref_site(img, data_abs)? - img.base)
+    let mut functions: Vec<usize> = xref_sites(img, data_abs)
+        .into_iter()
+        .map(|site| enclosing_function(img, site - img.base))
+        .collect();
+    functions.sort_unstable();
+    functions.dedup();
+    match functions.as_slice() {
+        [entry] => Some(*entry),
+        _ => None,
+    }
 }
 
 /// Build a string anchor for the function at `target_rva`, preferring its longest referenced string
-/// and keeping the first that resolves to a unique code site. Returns `None` if the function
-/// references no string that pins down a single site.
+/// and keeping the first that pins down a single enclosing function. Returns `None` if no referenced
+/// string resolves uniquely.
 #[must_use]
 pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringAnchor> {
     let mut strings = fn_identity(img, target_rva).strings;
@@ -1795,6 +1818,44 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn string_anchor_collapses_repeats_to_the_x86_entry() {
+        let base = 0x2000;
+        let mut mem = vec![0u8; 0x300];
+        mem[0x10..0x1B].copy_from_slice(b"DistinctStr");
+        mem[0x100..0x103].copy_from_slice(&[0x55, 0x8B, 0xEC]); // push ebp ; mov ebp, esp
+        for site in [0x110usize, 0x120] {
+            mem[site] = 0x68; // push the same string address twice in one function
+            mem[site + 1..site + 5].copy_from_slice(&0x2010u32.to_le_bytes());
+        }
+        let src = BufferSource::new(base, mem);
+        let input = ImageInput {
+            label: "t".to_string(),
+            source: &src,
+            base,
+            size: 0x300,
+            code_regions: vec![Region {
+                base: base + 0x100,
+                size: 0x200,
+            }],
+            regions: vec![
+                Region { base, size: 0x100 },
+                Region {
+                    base: base + 0x100,
+                    size: 0x200,
+                },
+            ],
+            import: None,
+            arch: Arch::X86,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let anchor = make_string_anchor(&input, 0x110).expect("a string anchor");
+        assert_eq!(resolve_string_anchor(&input, &anchor), Some(0x100));
     }
 
     #[test]
