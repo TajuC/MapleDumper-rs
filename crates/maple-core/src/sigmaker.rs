@@ -238,10 +238,8 @@ pub struct HoldoutResult {
     pub matched_holdout: bool,
 }
 
-/// The detectable identity of a client build: architecture, whether it is packed, the code size, and
-/// the code-section hash. These are the signals that gate whether two builds belong to the same lane;
-/// a human variant label (GMS, KMS, MSEA, a private fork) is operator-supplied, since it is not
-/// reliably derivable from the binary alone.
+/// The reliably detectable identity of a client build: arch, pack state, code size, and code hash.
+/// A human variant label (GMS, KMS, a private fork) stays operator-supplied, not derived here.
 #[derive(Clone, Debug)]
 pub struct BuildProfile {
     pub arch: Arch,
@@ -261,9 +259,7 @@ impl BuildProfile {
         }
     }
 
-    /// Two builds share a lane only when they agree on architecture and pack state. Mixing an x86
-    /// with an x64 build, or a packed with an unpacked one, is never the same function space, so a
-    /// cross-version or holdout comparison across them is meaningless.
+    /// Same lane = same arch and pack state; a cross-version comparison must not cross either.
     #[must_use]
     pub fn same_variant(&self, other: &Self) -> bool {
         matches!(
@@ -553,11 +549,8 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 const ID_WINDOW: usize = 256;
 const ID_MAX_INSTRS: usize = 24;
 
-/// A semantic identity for a function's entry block, so the same function matches across builds even
-/// when a recompile shifts bytes. It is built from features that survive recompilation but still tell
-/// functions apart: the sequence of instruction mnemonics (invariant to register allocation and
-/// operand encoding), a CFG-lite basic-block count, the distinctive immediate constants the function
-/// uses, and the read-only strings it references. The cross-build consistency check compares these.
+/// Recompile-stable identity of a function entry: mnemonic stream, CFG-lite block count, distinctive
+/// constants, and referenced strings. The cross-build consistency check compares these.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FnIdentity {
     pub instr_count: usize,
@@ -592,31 +585,35 @@ fn is_immediate_kind(k: OpKind) -> bool {
     )
 }
 
-// Small immediates are stack and struct offsets that do not identify a function; keep the larger
-// magic numbers, sizes, and constants that a function carries across builds.
+fn in_image(img: &ImageInput, v: u64) -> bool {
+    (img.base as u64..(img.base + img.size) as u64).contains(&v)
+}
+
+// Tuned: below this, an immediate is a stack or struct offset, not an identifying magic number.
 fn is_distinctive_const(v: u64) -> bool {
     (v as i64).unsigned_abs() > 0xFFFF && v != u64::MAX
 }
 
 fn read_string_ref(img: &ImageInput, abs: usize) -> Option<String> {
-    if abs < img.base || abs >= img.base + img.size {
-        return None;
-    }
-    let rva = abs - img.base;
+    let rva = abs.checked_sub(img.base).filter(|&r| r < img.size)?;
     let bytes = read_at(img.source, img.base, rva, 64);
-    let ascii: Vec<u8> = bytes.iter().copied().take_while(|&b| b != 0).collect();
-    if ascii.len() >= 4 && ascii.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
-        return Some(String::from_utf8_lossy(&ascii[..ascii.len().min(48)]).into_owned());
+    let printable = |b: u8| (0x20..=0x7E).contains(&b);
+    let ascii: String = bytes
+        .iter()
+        .copied()
+        .take_while(|&b| printable(b))
+        .map(char::from)
+        .take(48)
+        .collect();
+    if ascii.len() >= 4 {
+        return Some(ascii);
     }
-    let mut wide = String::new();
-    let mut i = 0;
-    while i + 1 < bytes.len() && bytes[i + 1] == 0 && (0x20u8..=0x7E).contains(&bytes[i]) {
-        wide.push(bytes[i] as char);
-        i += 2;
-        if wide.len() >= 48 {
-            break;
-        }
-    }
+    let wide: String = bytes
+        .chunks_exact(2)
+        .take_while(|c| c[1] == 0 && printable(c[0]))
+        .map(|c| char::from(c[0]))
+        .take(48)
+        .collect();
     (wide.len() >= 4).then_some(wide)
 }
 
@@ -639,25 +636,16 @@ pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
             break;
         }
         mnemonics.push(instr.mnemonic() as u32);
-        for i in 0..instr.op_count() {
-            if is_immediate_kind(instr.op_kind(i)) {
-                let v = instr.immediate(i);
-                // An immediate that points into the image is often a string pointer: x86 carries
-                // these as `push offset str` / `mov reg, offset str`, not a memory operand.
-                if (img.base as u64..(img.base + img.size) as u64).contains(&v)
-                    && let Some(s) = read_string_ref(img, v as usize)
-                {
-                    strings.push(s);
-                } else if is_distinctive_const(v) {
-                    constants.push(v);
-                }
+        let immediates = (0..instr.op_count())
+            .filter(|&i| is_immediate_kind(instr.op_kind(i)))
+            .map(|i| instr.immediate(i));
+        let refs = immediates.chain(mem_target(&instr, img.arch).map(|a| a as u64));
+        for v in refs {
+            if let Some(s) = read_string_ref(img, v as usize) {
+                strings.push(s);
+            } else if !in_image(img, v) && is_distinctive_const(v) {
+                constants.push(v);
             }
-        }
-        // x64 reaches read-only strings through a rip-relative memory operand instead.
-        if let Some(abs) = mem_target(&instr, img.arch)
-            && let Some(s) = read_string_ref(img, abs)
-        {
-            strings.push(s);
         }
         match instr.flow_control() {
             FlowControl::Call | FlowControl::IndirectCall => calls += 1,
@@ -724,49 +712,39 @@ fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
     fn_identity(img, target_rva).fingerprint()
 }
 
-/// Approximate count of references to a function entry: rel32 calls and jumps, plus x64 rip-relative
-/// lea, whose computed target lands on `target_rva`. It is a byte scan rather than a full disassembly,
-/// so it can mis-count at an instruction boundary, but it is a stable identity signal that separates a
-/// heavily-referenced function from a one-off helper. Unlike the fingerprint it is not part of the
-/// strict cross-build equality, since the surrounding code that references a function shifts per build.
+/// Approximate references to `target_rva`: rel32 call/jmp and x64 rip-relative lea landing on the
+/// entry. A byte scan, so it can miscount at a boundary; kept out of the fingerprint since the
+/// referencing code shifts per build, but a useful "hot function" signal on its own.
 #[must_use]
 pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
-    let target_abs = (img.base + target_rva) as i64;
-    let mut count = 0usize;
-    for region in &img.code_regions {
-        let bytes = read_region(img.source, region.base, region.size);
-        let n = bytes.len();
-        let mut i = 0;
-        while i + 5 <= n {
-            if bytes[i] == 0xE8 || bytes[i] == 0xE9 {
-                let rel =
-                    i32::from_le_bytes([bytes[i + 1], bytes[i + 2], bytes[i + 3], bytes[i + 4]])
-                        as i64;
-                if (region.base + i + 5) as i64 + rel == target_abs {
-                    count += 1;
-                }
-            }
-            i += 1;
-        }
-        if matches!(img.arch, Arch::X64) {
-            let mut j = 0;
-            while j + 7 <= n {
-                if bytes[j] == 0x48 && bytes[j + 1] == 0x8D && (bytes[j + 2] & 0xC7) == 0x05 {
-                    let disp = i32::from_le_bytes([
-                        bytes[j + 3],
-                        bytes[j + 4],
-                        bytes[j + 5],
-                        bytes[j + 6],
-                    ]) as i64;
-                    if (region.base + j + 7) as i64 + disp == target_abs {
-                        count += 1;
-                    }
-                }
-                j += 1;
-            }
-        }
-    }
-    count
+    let target = (img.base + target_rva) as i64;
+    let rel32 = |w: &[u8]| i32::from_le_bytes([w[0], w[1], w[2], w[3]]) as i64;
+    let x64 = matches!(img.arch, Arch::X64);
+    img.code_regions
+        .iter()
+        .map(|region| {
+            let bytes = read_region(img.source, region.base, region.size);
+            let calls = bytes
+                .windows(5)
+                .enumerate()
+                .filter(|(i, w)| {
+                    matches!(w[0], 0xE8 | 0xE9)
+                        && (region.base + i + 5) as i64 + rel32(&w[1..]) == target
+                })
+                .count();
+            let leas = bytes
+                .windows(7)
+                .enumerate()
+                .filter(|(j, w)| {
+                    x64 && w[0] == 0x48
+                        && w[1] == 0x8D
+                        && w[2] & 0xC7 == 0x05
+                        && (region.base + j + 7) as i64 + rel32(&w[3..]) == target
+                })
+                .count();
+            calls + leas
+        })
+        .sum()
 }
 
 // A 0-100 confidence derived from the grade band and refined by signature density and the
