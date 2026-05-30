@@ -99,8 +99,11 @@ The Signature Maker addresses this by working across builds:
 3. It searches for three kinds of anchor: the target's own bytes (Direct), a call or jump to the
    target (`_CALL` / `_JMP`), and a memory reference to the target (`_PTR`).
 4. Each candidate is masked using instruction decoding and the relocation table, then validated
-   against every build for a unique match and consistent callee fingerprints.
-5. Candidates are graded A through F and sorted deterministically, and the best one is chosen.
+   against every build for a unique match and a callee that stays similar across builds.
+5. Each candidate is scored on independent measures (uniqueness, recompile stability, byte entropy,
+   validated semantic content, resolver confidence, and cross-build agreement), blended into a single
+   `final_score`, and graded A through F from that score. Candidates sort deterministically and the
+   best one is chosen.
 
 The desktop **Signature Maker** view runs the whole flow interactively: queue many targets in a single
 run (one signature or address per line), and switch on **Cross-validate** to pair each signature with
@@ -108,16 +111,41 @@ the address it should resolve to and confirm they agree, the quickest way to che
 AOB still lands where you expect. The command-line `mksig` drives the same generator for scripting
 and CI.
 
-Grades, in short: **A** is a content-validated anchor (a branch or RIP-relative reference whose
-target is code in every build with matching callee fingerprints); **B** is reloc-safe but not
-content-validated (a direct match, or a reference to stable data/import); **C** is weaker (absolute
-or unresolved references, or cross-build inconsistency); **D** means the inputs look packed; **F** is
-rejected (too few fixed bytes, low fixed-byte ratio, no opcode bytes, or an unsupported relocation).
+The letter grade is read off `final_score` (it is not chosen first and back-filled): a
+content-validated anchor (a branch or RIP-relative reference whose target is code in every build with
+a consistent callee) scores into **A**; a reloc-safe but unvalidated reference (a direct match, or a
+stable data/import reference) lands around **B**; absolute, unresolved, or cross-build-inconsistent
+references are weaker (**C**); a packed input is capped at **D**; and hard gates (too few fixed bytes,
+low fixed-byte ratio, no opcode bytes, an unsupported relocation) force **F**. The report shows each
+sub-score, the `final_score`, and the reasons behind them, plus per-build evidence (match RVA,
+resolved target, target kind, and the callee fingerprint similarity to the reference build).
+
+The callee comparison is a pragmatic *similarity*, not equality and not a decompiler. It blends an
+order-preserving comparison of the mnemonic stream (the Dice ratio of their longest common
+subsequence, so an inserted or shifted instruction costs one position instead of desynchronising the
+rest), a CFG-lite block/call/branch/return shape, and the distinctive-constant and string-reference
+sets. Absent evidence is treated as unknown rather than as a match: two functions that simply
+reference no constants or strings are not counted as a perfect constant/string match. The numeric
+similarity is banded High / Medium / Low: a High band reads as the same function, a Low band emits a
+hard "callee diverges across builds" downgrade, and a Medium band is a softer "differs slightly"
+note. This is a heuristic identity over a short instruction window, not a full control-flow or
+data-flow analysis.
+
+A **string anchor** matches on a read-only string the function references, so it is scored from
+string-anchor evidence, not from the string's bytes as code-byte entropy: the string must resolve to
+exactly one function in every required build, how specifically it pins that function (uniqueness of
+resolution, reference count, with string length only a supporting factor), the cross-build stability
+of the resolved target, and its callee similarity. It only earns A when validated across more than
+one build (a single-build anchor is capped below A, since there is no cross-version evidence); a
+missing string yields no candidate, and a generic or inconsistent one is downgraded.
 
 Generation proves a signature is unique among the supplied builds, which does not by itself prove it
 is specific. Pass a negative corpus of unrelated modules (`--negative` / `--negative-dir`) and the
-chosen signature is scanned against each one; any match means the pattern is too generic to trust as
-an identity, and the hits are reported in the text and JSON output.
+chosen signature is scanned against each one. The downgrade scales with the number of distinct
+modules it matches (the real generality signal), nudged up when one module matches it many times, and
+the evidence (modules scanned, modules hit, total matches, and the maximum in any one module) is
+recorded in the reason text and exposed in the JSON `negative_summary`. Any match lowers the
+signature's uniqueness and final score, and can drop its grade.
 
 ## Desktop workspace
 
@@ -161,6 +189,9 @@ scan also takes:
   --out <dir>        output directory (default: .)
   --ce               write update.txt as a Cheat Engine table
   --no-offsets       do not write offsets.h
+  --json             emit the scan result as JSON on stdout (progress goes to stderr)
+lint also takes:
+  --json             emit the lint result as JSON on stdout
 asm takes a positional <file> plus --from/--to <addr> to clip the address range.
 mksig:
   --client <exe>     a client binary (repeat for each version)
@@ -194,6 +225,27 @@ mapledumper mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
 printf 'process = MapleStory.exe\narch = 64\nout = dump\n' > maple.conf
 mapledumper scan
 ```
+
+### Exit codes
+
+The CLI returns a stable, specific exit code so a script can branch on the outcome instead of
+treating every nonzero result the same:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | success, nothing to flag |
+| `1`  | internal error (unexpected) |
+| `2`  | success with warnings (`lint` flagged weak signatures; `mksig` matched the negative corpus) |
+| `3`  | a scan ran but some patterns were not found or matched without resolving |
+| `4`  | a scan ran but at least one pattern matched in several places (ambiguous) |
+| `5`  | invalid input: bad flags, bad config, bad/empty patterns, or the target could not be located |
+| `6`  | access denied opening the target process (try running as administrator) |
+
+A scan with `--arch` set to the wrong bitness for the target module fails fast with an architecture
+mismatch (exit `5`) rather than silently reporting everything "not found", and a region that reads
+short is reported as a partial-read warning so a "not found" over unreadable memory is not mistaken
+for a confident absence. With `--json`, each finding carries a structured resolution trace (resolver
+kind, instruction offset, operand, computed target, section, and any failure reason).
 
 ## Quick start
 
@@ -256,12 +308,18 @@ CUserLocal = 48 8B 0D ?? ?? ?? ?? @kind=ptr @section=code @hits=unique
 | Directive   | Values                                | Meaning |
 |-------------|---------------------------------------|---------|
 | `@kind`     | `ptr`, `call`, `off`, `hdr`, `direct` | The resolver kind, overriding any suffix. Drives resolution. |
-| `@section`  | `code`, `data`, `rodata`, `import`    | The section the resolved target is expected to land in. |
+| `@section`  | `code`, `data`, `rodata`, `import`    | The section the resolved target must land in. Enforced on a live scan: a target that lands in the wrong kind of memory is reported as a failure, not a clean find. |
 | `@hits`     | `unique`, `any`, `>=N`                | How many matches the pattern should produce. |
 | `@instr`    | a number                              | Which decoded instruction in the match window to resolve from. |
 | `@operand`  | a number                              | Which operand of that instruction to read. |
 
 See [patterns.sample.txt](patterns.sample.txt) for a worked example.
+
+A live process exposes page protection but not its on-disk section table, so `@section` is enforced
+at the granularity that protection allows: `code` requires the resolved target to land in an
+executable region, and `data`, `rodata` and `import` require it to land outside one. When a target
+fails its expected section the pattern is reported as `out of expected section` (and never exported),
+which is the signal that the signature matched the wrong instruction.
 
 **String-anchored patterns.** Instead of bytes, a pattern can name a read-only string the target
 function references. The string survives a recompile that shifts the surrounding bytes, so it locates

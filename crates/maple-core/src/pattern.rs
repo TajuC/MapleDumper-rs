@@ -516,6 +516,18 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
         } else {
             seen_sigs.insert(aob_norm, name.clone());
         }
+        // A resolver chosen by name suffix (the legacy form) is kept working, but an explicit
+        // `@kind=` directive is clearer and lets `@instr` / `@operand` refine it; suggest it.
+        if resolve.is_none() && Kind::classify(&name).0 != Kind::Direct {
+            issues.push(ParseIssue {
+                line: line_no,
+                severity: ParseSeverity::Warning,
+                message: format!(
+                    "{name}: resolver is selected by the name suffix; prefer an explicit \
+                     @kind= directive (with @instr / @operand if needed)"
+                ),
+            });
+        }
         seen_names.insert(name.clone(), line_no);
         out.push(Pattern {
             name,
@@ -747,13 +759,31 @@ mod tests {
 
     #[test]
     fn strict_accepts_clean_patterns_without_warnings() {
+        // an explicit @kind avoids the suffix-lint, so this set is genuinely warning-free
         let parsed = parse_patterns_strict(
-            "Foo = AA BB CC DD\nBar_PTR = 48 8D 0D ?? ?? ?? ??",
+            "Foo = AA BB CC DD\nBar = 48 8D 0D ?? ?? ?? ?? @kind=ptr",
             Arch::X64,
         )
         .unwrap();
         assert_eq!(parsed.patterns.len(), 2);
         assert!(parsed.warnings.is_empty());
+    }
+
+    #[test]
+    fn strict_warns_on_suffix_derived_resolver() {
+        // a `_PTR` suffix with no explicit @kind is accepted but flagged with a suggestion
+        let parsed = parse_patterns_strict("Bar_PTR = 48 8D 0D ?? ?? ?? ??", Arch::X64).unwrap();
+        assert_eq!(parsed.patterns.len(), 1);
+        assert!(
+            parsed
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("name suffix") && w.message.contains("@kind"))
+        );
+        // the explicit form is silent
+        let explicit =
+            parse_patterns_strict("Bar = 48 8D 0D ?? ?? ?? ?? @kind=ptr", Arch::X64).unwrap();
+        assert!(explicit.warnings.is_empty());
     }
 
     #[test]

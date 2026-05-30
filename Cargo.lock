@@ -2385,6 +2385,7 @@ dependencies = [
  "iced-x86",
  "proptest",
  "rayon",
+ "serde",
  "windows-sys 0.61.2",
 ]
 

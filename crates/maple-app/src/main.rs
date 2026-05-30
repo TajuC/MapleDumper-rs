@@ -53,7 +53,10 @@ fn main() {
             fileio::pick_open_file,
             fileio::pick_save_file,
             fileio::read_text_file,
-            fileio::write_text_file
+            fileio::write_text_file,
+            fileio::open_pattern_file,
+            fileio::save_report_file,
+            fileio::import_config_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running MapleDumper");

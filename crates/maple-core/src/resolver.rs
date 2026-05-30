@@ -269,6 +269,451 @@ fn first_direct_call(buf: &[u8], base: usize, arch: Arch) -> Option<usize> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Typed, decode-driven resolution (ResolverSpec v2)
+//
+// `ResolveOp` says exactly which instruction and operand to read and how, instead of the coarse
+// `Kind` "scan for the first thing that looks right". The executor `resolve_op` honors an explicit
+// `instruction_offset` (which decoded instruction in the match window) and `operand_index`, validates
+// the mnemonic / operand kind where it can, and returns a `ResolveDetail` rich enough to build a
+// diagnostic trace. The coarse `Kind` path lowers onto these ops, so legacy patterns keep working.
+// ---------------------------------------------------------------------------
+
+/// A granular resolution operation. `instruction_offset` is the index of the decoded instruction in
+/// the match window (0 = the match itself); `operand_index`, when set, selects and validates a
+/// specific operand instead of taking the first suitable one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveOp {
+    /// The match address itself.
+    MatchAddress,
+    /// A near, RIP-relative `call rel32`; the target is the callee entry.
+    DirectRelativeCall { instruction_offset: usize },
+    /// A near, RIP-relative `jmp rel`; the target is the branch destination.
+    DirectRelativeJump { instruction_offset: usize },
+    /// A RIP-relative memory operand (x64) or absolute memory operand (x86); the target is the
+    /// referenced address.
+    RipRelativeMemory {
+        instruction_offset: usize,
+        operand_index: Option<usize>,
+    },
+    /// An immediate operand of an instruction; the value is the immediate (a header opcode, say).
+    ImmediateOperand {
+        instruction_offset: usize,
+        operand_index: Option<usize>,
+    },
+    /// A memory displacement (a struct-member offset); the value is the displacement.
+    MemoryDisplacement {
+        instruction_offset: usize,
+        operand_index: Option<usize>,
+    },
+    /// A `call`/`jmp` followed one hop into the first direct call at the callee (legacy `_CALL`).
+    NestedCall { instruction_offset: usize },
+}
+
+impl ResolveOp {
+    /// Lower a coarse [`ResolverSpec`] plus the explicit refinements from a pattern's schema onto a
+    /// granular op. Suffix-derived patterns (no refinements) map to the same behavior they always
+    /// had; `@instr` / `@operand` flow straight through.
+    #[must_use]
+    pub fn from_spec(
+        spec: ResolverSpec,
+        instruction_offset: usize,
+        operand_index: Option<usize>,
+    ) -> ResolveOp {
+        match spec {
+            ResolverSpec::MatchAddress => ResolveOp::MatchAddress,
+            ResolverSpec::MemoryPointer => ResolveOp::RipRelativeMemory {
+                instruction_offset,
+                operand_index,
+            },
+            ResolverSpec::StructOffset => ResolveOp::MemoryDisplacement {
+                instruction_offset,
+                operand_index,
+            },
+            ResolverSpec::Immediate => ResolveOp::ImmediateOperand {
+                instruction_offset,
+                operand_index,
+            },
+            ResolverSpec::NestedCall => ResolveOp::NestedCall { instruction_offset },
+        }
+    }
+
+    /// A short, stable label for diagnostics.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            ResolveOp::MatchAddress => "match address",
+            ResolveOp::DirectRelativeCall { .. } => "direct relative call",
+            ResolveOp::DirectRelativeJump { .. } => "direct relative jump",
+            ResolveOp::RipRelativeMemory { .. } => "rip-relative memory",
+            ResolveOp::ImmediateOperand { .. } => "immediate operand",
+            ResolveOp::MemoryDisplacement { .. } => "memory displacement",
+            ResolveOp::NestedCall { .. } => "nested call",
+        }
+    }
+}
+
+/// Why a typed resolution could not produce a value. Distinct from a clean miss so a caller can tell
+/// "decoded the wrong thing" from "the target was unreadable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveFail {
+    /// The needed instruction could not be decoded.
+    Decode,
+    /// The instruction was not the expected branch (e.g. expected a `call`, found something else).
+    WrongMnemonic,
+    /// The selected operand was not of the expected kind (e.g. operand_index did not point at a
+    /// memory or immediate operand).
+    WrongOperand,
+    /// Following the target required reading more memory and the read failed or was truncated.
+    PartialRead,
+}
+
+/// Everything a resolution observed: the value it produced and the instruction-level facts behind it,
+/// for diagnostics and validation. `target` is set for address-producing ops; `value` for
+/// offset/immediate ops.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolveDetail {
+    pub instruction_offset: usize,
+    pub mnemonic: Option<String>,
+    pub operand_index: Option<usize>,
+    pub operand_kind: Option<String>,
+    pub raw: Option<i64>,
+    pub target: Option<usize>,
+    pub value: Option<u64>,
+    pub is_address: bool,
+}
+
+fn mnemonic_str(instr: &Instruction) -> String {
+    format!("{:?}", instr.mnemonic()).to_lowercase()
+}
+
+fn op_kind_str(kind: OpKind) -> String {
+    format!("{kind:?}").to_lowercase()
+}
+
+// Decode the `n`-th valid instruction from the match (0-based), skipping bytes that fail to decode
+// just like `extract_pointer`, so a mis-anchored leading byte does not abort the walk.
+fn nth_instruction(data: &[u8], ip: usize, arch: Arch, n: usize) -> Option<Instruction> {
+    let mut decoder = Decoder::with_ip(bitness(arch), data, ip as u64, DecoderOptions::NONE);
+    let mut instr = Instruction::default();
+    let mut seen = 0usize;
+    for _ in 0..64 {
+        if !decoder.can_decode() {
+            break;
+        }
+        let start = decoder.position();
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() {
+            if decoder.set_position(start + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(ip.wrapping_add(start + 1) as u64);
+            continue;
+        }
+        if seen == n {
+            return Some(instr);
+        }
+        seen += 1;
+    }
+    None
+}
+
+fn is_immediate_kind(kind: OpKind) -> bool {
+    matches!(
+        kind,
+        OpKind::Immediate8
+            | OpKind::Immediate8_2nd
+            | OpKind::Immediate16
+            | OpKind::Immediate32
+            | OpKind::Immediate64
+            | OpKind::Immediate8to16
+            | OpKind::Immediate8to32
+            | OpKind::Immediate8to64
+            | OpKind::Immediate32to64
+    )
+}
+
+// The memory/branch target named by one instruction, with the operand index and raw displacement.
+fn mem_or_branch_target(instr: &Instruction, arch: Arch) -> Option<(usize, usize, OpKind, i64)> {
+    if matches!(
+        instr.op0_kind(),
+        OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+    ) {
+        let t = instr.near_branch_target() as usize;
+        return Some((t, 0, instr.op0_kind(), t as i64));
+    }
+    let mem_op = (0..instr.op_count()).find(|&i| instr.op_kind(i) == OpKind::Memory)?;
+    if instr.is_ip_rel_memory_operand() {
+        return Some((
+            instr.ip_rel_memory_address() as usize,
+            mem_op as usize,
+            OpKind::Memory,
+            instr.memory_displacement64() as i64,
+        ));
+    }
+    if matches!(arch, Arch::X86)
+        && instr.memory_base() == Register::None
+        && instr.memory_index() == Register::None
+    {
+        let t = instr.memory_displacement64() as usize;
+        return Some((t, mem_op as usize, OpKind::Memory, t as i64));
+    }
+    None
+}
+
+// Scan up to `MAX_PTR_INSTRS` for the first instruction that names a memory/branch target, capturing
+// its detail. This is the default (no instruction_offset) pointer behavior, matching extract_pointer.
+fn first_target_detail(data: &[u8], ip: usize, arch: Arch) -> Result<ResolveDetail, ResolveFail> {
+    let mut decoder = Decoder::with_ip(bitness(arch), data, ip as u64, DecoderOptions::NONE);
+    let mut instr = Instruction::default();
+    let mut idx = 0usize;
+    for _ in 0..MAX_PTR_INSTRS {
+        if !decoder.can_decode() {
+            break;
+        }
+        let start = decoder.position();
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() {
+            if decoder.set_position(start + 1).is_err() {
+                break;
+            }
+            decoder.set_ip(ip.wrapping_add(start + 1) as u64);
+            continue;
+        }
+        if let Some((target, op, kind, raw)) = mem_or_branch_target(&instr, arch) {
+            return Ok(ResolveDetail {
+                instruction_offset: idx,
+                mnemonic: Some(mnemonic_str(&instr)),
+                operand_index: Some(op),
+                operand_kind: Some(op_kind_str(kind)),
+                raw: Some(raw),
+                target: Some(target),
+                value: None,
+                is_address: true,
+            });
+        }
+        idx += 1;
+    }
+    Err(ResolveFail::Decode)
+}
+
+/// Execute a typed resolution op against the bytes at a match, returning a rich detail or a typed
+/// failure. `source` is used only by [`ResolveOp::NestedCall`] to follow the callee.
+///
+/// # Errors
+/// Returns a [`ResolveFail`] describing why no value could be produced.
+pub fn resolve_op<S: MemorySource>(
+    op: &ResolveOp,
+    data: &[u8],
+    ip: usize,
+    arch: Arch,
+    source: &S,
+) -> Result<ResolveDetail, ResolveFail> {
+    match op {
+        ResolveOp::MatchAddress => Ok(ResolveDetail {
+            target: Some(ip),
+            is_address: true,
+            ..Default::default()
+        }),
+        ResolveOp::DirectRelativeCall { instruction_offset } => {
+            branch_detail(data, ip, arch, *instruction_offset, true)
+        }
+        ResolveOp::DirectRelativeJump { instruction_offset } => {
+            branch_detail(data, ip, arch, *instruction_offset, false)
+        }
+        ResolveOp::RipRelativeMemory {
+            instruction_offset,
+            operand_index,
+        } => {
+            if *instruction_offset == 0 && operand_index.is_none() {
+                return first_target_detail(data, ip, arch);
+            }
+            let instr =
+                nth_instruction(data, ip, arch, *instruction_offset).ok_or(ResolveFail::Decode)?;
+            if let Some(oi) = operand_index
+                && !(*oi < instr.op_count() as usize
+                    && matches!(
+                        instr.op_kind(*oi as u32),
+                        OpKind::Memory
+                            | OpKind::NearBranch16
+                            | OpKind::NearBranch32
+                            | OpKind::NearBranch64
+                    ))
+            {
+                return Err(ResolveFail::WrongOperand);
+            }
+            let (target, op, kind, raw) =
+                mem_or_branch_target(&instr, arch).ok_or(ResolveFail::WrongOperand)?;
+            Ok(ResolveDetail {
+                instruction_offset: *instruction_offset,
+                mnemonic: Some(mnemonic_str(&instr)),
+                operand_index: Some(operand_index.unwrap_or(op)),
+                operand_kind: Some(op_kind_str(kind)),
+                raw: Some(raw),
+                target: Some(target),
+                value: None,
+                is_address: true,
+            })
+        }
+        ResolveOp::ImmediateOperand {
+            instruction_offset,
+            operand_index,
+        } => {
+            if let Some(instr) = nth_instruction(data, ip, arch, *instruction_offset) {
+                let chosen = match operand_index {
+                    Some(oi) => (*oi < instr.op_count() as usize
+                        && is_immediate_kind(instr.op_kind(*oi as u32)))
+                    .then_some(*oi),
+                    None => (0..instr.op_count())
+                        .find(|&i| is_immediate_kind(instr.op_kind(i)))
+                        .map(|i| i as usize),
+                };
+                if let Some(oi) = chosen {
+                    let imm = instr.immediate(oi as u32);
+                    return Ok(ResolveDetail {
+                        instruction_offset: *instruction_offset,
+                        mnemonic: Some(mnemonic_str(&instr)),
+                        operand_index: Some(oi),
+                        operand_kind: Some(op_kind_str(instr.op_kind(oi as u32))),
+                        raw: Some(imm as i64),
+                        target: None,
+                        value: Some(imm),
+                        is_address: false,
+                    });
+                }
+                if operand_index.is_some() {
+                    return Err(ResolveFail::WrongOperand);
+                }
+            }
+            // Fall back to the byte-scan extractor for the default case, so anything the legacy path
+            // found is still found.
+            if *instruction_offset == 0
+                && operand_index.is_none()
+                && let Some(v) = extract_immediate(data, 4)
+            {
+                return Ok(ResolveDetail {
+                    raw: Some(i64::from(v)),
+                    value: Some(u64::from(v)),
+                    ..Default::default()
+                });
+            }
+            Err(ResolveFail::WrongOperand)
+        }
+        ResolveOp::MemoryDisplacement {
+            instruction_offset,
+            operand_index,
+        } => {
+            if let Some(instr) = nth_instruction(data, ip, arch, *instruction_offset) {
+                let mem = match operand_index {
+                    Some(oi) => (*oi < instr.op_count() as usize
+                        && instr.op_kind(*oi as u32) == OpKind::Memory)
+                        .then_some(*oi),
+                    None => (0..instr.op_count())
+                        .find(|&i| instr.op_kind(i) == OpKind::Memory)
+                        .map(|i| i as usize),
+                };
+                if let Some(oi) = mem {
+                    let disp = instr.memory_displacement64();
+                    return Ok(ResolveDetail {
+                        instruction_offset: *instruction_offset,
+                        mnemonic: Some(mnemonic_str(&instr)),
+                        operand_index: Some(oi),
+                        operand_kind: Some("memory".to_string()),
+                        raw: Some(disp as i64),
+                        target: None,
+                        value: Some(disp),
+                        is_address: false,
+                    });
+                }
+                if operand_index.is_some() {
+                    return Err(ResolveFail::WrongOperand);
+                }
+            }
+            if *instruction_offset == 0
+                && operand_index.is_none()
+                && let Some(v) = extract_offset(data, 4, arch)
+            {
+                return Ok(ResolveDetail {
+                    raw: Some(i64::from(v)),
+                    value: Some(u64::from(v)),
+                    ..Default::default()
+                });
+            }
+            Err(ResolveFail::WrongOperand)
+        }
+        ResolveOp::NestedCall { instruction_offset } => {
+            nested_call_detail(data, ip, arch, *instruction_offset, source)
+        }
+    }
+}
+
+fn branch_detail(
+    data: &[u8],
+    ip: usize,
+    arch: Arch,
+    n: usize,
+    want_call: bool,
+) -> Result<ResolveDetail, ResolveFail> {
+    let instr = nth_instruction(data, ip, arch, n).ok_or(ResolveFail::Decode)?;
+    let is_branch = matches!(
+        instr.op0_kind(),
+        OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+    );
+    let right_kind = if want_call {
+        instr.is_call_near()
+    } else {
+        instr.is_jmp_short_or_near()
+    };
+    if !is_branch || !right_kind {
+        return Err(ResolveFail::WrongMnemonic);
+    }
+    let target = instr.near_branch_target() as usize;
+    Ok(ResolveDetail {
+        instruction_offset: n,
+        mnemonic: Some(mnemonic_str(&instr)),
+        operand_index: Some(0),
+        operand_kind: Some(op_kind_str(instr.op0_kind())),
+        raw: Some(target as i64),
+        target: Some(target),
+        value: None,
+        is_address: true,
+    })
+}
+
+fn nested_call_detail<S: MemorySource>(
+    data: &[u8],
+    ip: usize,
+    arch: Arch,
+    n: usize,
+    source: &S,
+) -> Result<ResolveDetail, ResolveFail> {
+    let instr = nth_instruction(data, ip, arch, n).ok_or(ResolveFail::Decode)?;
+    if !matches!(
+        instr.op0_kind(),
+        OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64
+    ) {
+        return Err(ResolveFail::WrongMnemonic);
+    }
+    let first = instr.near_branch_target() as usize;
+    // Second hop: read the callee and follow the first direct call. A hard read error at the callee
+    // is a partial/inaccessible read, distinct from "decoded fine, no nested call".
+    let mut buf = [0u8; 0x100];
+    let read = source
+        .read_into(first, &mut buf)
+        .map_err(|_| ResolveFail::PartialRead)?;
+    let target = first_direct_call(&buf[..read], first, arch).unwrap_or(first);
+    Ok(ResolveDetail {
+        instruction_offset: n,
+        mnemonic: Some(mnemonic_str(&instr)),
+        operand_index: Some(0),
+        operand_kind: Some(op_kind_str(instr.op0_kind())),
+        raw: Some(first as i64),
+        target: Some(target),
+        value: None,
+        is_address: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +881,207 @@ mod tests {
             ),
             None
         );
+    }
+
+    // ----- ResolverSpec v2 (resolve_op) golden cases -----
+
+    fn no_source() -> BufferSource {
+        BufferSource::new(0, Vec::new())
+    }
+
+    #[test]
+    fn op_direct_relative_call() {
+        let d = resolve_op(
+            &ResolveOp::DirectRelativeCall {
+                instruction_offset: 0,
+            },
+            &[0xE8, 0x00, 0x01, 0x00, 0x00],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(d.target, Some(0x1105));
+        assert!(d.is_address);
+        assert_eq!(d.mnemonic.as_deref(), Some("call"));
+    }
+
+    #[test]
+    fn op_direct_relative_jump_near_and_short() {
+        let near = resolve_op(
+            &ResolveOp::DirectRelativeJump {
+                instruction_offset: 0,
+            },
+            &[0xE9, 0x00, 0x01, 0x00, 0x00],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(near.target, Some(0x1105));
+        let short = resolve_op(
+            &ResolveOp::DirectRelativeJump {
+                instruction_offset: 0,
+            },
+            &[0xEB, 0x05],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(short.target, Some(0x1007));
+    }
+
+    #[test]
+    fn op_rip_relative_memory() {
+        let mov = [0x48, 0x8B, 0x0D, 0x78, 0x56, 0x34, 0x12];
+        let d = resolve_op(
+            &ResolveOp::RipRelativeMemory {
+                instruction_offset: 0,
+                operand_index: None,
+            },
+            &mov,
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(d.target, Some(0x1000 + 7 + 0x1234_5678));
+        assert_eq!(d.operand_kind.as_deref(), Some("memory"));
+    }
+
+    #[test]
+    fn op_immediate_operand() {
+        let d = resolve_op(
+            &ResolveOp::ImmediateOperand {
+                instruction_offset: 0,
+                operand_index: None,
+            },
+            &[0xBA, 0x23, 0x01, 0x00, 0x00],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(d.value, Some(0x123));
+        assert!(!d.is_address);
+    }
+
+    #[test]
+    fn op_memory_displacement() {
+        let d = resolve_op(
+            &ResolveOp::MemoryDisplacement {
+                instruction_offset: 0,
+                operand_index: None,
+            },
+            &[0x48, 0x8B, 0x48, 0x10],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(d.value, Some(0x10));
+    }
+
+    #[test]
+    fn op_honors_instruction_offset() {
+        // a leading nop, then the call; instruction_offset 1 must resolve the call, not the nop.
+        let bytes = [0x90, 0xE8, 0x00, 0x01, 0x00, 0x00];
+        let d = resolve_op(
+            &ResolveOp::DirectRelativeCall {
+                instruction_offset: 1,
+            },
+            &bytes,
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        // call ip is 0x1001, len 5, rel 0x100 -> 0x1106
+        assert_eq!(d.target, Some(0x1106));
+        assert_eq!(d.instruction_offset, 1);
+    }
+
+    #[test]
+    fn op_wrong_mnemonic_is_reported() {
+        // a mov is not a call
+        let err = resolve_op(
+            &ResolveOp::DirectRelativeCall {
+                instruction_offset: 0,
+            },
+            &[0x48, 0x8B, 0x48, 0x10],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap_err();
+        assert_eq!(err, ResolveFail::WrongMnemonic);
+    }
+
+    #[test]
+    fn op_wrong_operand_is_reported() {
+        // operand 0 of `mov rcx,[rax+0x10]` is a register, not an immediate
+        let err = resolve_op(
+            &ResolveOp::ImmediateOperand {
+                instruction_offset: 0,
+                operand_index: Some(0),
+            },
+            &[0x48, 0x8B, 0x48, 0x10],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap_err();
+        assert_eq!(err, ResolveFail::WrongOperand);
+    }
+
+    #[test]
+    fn op_undecodable_is_a_decode_failure() {
+        let err = resolve_op(
+            &ResolveOp::DirectRelativeCall {
+                instruction_offset: 0,
+            },
+            &[0xFF],
+            0x1000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap_err();
+        assert_eq!(err, ResolveFail::Decode);
+    }
+
+    #[test]
+    fn op_nested_call_partial_read_when_target_unreadable() {
+        struct DeadSource;
+        impl MemorySource for DeadSource {
+            fn read_into(&self, _addr: usize, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            }
+        }
+        let err = resolve_op(
+            &ResolveOp::NestedCall {
+                instruction_offset: 0,
+            },
+            &[0xE8, 0x00, 0x01, 0x00, 0x00],
+            0x1000,
+            Arch::X64,
+            &DeadSource,
+        )
+        .unwrap_err();
+        assert_eq!(err, ResolveFail::PartialRead);
+    }
+
+    #[test]
+    fn op_match_address_is_the_ip() {
+        let d = resolve_op(
+            &ResolveOp::MatchAddress,
+            &[0x90],
+            0x4000,
+            Arch::X64,
+            &no_source(),
+        )
+        .unwrap();
+        assert_eq!(d.target, Some(0x4000));
+        assert!(d.is_address);
     }
 }

@@ -310,7 +310,12 @@ function reportInnerHtml(r) {
       `<div class="insp-hint">${esc(t("sig.stringAnchorHint"))}</div>`;
   }
   if (r.negative_hits && r.negative_hits.length) {
-    html += `<div class="sig-section-h">${t("sig.negHits")} (${r.negative_hits.length})</div><ul class="sig-diags">` +
+    html += `<div class="sig-section-h">${t("sig.negHits")} (${r.negative_hits.length})</div>`;
+    const ns = r.negative_summary;
+    if (ns) {
+      html += `<div class="insp-hint">${esc(t("sig.negSummary", { hit: ns.modules_hit, scanned: ns.modules_scanned, total: ns.total_hits, max: ns.max_hits_per_module }))}</div>`;
+    }
+    html += `<ul class="sig-diags">` +
       r.negative_hits
         .map((h) => `<li class="sig-holdout bad"><span class="mono">${esc(h.label)}</span> ${esc(t("sig.negHitCount", { n: h.count }))}</li>`)
         .join("") +

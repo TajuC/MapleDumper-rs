@@ -10,13 +10,109 @@ use maple_core::output::{cheat_table, offsets_header, plain_text};
 use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patterns_file_strict};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
-    ScanResult, Target, apply_string_anchors, assembly_scan, diff, lint, parse_asm_patterns,
-    parse_dump, parse_stamp, profile, scan,
+    ResolveTrace, ScanResult, Target, apply_string_anchors, assembly_scan, diff, lint,
+    parse_asm_patterns, parse_dump, parse_stamp, profile, scan_in,
 };
 use maple_core::{
-    FileImage, HoldoutResult, ImageInput, NegativeHit, SigCandidate, SigOptions, SigReport,
-    TargetKind, TargetSpec, generate, holdout_validate, make_string_anchor, negative_corpus_hits,
+    FileImage, HoldoutResult, ImageInput, NegativeEvidence, NegativeHit, SigCandidate, SigOptions,
+    SigReport, TargetKind, TargetSpec, apply_negative_corpus, generate, holdout_validate,
+    make_string_anchor, negative_corpus_hits,
 };
+
+/// A stable process exit code. Automation can branch on the specific outcome instead of treating
+/// every nonzero result the same. These numbers are part of the tool's contract; keep them stable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExitKind {
+    /// 0: ran cleanly with nothing to flag.
+    Success,
+    /// 2: completed with advisory issues only (lint flagged weak signatures; mksig matched a
+    /// negative-corpus module).
+    SuccessWithWarnings,
+    /// 3: a scan ran but some patterns were not found or matched without resolving.
+    Unresolved,
+    /// 4: a scan ran but at least one pattern matched in several places.
+    Ambiguous,
+    /// 5: bad flags, bad config, bad/empty patterns, or the target could not be located.
+    InvalidInput,
+    /// 6: the target process could not be opened (try running as administrator).
+    AccessDenied,
+    /// 1: an unexpected failure.
+    Internal,
+}
+
+impl ExitKind {
+    fn code(self) -> u8 {
+        match self {
+            ExitKind::Success => 0,
+            ExitKind::Internal => 1,
+            ExitKind::SuccessWithWarnings => 2,
+            ExitKind::Unresolved => 3,
+            ExitKind::Ambiguous => 4,
+            ExitKind::InvalidInput => 5,
+            ExitKind::AccessDenied => 6,
+        }
+    }
+}
+
+/// A command failure carrying both a message and the exit code it should map to.
+struct CliError {
+    kind: ExitKind,
+    msg: String,
+}
+
+impl CliError {
+    fn new(kind: ExitKind, msg: impl Into<String>) -> Self {
+        Self {
+            kind,
+            msg: msg.into(),
+        }
+    }
+}
+
+impl From<String> for CliError {
+    /// Most string errors in this tool are user-actionable input, config or pattern problems, so a
+    /// bare `?` maps to [`ExitKind::InvalidInput`]. The access-denied and internal cases are
+    /// constructed explicitly where they arise (see [`attach_err`]).
+    fn from(msg: String) -> Self {
+        CliError::new(ExitKind::InvalidInput, msg)
+    }
+}
+
+impl From<&str> for CliError {
+    fn from(msg: &str) -> Self {
+        CliError::new(ExitKind::InvalidInput, msg)
+    }
+}
+
+/// Map an attach I/O failure to its exit code: a permission failure is access-denied, a missing
+/// kernel primitive is internal, and "not running / timed out / module missing" is treated as an
+/// input problem (the target specification did not resolve to a usable process).
+fn attach_err(e: std::io::Error) -> CliError {
+    let kind = match e.kind() {
+        std::io::ErrorKind::PermissionDenied => ExitKind::AccessDenied,
+        std::io::ErrorKind::Unsupported => ExitKind::Internal,
+        _ => ExitKind::InvalidInput,
+    };
+    CliError::new(kind, format!("attach failed: {e}"))
+}
+
+/// The exit code that summarizes a finished scan: ambiguous beats unresolved beats
+/// warnings-only beats clean.
+fn scan_exit_kind(result: &ScanResult) -> ExitKind {
+    if result
+        .rows
+        .iter()
+        .any(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
+    {
+        ExitKind::Ambiguous
+    } else if !result.matched_unresolved.is_empty() || !result.not_found.is_empty() {
+        ExitKind::Unresolved
+    } else if !result.warnings.is_empty() {
+        ExitKind::SuccessWithWarnings
+    } else {
+        ExitKind::Success
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -94,6 +190,9 @@ struct ScanArgs {
     /// Accept malformed pattern lines instead of failing (power-user opt-in)
     #[arg(long)]
     lenient: bool,
+    /// Emit the scan result as JSON on stdout (progress goes to stderr)
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -107,6 +206,9 @@ struct LintArgs {
     /// Accept malformed pattern lines instead of failing
     #[arg(long)]
     lenient: bool,
+    /// Emit the lint result as JSON on stdout
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -374,57 +476,74 @@ fn load_patterns(path: &Path, arch: Arch, strict: bool) -> Result<Vec<Pattern>, 
     }
 }
 
-fn require_patterns(path: &Path, arch: Arch, strict: bool) -> Result<Vec<Pattern>, String> {
+fn require_patterns(
+    path: &Path,
+    arch: Arch,
+    strict: bool,
+    quiet: bool,
+) -> Result<Vec<Pattern>, String> {
     let patterns = load_patterns(path, arch, strict)?;
     if patterns.is_empty() {
         return Err(format!("no patterns loaded from {}", path.display()));
     }
-    println!("[+] loaded {} patterns", patterns.len());
+    if !quiet {
+        println!("[+] loaded {} patterns", patterns.len());
+    }
     Ok(patterns)
 }
 
-fn attach_target(at: &ResolvedAttach, cancel: &AtomicBool) -> Result<Target, String> {
+fn attach_target(
+    at: &ResolvedAttach,
+    cancel: &AtomicBool,
+    quiet: bool,
+) -> Result<Target, CliError> {
     let opts = AttachOptions {
         wait: at.wait,
         timeout: at.timeout,
         poll: Duration::from_millis(300),
     };
     let target = if let Some(pid) = at.pid {
-        println!("[+] attaching to pid {pid}");
-        Target::attach_pid(pid, &at.module).map_err(|e| format!("attach failed: {e}"))?
+        if !quiet {
+            println!("[+] attaching to pid {pid}");
+        }
+        Target::attach_pid(pid, &at.module).map_err(attach_err)?
     } else {
         let loc = locator(at)?;
         if let Locator::Name(name) = &loc {
             let candidates = maple_core::process::process_candidates(name);
             if candidates.len() > 1 {
-                println!("[!] {} processes match '{name}':", candidates.len());
+                // A multiple-match warning matters even in --json mode, so it goes to stderr (where
+                // it cannot corrupt a piped JSON document on stdout) rather than being suppressed.
+                eprintln!("[!] {} processes match '{name}':", candidates.len());
                 for c in &candidates {
-                    println!(
+                    eprintln!(
                         "      pid {}  {}",
                         c.pid,
                         c.path.as_deref().unwrap_or("(path unavailable)")
                     );
                 }
-                println!("    attaching to the first; pass --pid <pid> to choose another");
+                eprintln!("    attaching to the first; pass --pid <pid> to choose another");
             }
         }
-        if at.wait {
+        if at.wait && !quiet {
             let what = match &loc {
                 Locator::Name(name) => format!("process {name}"),
                 Locator::Class(class) => format!("window class {class}"),
             };
             println!("[*] waiting for {what} (Ctrl-C to cancel)...");
         }
-        Target::attach(&loc, &at.module, &opts, cancel)
-            .map_err(|e| format!("attach failed: {e}"))?
+        Target::attach(&loc, &at.module, &opts, cancel).map_err(attach_err)?
     };
-    println!(
-        "[+] attached; module {} base 0x{:X} size 0x{:X}",
-        at.module, target.module.base, target.module.size
-    );
+    if !quiet {
+        println!(
+            "[+] attached; module {} base 0x{:X} size 0x{:X}",
+            at.module, target.module.base, target.module.size
+        );
+    }
     Ok(target)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_outputs(
     out: &Path,
     ce: bool,
@@ -433,6 +552,7 @@ fn write_outputs(
     module: &str,
     base: u64,
     stamp: Option<&BuildStamp>,
+    quiet: bool,
 ) -> Result<(), String> {
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
 
@@ -444,18 +564,97 @@ fn write_outputs(
         plain_text(&result.findings, module, base, header.as_deref())
     };
     std::fs::write(&update, contents).map_err(|e| format!("write {}: {e}", update.display()))?;
-    println!("[+] wrote {}", update.display());
+    if !quiet {
+        println!("[+] wrote {}", update.display());
+    }
 
     if offsets {
         let header = out.join("offsets.h");
         std::fs::write(&header, offsets_header(&result.findings, module, base))
             .map_err(|e| format!("write {}: {e}", header.display()))?;
-        println!("[+] wrote {}", header.display());
+        if !quiet {
+            println!("[+] wrote {}", header.display());
+        }
     }
     Ok(())
 }
 
-fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
+#[derive(Serialize)]
+struct ScanFindingJson {
+    name: String,
+    category: String,
+    status: String,
+    value: Option<String>,
+    is_offset: bool,
+    matches: usize,
+    confidence: u8,
+    candidates: Vec<String>,
+    trace: Option<String>,
+    // The full structured resolution trace (instruction offset, operand, mnemonic, target, checks,
+    // failure reason), so automation can inspect why a value resolved, not just the one-liner.
+    trace_detail: Option<ResolveTrace>,
+    exported: bool,
+}
+
+#[derive(Serialize)]
+struct ScanJson {
+    module: String,
+    module_base: String,
+    build_hash: String,
+    build_version: Option<String>,
+    found: usize,
+    unresolved: usize,
+    not_found: usize,
+    ambiguous: usize,
+    total_matches: usize,
+    unread_bytes: u64,
+    warnings: Vec<String>,
+    findings: Vec<ScanFindingJson>,
+}
+
+fn scan_json(result: &ScanResult, module: &str, base: u64, stamp: &BuildStamp) -> String {
+    let ambiguous = result
+        .rows
+        .iter()
+        .filter(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
+        .count();
+    let findings = result
+        .rows
+        .iter()
+        .map(|r| ScanFindingJson {
+            name: r.name.clone(),
+            category: r.category.clone(),
+            status: r.status.label().to_string(),
+            value: r.value.map(|v| format!("0x{v:X}")),
+            is_offset: r.is_offset,
+            matches: r.matches,
+            confidence: r.confidence,
+            candidates: r.candidates.iter().map(|v| format!("0x{v:X}")).collect(),
+            trace: r.trace.clone(),
+            trace_detail: r.trace_detail.clone(),
+            // An ambiguous or failed row is shown for inspection but is never written as an offset.
+            exported: r.status.is_exportable(),
+        })
+        .collect();
+    let report = ScanJson {
+        module: module.to_string(),
+        module_base: format!("0x{base:X}"),
+        build_hash: stamp.short(),
+        build_version: stamp.version.clone(),
+        found: result.found.len(),
+        unresolved: result.matched_unresolved.len(),
+        not_found: result.not_found.len(),
+        ambiguous,
+        total_matches: result.total_matches,
+        unread_bytes: result.unread_bytes(),
+        warnings: result.warnings.clone(),
+        findings,
+    };
+    serde_json::to_string_pretty(&report).unwrap_or_default()
+}
+
+fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
+    let json = a.json;
     let arch = resolve_arch(a.arch.as_deref(), cfg)?;
     let patterns_path = resolve_patterns(a.patterns.as_ref(), cfg);
     let out = a
@@ -464,19 +663,28 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
         .or_else(|| cfg.out.clone())
         .unwrap_or_else(|| PathBuf::from("."));
     let strict = resolve_strict(a.lenient, cfg);
-    let patterns = require_patterns(&patterns_path, arch, strict)?;
+    let patterns = require_patterns(&patterns_path, arch, strict, json)?;
 
     let at = resolve_attach(&a.attach, cfg);
     let cancel = AtomicBool::new(false);
-    let target = attach_target(&at, &cancel)?;
+    let target = attach_target(&at, &cancel, json)?;
+    if let Some(msg) = arch_mismatch(arch, target.module_arch(), &at.module) {
+        return Err(CliError::new(ExitKind::InvalidInput, msg));
+    }
 
     let regions = target.regions();
-    println!("[+] scanning {} regions", regions.len());
-    let mut result = scan(
+    // The module's executable regions, used both to validate a pattern's `@section` expectation
+    // during the scan and to fingerprint the build below; enumerated once and reused.
+    let code_regions = target.code_regions();
+    if !json {
+        println!("[+] scanning {} regions", regions.len());
+    }
+    let mut result = scan_in(
         &target,
         target.module.base,
         target.module.size,
         &regions,
+        &code_regions,
         &patterns,
         arch,
     );
@@ -487,8 +695,8 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
             source: &target,
             base: target.module.base,
             size: target.module.size,
-            code_regions: target.code_regions(),
-            regions: target.regions(),
+            code_regions: code_regions.clone(),
+            regions: regions.clone(),
             import: None,
             arch,
             code_hash: 0,
@@ -499,42 +707,53 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
         apply_string_anchors(&mut result, &img, &patterns);
     }
 
-    println!();
-    println!("[+] found {}", result.found.len());
-    if !result.matched_unresolved.is_empty() {
-        println!(
-            "[!] matched but unresolved: {}",
-            result.matched_unresolved.len()
-        );
-        for name in &result.matched_unresolved {
-            println!("    {name}");
-        }
-    }
-    if !result.not_found.is_empty() {
-        println!("[-] not found: {}", result.not_found.len());
-        for name in &result.not_found {
-            println!("    {name}");
-        }
-    }
-    let ambiguous: Vec<_> = result
-        .rows
-        .iter()
-        .filter(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
-        .collect();
-    if !ambiguous.is_empty() {
-        println!(
-            "[!] ambiguous (multiple matches, used the first): {}",
-            ambiguous.len()
-        );
-        for r in &ambiguous {
-            println!("    {} ({} matches)", r.name, r.matches);
-        }
-    }
-    println!("[+] total matches {}", result.total_matches);
-
-    let mut stamp = BuildStamp::capture(&target, target.module.base, &target.code_regions());
+    let mut stamp = BuildStamp::capture(&target, target.module.base, &code_regions);
     stamp.version = target.file_version();
-    println!("[+] build {} ({} bytes)", stamp.short(), stamp.bytes);
+
+    if json {
+        // stdout is the JSON document only; everything else this command logged went to stderr.
+        println!(
+            "{}",
+            scan_json(&result, &at.module, target.module.base as u64, &stamp)
+        );
+    } else {
+        println!();
+        println!("[+] found {}", result.found.len());
+        if !result.matched_unresolved.is_empty() {
+            println!(
+                "[!] matched but unresolved: {}",
+                result.matched_unresolved.len()
+            );
+            for name in &result.matched_unresolved {
+                println!("    {name}");
+            }
+        }
+        if !result.not_found.is_empty() {
+            println!("[-] not found: {}", result.not_found.len());
+            for name in &result.not_found {
+                println!("    {name}");
+            }
+        }
+        let ambiguous: Vec<_> = result
+            .rows
+            .iter()
+            .filter(|r| matches!(r.status, FindingStatus::FoundAmbiguous { .. }))
+            .collect();
+        if !ambiguous.is_empty() {
+            println!(
+                "[!] ambiguous (multiple matches, used the first): {}",
+                ambiguous.len()
+            );
+            for r in &ambiguous {
+                println!("    {} ({} matches)", r.name, r.matches);
+            }
+        }
+        for w in &result.warnings {
+            println!("[!] {w}");
+        }
+        println!("[+] total matches {}", result.total_matches);
+        println!("[+] build {} ({} bytes)", stamp.short(), stamp.bytes);
+    }
 
     write_outputs(
         &out,
@@ -544,19 +763,49 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<(), String> {
         &at.module,
         target.module.base as u64,
         Some(&stamp),
-    )
+        json,
+    )?;
+    Ok(scan_exit_kind(&result))
 }
 
-fn cmd_lint(a: LintArgs, cfg: &Config) -> Result<(), String> {
+#[derive(Serialize)]
+struct LintJson {
+    name: String,
+    aob: String,
+    lints: Vec<String>,
+}
+
+fn cmd_lint(a: LintArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     let arch = resolve_arch(a.arch.as_deref(), cfg)?;
     let patterns_path = resolve_patterns(a.patterns.as_ref(), cfg);
     let strict = resolve_strict(a.lenient, cfg);
-    let patterns = require_patterns(&patterns_path, arch, strict)?;
-    print_lints(&patterns);
-    Ok(())
+    let patterns = require_patterns(&patterns_path, arch, strict, a.json)?;
+    let flagged = if a.json {
+        let report: Vec<LintJson> = patterns
+            .iter()
+            .map(|p| LintJson {
+                name: p.name.clone(),
+                aob: p.signature.to_aob(),
+                lints: lint(&p.signature).iter().map(|l| l.message()).collect(),
+            })
+            .collect();
+        let flagged = report.iter().filter(|r| !r.lints.is_empty()).count();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+        flagged
+    } else {
+        print_lints(&patterns)
+    };
+    Ok(if flagged > 0 {
+        ExitKind::SuccessWithWarnings
+    } else {
+        ExitKind::Success
+    })
 }
 
-fn cmd_diff(a: DiffArgs) -> Result<(), String> {
+fn cmd_diff(a: DiffArgs) -> Result<ExitKind, CliError> {
     let old_text =
         std::fs::read_to_string(&a.old).map_err(|e| format!("read {}: {e}", a.old.display()))?;
     let new_text =
@@ -566,14 +815,17 @@ fn cmd_diff(a: DiffArgs) -> Result<(), String> {
         parse_stamp(&new_text).as_ref(),
     );
     print_diff(&diff(&parse_dump(&old_text), &parse_dump(&new_text)));
-    Ok(())
+    Ok(ExitKind::Success)
 }
 
-fn cmd_asm(a: AsmArgs, cfg: &Config) -> Result<(), String> {
+fn cmd_asm(a: AsmArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     let arch = resolve_arch(a.arch.as_deref(), cfg)?;
     let at = resolve_attach(&a.attach, cfg);
     let cancel = AtomicBool::new(false);
-    let target = attach_target(&at, &cancel)?;
+    let target = attach_target(&at, &cancel, false)?;
+    if let Some(msg) = arch_mismatch(arch, target.module_arch(), &at.module) {
+        return Err(CliError::new(ExitKind::InvalidInput, msg));
+    }
 
     let text =
         std::fs::read_to_string(&a.file).map_err(|e| format!("read {}: {e}", a.file.display()))?;
@@ -596,18 +848,21 @@ fn cmd_asm(a: AsmArgs, cfg: &Config) -> Result<(), String> {
             println!("      {line}");
         }
     }
-    Ok(())
+    Ok(ExitKind::Success)
 }
 
-fn cmd_profile(a: ProfileArgs, cfg: &Config) -> Result<(), String> {
+fn cmd_profile(a: ProfileArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     let arch = resolve_arch(a.arch.as_deref(), cfg)?;
     let patterns_path = resolve_patterns(a.patterns.as_ref(), cfg);
     let strict = resolve_strict(a.lenient, cfg);
-    let patterns = require_patterns(&patterns_path, arch, strict)?;
+    let patterns = require_patterns(&patterns_path, arch, strict, false)?;
 
     let at = resolve_attach(&a.attach, cfg);
     let cancel = AtomicBool::new(false);
-    let target = attach_target(&at, &cancel)?;
+    let target = attach_target(&at, &cancel, false)?;
+    if let Some(msg) = arch_mismatch(arch, target.module_arch(), &at.module) {
+        return Err(CliError::new(ExitKind::InvalidInput, msg));
+    }
 
     let regions = target.code_regions();
     println!(
@@ -623,10 +878,10 @@ fn cmd_profile(a: ProfileArgs, cfg: &Config) -> Result<(), String> {
         arch,
     );
     print_profile(&report);
-    Ok(())
+    Ok(ExitKind::Success)
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<ExitKind, CliError> {
     let cli = Cli::parse();
     let cfg = resolve_config(cli.config.as_deref())?;
     match cli.command {
@@ -723,7 +978,7 @@ fn print_build_compare(old: Option<&BuildStamp>, new: Option<&BuildStamp>) {
     }
 }
 
-fn print_lints(patterns: &[Pattern]) {
+fn print_lints(patterns: &[Pattern]) -> usize {
     let mut flagged = 0;
     for p in patterns {
         let lints = lint(&p.signature);
@@ -742,6 +997,7 @@ fn print_lints(patterns: &[Pattern]) {
         patterns.len(),
         patterns.len() - flagged
     );
+    flagged
 }
 
 fn print_diff(report: &DiffReport) {
@@ -771,6 +1027,29 @@ fn arch_str(arch: Arch) -> &'static str {
         "x64"
     } else {
         "x86"
+    }
+}
+
+fn arch_bits(arch: Arch) -> &'static str {
+    if matches!(arch, Arch::X64) {
+        "64"
+    } else {
+        "32"
+    }
+}
+
+/// Compare the requested architecture against the module's actual one (when it can be read). Returns
+/// an actionable message on a definite mismatch, so a scan fails clearly instead of silently reading
+/// the wrong bitness and reporting everything "not found".
+fn arch_mismatch(requested: Arch, actual: Option<Arch>, module: &str) -> Option<String> {
+    match actual {
+        Some(a) if a != requested => Some(format!(
+            "architecture mismatch: requested {} but {module} is {}; pass --arch {}",
+            arch_str(requested),
+            arch_str(a),
+            arch_bits(a)
+        )),
+        _ => None,
     }
 }
 
@@ -837,6 +1116,17 @@ struct JPer {
     match_rva: Option<String>,
     resolved_target_rva: Option<String>,
     target_type: Option<String>,
+    fingerprint_similarity: Option<f64>,
+}
+#[derive(Serialize)]
+struct JScores {
+    uniqueness: u32,
+    stability: u32,
+    entropy: u32,
+    semantic: u32,
+    resolver_confidence: u32,
+    cross_build: u32,
+    final_score: u32,
 }
 #[derive(Serialize)]
 struct JCand {
@@ -844,6 +1134,8 @@ struct JCand {
     suffix: String,
     grade: String,
     score: u32,
+    scores: JScores,
+    reasons: Vec<String>,
     bytes: usize,
     fixed: usize,
     wildcards: usize,
@@ -869,6 +1161,13 @@ struct JNeg {
     count: usize,
 }
 #[derive(Serialize)]
+struct JNegSummary {
+    modules_scanned: usize,
+    modules_hit: usize,
+    total_hits: usize,
+    max_hits_per_module: usize,
+}
+#[derive(Serialize)]
 struct JHold {
     held_out: String,
     generated: bool,
@@ -884,6 +1183,7 @@ struct JReport {
     alternates: Vec<JCand>,
     rejected: Vec<JCand>,
     negative_hits: Vec<JNeg>,
+    negative_summary: JNegSummary,
     holdout: Vec<JHold>,
     string_anchor: Option<String>,
     diagnostics: Vec<String>,
@@ -895,6 +1195,16 @@ fn jcand(c: &SigCandidate) -> JCand {
         suffix: c.suffix.as_str().to_string(),
         grade: c.grade.letter().to_string(),
         score: c.score,
+        scores: JScores {
+            uniqueness: c.scores.uniqueness,
+            stability: c.scores.stability,
+            entropy: c.scores.entropy,
+            semantic: c.scores.semantic,
+            resolver_confidence: c.scores.resolver_confidence,
+            cross_build: c.scores.cross_build,
+            final_score: c.scores.final_score,
+        },
+        reasons: c.reasons.clone(),
         bytes: c.bytes_len,
         fixed: c.fixed,
         wildcards: c.wildcards,
@@ -908,6 +1218,7 @@ fn jcand(c: &SigCandidate) -> JCand {
                 match_rva: p.match_rva.map(|v| format!("0x{v:X}")),
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
                 target_type: p.target_kind.map(|k| kind_str(k).to_string()),
+                fingerprint_similarity: p.fingerprint_similarity,
             })
             .collect(),
         diags: c.diags.iter().map(|d| d.to_string()).collect(),
@@ -917,9 +1228,12 @@ fn jcand(c: &SigCandidate) -> JCand {
 fn json_report(
     r: &SigReport,
     negatives: &[NegativeHit],
+    negatives_scanned: usize,
     holdout: &[HoldoutResult],
     string_anchor: Option<&str>,
 ) -> String {
+    let neg_counts: Vec<usize> = negatives.iter().map(|h| h.count).collect();
+    let neg_summary = NegativeEvidence::from_hits(negatives_scanned, &neg_counts);
     let report = JReport {
         arch: arch_str(r.arch).to_string(),
         unique_builds: r.unique_builds,
@@ -950,6 +1264,12 @@ fn json_report(
                 count: h.count,
             })
             .collect(),
+        negative_summary: JNegSummary {
+            modules_scanned: neg_summary.modules_scanned,
+            modules_hit: neg_summary.modules_hit,
+            total_hits: neg_summary.total_hits,
+            max_hits_per_module: neg_summary.max_hits_per_module,
+        },
         holdout: holdout
             .iter()
             .map(|h| JHold {
@@ -972,8 +1292,13 @@ fn print_candidate(tag: &str, c: &SigCandidate) {
         c.suffix.as_str()
     );
     println!(
-        "      score {}, {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
+        "      score {} (final), {} bytes, {} fixed, {} wild, ratio {:.2}, reloc_safe {}",
         c.score, c.bytes_len, c.fixed, c.wildcards, c.fixed_ratio, c.reloc_safe
+    );
+    let s = &c.scores;
+    println!(
+        "      sub-scores: uniqueness {} stability {} entropy {} semantic {} resolver {} cross-build {}",
+        s.uniqueness, s.stability, s.entropy, s.semantic, s.resolver_confidence, s.cross_build
     );
     for p in &c.per_version {
         let m = p
@@ -982,7 +1307,13 @@ fn print_candidate(tag: &str, c: &SigCandidate) {
         let t = p
             .resolved_target_rva
             .map_or_else(String::new, |v| format!(" -> 0x{v:X}"));
-        println!("        {} @ {m}{t}", p.label);
+        let sim = p
+            .fingerprint_similarity
+            .map_or_else(String::new, |v| format!(" (callee ~{:.0}%)", v * 100.0));
+        println!("        {} @ {m}{t}{sim}", p.label);
+    }
+    for r in &c.reasons {
+        println!("        - {r}");
     }
     for d in &c.diags {
         println!("        ! {d}");
@@ -1023,12 +1354,12 @@ fn print_sig_report(r: &SigReport, opts: &SigOptions) {
     }
 }
 
-fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
+fn cmd_mksig(m: MksigArgs) -> Result<ExitKind, CliError> {
     let clients = collect_clients(&m.client, m.client_dir.as_deref(), m.ref_path.as_deref())?;
     let has_sig = m.sig.is_some();
     let has_ref = m.ref_path.is_some() || m.rva.is_some();
     if has_sig == has_ref {
-        return Err("provide exactly one of --sig OR (--ref + --rva)".to_string());
+        return Err("provide exactly one of --sig OR (--ref + --rva)".into());
     }
     if let Some(aob) = &m.sig {
         maple_core::try_signature_from_aob(aob).map_err(|e| format!("invalid --sig: {e}"))?;
@@ -1086,7 +1417,7 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         opts.min_fixed_ratio = r;
     }
 
-    let report = generate(&inputs, &spec, &opts);
+    let mut report = generate(&inputs, &spec, &opts);
 
     let anchor_line = report.chosen.as_ref().and_then(|c| {
         let anchor = c.per_version.iter().find_map(|pv| {
@@ -1138,8 +1469,28 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
         _ => Vec::new(),
     };
 
+    // A signature that also matches unrelated modules is too generic to trust as an identity, so
+    // fold that into the chosen candidate's uniqueness/final score (and possibly its grade) before
+    // reporting, rather than only noting it alongside. The evidence carries how many modules were
+    // scanned, how many matched, and the match volume, so the downgrade is honest about its basis.
+    if !neg_hits.is_empty()
+        && let Some(chosen) = report.chosen.as_mut()
+    {
+        let hit_counts: Vec<usize> = neg_hits.iter().map(|h| h.count).collect();
+        apply_negative_corpus(
+            chosen,
+            NegativeEvidence::from_hits(neg_paths.len(), &hit_counts),
+        );
+    }
+
     if m.json || m.json_out.is_some() {
-        let json = json_report(&report, &neg_hits, &holdout, anchor_line.as_deref());
+        let json = json_report(
+            &report,
+            &neg_hits,
+            neg_paths.len(),
+            &holdout,
+            anchor_line.as_deref(),
+        );
         if let Some(path) = &m.json_out {
             std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
             eprintln!("[+] wrote {}", path.display());
@@ -1192,15 +1543,23 @@ fn cmd_mksig(m: MksigArgs) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    // No safe signature is an unresolved outcome; a chosen one that also hits the negative corpus is
+    // a warning (too generic to trust as an identity); otherwise a clean success.
+    Ok(if report.chosen.is_none() {
+        ExitKind::Unresolved
+    } else if !neg_hits.is_empty() {
+        ExitKind::SuccessWithWarnings
+    } else {
+        ExitKind::Success
+    })
 }
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(kind) => ExitCode::from(kind.code()),
         Err(e) => {
-            eprintln!("[error] {e}");
-            ExitCode::FAILURE
+            eprintln!("[error] {}", e.msg);
+            ExitCode::from(e.kind.code())
         }
     }
 }
@@ -1208,7 +1567,136 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maple_core::{Grade, PerVersion, Suffix};
+    use maple_core::{Grade, PatternRow, PerVersion, SubScores, Suffix};
+
+    fn mkrow(name: &str, status: FindingStatus, candidates: Vec<u64>) -> PatternRow {
+        PatternRow {
+            name: name.to_string(),
+            category: "globals".to_string(),
+            pattern: "48 8B ?? ??".to_string(),
+            value: candidates.first().copied(),
+            is_offset: false,
+            matches: candidates.len(),
+            status,
+            note: String::new(),
+            candidates,
+            confidence: 0,
+            trace: None,
+            trace_detail: None,
+        }
+    }
+
+    fn result_of(rows: Vec<PatternRow>, unresolved: Vec<&str>, not_found: Vec<&str>) -> ScanResult {
+        let found = rows
+            .iter()
+            .filter(|r| r.status.is_found())
+            .map(|r| r.name.clone())
+            .collect();
+        let total_matches = rows.iter().map(|r| r.matches).sum();
+        ScanResult {
+            findings: Vec::new(),
+            rows,
+            found,
+            matched_unresolved: unresolved.iter().map(|s| s.to_string()).collect(),
+            not_found: not_found.iter().map(|s| s.to_string()).collect(),
+            total_matches,
+            read_gaps: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exit_codes_are_stable() {
+        assert_eq!(ExitKind::Success.code(), 0);
+        assert_eq!(ExitKind::Internal.code(), 1);
+        assert_eq!(ExitKind::SuccessWithWarnings.code(), 2);
+        assert_eq!(ExitKind::Unresolved.code(), 3);
+        assert_eq!(ExitKind::Ambiguous.code(), 4);
+        assert_eq!(ExitKind::InvalidInput.code(), 5);
+        assert_eq!(ExitKind::AccessDenied.code(), 6);
+    }
+
+    #[test]
+    fn arch_mismatch_detects_definite_conflicts() {
+        // requested x64 but the module is x86: actionable message naming the right --arch
+        let msg = arch_mismatch(Arch::X64, Some(Arch::X86), "MapleStory.exe").unwrap();
+        assert!(msg.contains("--arch 32"), "{msg}");
+        assert!(msg.contains("x86"));
+        // matching architectures: no complaint
+        assert!(arch_mismatch(Arch::X64, Some(Arch::X64), "m").is_none());
+        // unknown actual architecture: cannot tell, so never block a scan on a guess
+        assert!(arch_mismatch(Arch::X64, None, "m").is_none());
+    }
+
+    #[test]
+    fn attach_permission_error_maps_to_access_denied() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(attach_err(denied).kind, ExitKind::AccessDenied);
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(attach_err(missing).kind, ExitKind::InvalidInput);
+    }
+
+    #[test]
+    fn scan_exit_kind_ranks_ambiguous_over_unresolved_over_clean() {
+        let clean = result_of(
+            vec![mkrow("A", FindingStatus::FoundUnique, vec![0x10])],
+            vec![],
+            vec![],
+        );
+        assert_eq!(scan_exit_kind(&clean), ExitKind::Success);
+
+        let unresolved = result_of(
+            vec![mkrow("A", FindingStatus::NotFound, vec![])],
+            vec![],
+            vec!["A"],
+        );
+        assert_eq!(scan_exit_kind(&unresolved), ExitKind::Unresolved);
+
+        let ambiguous = result_of(
+            vec![mkrow(
+                "A",
+                FindingStatus::FoundAmbiguous { candidates: 2 },
+                vec![0x10, 0x20],
+            )],
+            vec![],
+            vec!["B"],
+        );
+        assert_eq!(scan_exit_kind(&ambiguous), ExitKind::Ambiguous);
+    }
+
+    #[test]
+    fn scan_json_is_valid_and_marks_exportability() {
+        let result = result_of(
+            vec![
+                mkrow("Uniq", FindingStatus::FoundUnique, vec![0x140]),
+                mkrow(
+                    "Amb",
+                    FindingStatus::FoundAmbiguous { candidates: 2 },
+                    vec![0x10, 0x20],
+                ),
+            ],
+            vec![],
+            vec![],
+        );
+        let stamp = BuildStamp {
+            hash: 0xDEAD_BEEF,
+            bytes: 2048,
+            timestamp: 0,
+            version: Some("1.0".to_string()),
+        };
+        let json = scan_json(&result, "MapleStory.exe", 0x1_4000_0000, &stamp);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("scan_json emits valid JSON");
+        assert_eq!(v["module"], "MapleStory.exe");
+        assert_eq!(v["ambiguous"], 1);
+        assert_eq!(v["build_hash"], "00000000DEADBEEF");
+        let findings = v["findings"].as_array().unwrap();
+        let uniq = findings.iter().find(|f| f["name"] == "Uniq").unwrap();
+        assert_eq!(uniq["exported"], true);
+        let amb = findings.iter().find(|f| f["name"] == "Amb").unwrap();
+        // an ambiguous row is reported but never exportable as an offset
+        assert_eq!(amb["exported"], false);
+        assert_eq!(amb["candidates"].as_array().unwrap().len(), 2);
+    }
 
     #[test]
     fn json_includes_ptr_target_fields() {
@@ -1217,6 +1705,16 @@ mod tests {
             suffix: Suffix::Ptr,
             grade: Grade::A,
             score: 90,
+            scores: SubScores {
+                uniqueness: 90,
+                stability: 80,
+                entropy: 40,
+                semantic: 82,
+                resolver_confidence: 100,
+                cross_build: 100,
+                final_score: 90,
+            },
+            reasons: vec!["target validated as code".to_string()],
             bytes_len: 7,
             fixed: 3,
             wildcards: 4,
@@ -1227,6 +1725,7 @@ mod tests {
                 match_rva: Some(0x20),
                 resolved_target_rva: Some(0x1000),
                 target_kind: Some(TargetKind::Code),
+                fingerprint_similarity: Some(1.0),
             }],
             diags: Vec::new(),
         };
@@ -1240,12 +1739,53 @@ mod tests {
             rejected: vec![cand],
             diagnostics: Vec::new(),
         };
-        let json = json_report(&report, &[], &[], None);
+        let json = json_report(&report, &[], 0, &[], None);
         assert_eq!(
             json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
             3
         );
         assert_eq!(json.matches("\"target_type\": \"code\"").count(), 3);
+        // the JSON carries the scoring evidence: sub-scores, final_score, reasons, and the per-build
+        // fingerprint similarity
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        let chosen = &v["chosen"];
+        assert_eq!(chosen["scores"]["resolver_confidence"], 100);
+        assert_eq!(chosen["scores"]["final_score"], 90);
+        assert!(!chosen["reasons"].as_array().unwrap().is_empty());
+        assert_eq!(chosen["per_version"][0]["fingerprint_similarity"], 1.0);
+        // the negative-corpus evidence is always present, even when nothing was scanned
+        assert_eq!(v["negative_summary"]["modules_scanned"], 0);
+        assert_eq!(v["negative_summary"]["modules_hit"], 0);
+    }
+
+    #[test]
+    fn json_report_carries_negative_corpus_summary() {
+        let report = SigReport {
+            arch: Arch::X64,
+            inputs: Vec::new(),
+            unique_builds: 1,
+            duplicate_groups: Vec::new(),
+            chosen: None,
+            alternates: Vec::new(),
+            rejected: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let hits = [
+            NegativeHit {
+                label: "other.dll".into(),
+                count: 2,
+            },
+            NegativeHit {
+                label: "third.dll".into(),
+                count: 1,
+            },
+        ];
+        let json = json_report(&report, &hits, 5, &[], None);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["negative_summary"]["modules_scanned"], 5);
+        assert_eq!(v["negative_summary"]["modules_hit"], 2);
+        assert_eq!(v["negative_summary"]["total_hits"], 3);
+        assert_eq!(v["negative_summary"]["max_hits_per_module"], 2);
     }
 
     #[test]

@@ -487,6 +487,7 @@ const SIG_I18N = {
     "sig.stringAnchor": "String anchor (survives patches)", "sig.stringAnchorHint": "Paste this into your pattern file as a name = ... line; it locates the function by a referenced string, surviving version changes that move the bytes.",
     "sig.copy": "Copy", "sig.copied": "Copied",
     "sig.negHits": "Negative corpus matches", "sig.negHitCount": "{n} match(es)",
+    "sig.negSummary": "{hit} of {scanned} module(s) matched, {total} total (up to {max} in one)",
     "sig.negatives": "Negative modules", "sig.addNegatives": "Add negatives", "sig.negativesHint": "Unrelated modules the signature must NOT match",
     "sig.gradeA": "Content-validated anchor, relocation-safe.", "sig.gradeB": "Relocation-safe, not content-validated.",
     "sig.gradeC": "Weak: absolute or unresolved reference, or cross-build mismatch.", "sig.gradeD": "An input looks packed or protected; provisional.",

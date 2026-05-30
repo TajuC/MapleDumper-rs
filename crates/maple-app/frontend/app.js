@@ -326,6 +326,9 @@ async function runScan() {
     const gbs = (report.scan_ms > 0 ? report.bytes_scanned / (report.scan_ms / 1000) / 1073741824 : 0).toFixed(2);
     setFoot("foot.complete", "foot.completeSub", { found: report.found, total, mb, gbs, attach: report.attach_ms });
     renderScanDiag(report);
+    if (Array.isArray(report.warnings)) {
+      for (const w of report.warnings) toast(w, true);
+    }
   } catch (err) {
     setConn("error", "err");
     setRing("done", 0);

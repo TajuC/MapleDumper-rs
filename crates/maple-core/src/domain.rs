@@ -2,6 +2,8 @@
 //! resolver and signature maker migrate onto so behavior stops being driven by thin enums and
 //! string suffixes. They are introduced here and wired in across later phases.
 
+use serde::Serialize;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionKind {
     Code,
@@ -21,6 +23,22 @@ impl SectionKind {
             "rodata" | "readonly" | ".rdata" | ".rodata" => Some(SectionKind::ReadOnly),
             "import" | "iat" => Some(SectionKind::Import),
             _ => None,
+        }
+    }
+
+    /// Whether a target satisfies this expected section, using the coarse executable / not-executable
+    /// signal a live process exposes through its page protection. A live module read does not carry
+    /// the on-disk section table, so the engine can only tell code (an executable region) from
+    /// non-code (everything else in the module); `data`, `rodata` and `import` therefore all reduce
+    /// to "must not be executable". `Code` requires `is_code`; the non-code kinds require `!is_code`;
+    /// `Unknown` is satisfied either way. Callers that have the real section table (the offline PE
+    /// reader) can classify more precisely; this is the conservative live-scan check.
+    #[must_use]
+    pub fn accepts_code_flag(self, is_code: bool) -> bool {
+        match self {
+            SectionKind::Code => is_code,
+            SectionKind::Data | SectionKind::ReadOnly | SectionKind::Import => !is_code,
+            SectionKind::Unknown => true,
         }
     }
 }
@@ -236,6 +254,72 @@ pub struct StringAnchor {
     pub also: Option<String>,
 }
 
+/// A serializable, structured explanation of how one pattern resolved (or failed to). It records the
+/// instruction-level facts behind a result so the UI, CLI JSON, and history can show *why* a value is
+/// trustworthy rather than only the value. The human-readable one-liner is derived from it via
+/// [`ResolveTrace::human`], so the string and the structure never disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResolveTrace {
+    /// The pattern's display name.
+    pub pattern: String,
+    /// A short stable hash of the pattern's AOB, so a trace can be tied to the exact signature.
+    pub pattern_hash: String,
+    /// The resolution strategy, e.g. `rip-relative memory` or `nested call`.
+    pub resolver: String,
+    /// Absolute address of the match.
+    pub match_address: u64,
+    /// Module-relative address of the match, when it is inside the module.
+    pub match_rva: Option<u64>,
+    /// Which decoded instruction in the match window was resolved from (0 = the match).
+    pub instruction_offset: usize,
+    /// Which operand of that instruction was read.
+    pub operand_index: Option<usize>,
+    /// The instruction's mnemonic, when decoded.
+    pub mnemonic: Option<String>,
+    /// The kind of the operand that was read (e.g. `memory`, `nearbranch64`, `immediate32`).
+    pub operand_kind: Option<String>,
+    /// The raw displacement or immediate read from the operand.
+    pub raw: Option<i64>,
+    /// The computed absolute target, for an address-producing resolver.
+    pub target_address: Option<u64>,
+    /// The computed module-relative target (an offset for offset/immediate resolvers).
+    pub target_rva: Option<u64>,
+    /// The section the target landed in, as far as a live scan can tell: `code` or `non-code`.
+    pub target_section: Option<String>,
+    /// The validation checks that were applied and passed (range, section, ...).
+    pub checks: Vec<String>,
+    /// The failure reason, when resolution did not produce a trustworthy value; `None` on success.
+    pub failure: Option<String>,
+}
+
+impl ResolveTrace {
+    /// A one-line human-readable rendering, kept identical in spirit to the older string trace so
+    /// existing readers keep working.
+    #[must_use]
+    pub fn human(&self) -> String {
+        if let Some(failure) = &self.failure {
+            return format!(
+                "{} @ 0x{:X} failed: {failure}",
+                self.resolver, self.match_address
+            );
+        }
+        let value = self
+            .target_rva
+            .map(|r| format!("0x{r:X}"))
+            .or_else(|| self.raw.map(|r| format!("0x{r:X}")))
+            .unwrap_or_else(|| "?".to_string());
+        let section = self
+            .target_section
+            .as_deref()
+            .map(|s| format!(" in {s}"))
+            .unwrap_or_default();
+        format!(
+            "{} @ 0x{:X} resolved to {value}{section}",
+            self.resolver, self.match_address
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +362,25 @@ mod tests {
         assert!(ambiguous.is_found()); // still "found" for reporting, just not exportable
         assert!(!FindingStatus::NotFound.is_exportable());
         assert!(!FindingStatus::Failed(FailureReason::OutOfModule).is_exportable());
+    }
+
+    #[test]
+    fn expected_section_accepts_coarse_code_flag() {
+        // code must land in an executable region
+        assert!(SectionKind::Code.accepts_code_flag(true));
+        assert!(!SectionKind::Code.accepts_code_flag(false));
+        // the non-code kinds all reduce to "must not be executable" on a live module
+        for kind in [
+            SectionKind::Data,
+            SectionKind::ReadOnly,
+            SectionKind::Import,
+        ] {
+            assert!(kind.accepts_code_flag(false));
+            assert!(!kind.accepts_code_flag(true));
+        }
+        // unknown imposes no constraint
+        assert!(SectionKind::Unknown.accepts_code_flag(true));
+        assert!(SectionKind::Unknown.accepts_code_flag(false));
     }
 
     #[test]

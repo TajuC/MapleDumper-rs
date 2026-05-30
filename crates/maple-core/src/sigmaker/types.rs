@@ -31,6 +31,40 @@ impl Grade {
             Grade::F => 4,
         }
     }
+
+    /// The letter band for a `final_score` in 0..=100. The presentation grade is derived from the
+    /// numeric score, never the other way round; callers then apply hard gates (F) and the packed cap
+    /// (no better than D) on top.
+    pub(super) fn from_final_score(final_score: u32) -> Grade {
+        match final_score {
+            82..=u32::MAX => Grade::A,
+            64..=81 => Grade::B,
+            42..=63 => Grade::C,
+            25..=41 => Grade::D,
+            _ => Grade::F,
+        }
+    }
+}
+
+/// Independent, measurable sub-scores for a candidate, each 0..=100. `final_score` is a weighted
+/// blend of the others and is what the letter grade is derived from. These exist so the report can
+/// show *why* a candidate scored as it did, instead of only a letter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubScores {
+    /// How specific the signature is (unique in the corpus, dense enough, not hit by the negatives).
+    pub uniqueness: u32,
+    /// How recompile-stable it is (reloc-safe, operands masked, opcode-dense).
+    pub stability: u32,
+    /// Byte-distinctiveness of the fixed bytes (Shannon entropy, scaled by fixed-byte count).
+    pub entropy: u32,
+    /// How much validated semantic content backs it (a code target with a rich, consistent callee).
+    pub semantic: u32,
+    /// How confidently the resolver will re-resolve it (validated branch/ptr to code scores highest).
+    pub resolver_confidence: u32,
+    /// Cross-build agreement: callee fingerprint similarity, or byte survival for a direct match.
+    pub cross_build: u32,
+    /// The weighted blend the grade band is read from.
+    pub final_score: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -187,6 +221,9 @@ pub struct PerVersion {
     pub match_rva: Option<u64>,
     pub resolved_target_rva: Option<u64>,
     pub target_kind: Option<TargetKind>,
+    /// Callee fingerprint similarity to the reference build's target, 0.0..=1.0, when both resolve to
+    /// code. `None` for the reference build itself or a non-code/unresolved target.
+    pub fingerprint_similarity: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -194,12 +231,17 @@ pub struct SigCandidate {
     pub aob: String,
     pub suffix: Suffix,
     pub grade: Grade,
+    /// Backward-compatible 0..=100 confidence; equal to `scores.final_score`.
     pub score: u32,
     pub bytes_len: usize,
     pub fixed: usize,
     pub wildcards: usize,
     pub fixed_ratio: f64,
     pub reloc_safe: bool,
+    /// The independent sub-scores the grade was derived from.
+    pub scores: SubScores,
+    /// Human-readable explanations of why the candidate scored high or low.
+    pub reasons: Vec<String>,
     pub per_version: Vec<PerVersion>,
     pub diags: Vec<Diag>,
 }

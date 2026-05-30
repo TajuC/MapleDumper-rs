@@ -1,4 +1,5 @@
 use crate::memory::{MemorySource, Region, coalesce};
+use crate::pattern::Arch;
 use core::ffi::c_void;
 use std::io;
 use std::mem::{size_of, zeroed};
@@ -509,6 +510,18 @@ impl Target {
     #[must_use]
     pub fn code_regions(&self) -> Vec<Region> {
         enumerate_regions(self.handle.0, self.module, true)
+    }
+
+    /// The architecture of the mapped module, read from its PE `Machine` field, so a scan can detect
+    /// a requested-vs-actual arch mismatch instead of silently scanning the wrong bitness. `None`
+    /// when the header is unreadable or the machine is one this tool does not model.
+    #[must_use]
+    pub fn module_arch(&self) -> Option<Arch> {
+        match crate::stamp::pe_machine(self, self.module.base)? {
+            0x8664 | 0xAA64 => Some(Arch::X64), // amd64, arm64
+            0x014C | 0x01C4 => Some(Arch::X86), // i386, armnt (32-bit)
+            _ => None,
+        }
     }
 
     /// The image's on-disk file version (VS_FIXEDFILEINFO), best-effort. Note this reads the

@@ -21,7 +21,7 @@ pub struct FnIdentity {
     pub returns: usize,
     pub constants: Vec<u64>,
     pub strings: Vec<String>,
-    mnemonics: Vec<u32>,
+    pub(super) mnemonics: Vec<u32>,
 }
 
 fn fnv_fold(h: &mut u64, bytes: &[u8]) {
@@ -148,7 +148,98 @@ pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
     }
 }
 
+// Jaccard over two evidence sets. Returns `None` when both are empty: no constants (or no strings) in
+// either function is an absence of evidence, not a match, so the caller drops the component and
+// reweights rather than letting two empty sets count as a perfect 1.0 and inflate the blend.
+fn jaccard_opt<T: Eq + std::hash::Hash>(a: &[T], b: &[T]) -> Option<f64> {
+    use std::collections::HashSet;
+    if a.is_empty() && b.is_empty() {
+        return None;
+    }
+    let sa: HashSet<&T> = a.iter().collect();
+    let sb: HashSet<&T> = b.iter().collect();
+    let union = sa.union(&sb).count();
+    if union == 0 {
+        None
+    } else {
+        Some(sa.intersection(&sb).count() as f64 / union as f64)
+    }
+}
+
+// Length of the longest common subsequence of two mnemonic streams. A subsequence keeps order but
+// tolerates gaps, so an instruction inserted or removed on one side only costs that one position
+// instead of desynchronising everything after it.
+fn lcs_len(a: &[u32], b: &[u32]) -> usize {
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    let mut prev = vec![0usize; b.len() + 1];
+    let mut cur = vec![0usize; b.len() + 1];
+    for &x in a {
+        for (j, &y) in b.iter().enumerate() {
+            cur[j + 1] = if x == y {
+                prev[j] + 1
+            } else {
+                prev[j + 1].max(cur[j])
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+// Order-preserving, insertion-tolerant similarity of two mnemonic streams as the Dice ratio of their
+// LCS: 2*LCS / (|a| + |b|). 1.0 when identical, and a single inserted prologue instruction stays high
+// (e.g. 6 vs 7 shared-prefix mnemonics scores 12/13) instead of collapsing the way a strict
+// leading-prefix match would. Two empty streams are vacuously identical.
+fn mnemonic_similarity(a: &[u32], b: &[u32]) -> f64 {
+    let total = a.len() + b.len();
+    if total == 0 {
+        return 1.0;
+    }
+    (2.0 * lcs_len(a, b) as f64) / total as f64
+}
+
+fn count_agreement(a: usize, b: usize) -> f64 {
+    let m = a.max(b);
+    if m == 0 {
+        1.0
+    } else {
+        1.0 - (a.abs_diff(b) as f64 / m as f64)
+    }
+}
+
 impl FnIdentity {
+    /// A 0.0..=1.0 similarity to another function identity, blending an order-preserving mnemonic
+    /// stream comparison, the CFG-lite block/call/branch/return shape, and the distinctive-constant
+    /// and string-reference sets. Identical identities score 1.0. Unlike fingerprint equality this
+    /// degrades gracefully, so a callee that shifted or gained one instruction across a build still
+    /// scores high instead of dropping to zero, which is what a cross-build *similarity* (not
+    /// equality) signal needs. Constant and string components are only weighed in when at least one
+    /// side carries that evidence: two functions that simply reference no strings must not be treated
+    /// as a perfect string match. When a component drops out, its weight is redistributed across the
+    /// rest, so the blend stays a 0.0..=1.0 score normalised over the evidence actually present.
+    #[must_use]
+    pub fn similarity(&self, other: &FnIdentity) -> f64 {
+        let mnem = mnemonic_similarity(&self.mnemonics, &other.mnemonics);
+        let structure = (count_agreement(self.blocks, other.blocks)
+            + count_agreement(self.calls, other.calls)
+            + count_agreement(self.branches, other.branches)
+            + count_agreement(self.returns, other.returns))
+            / 4.0;
+        let mut score = 0.40 * mnem + 0.25 * structure;
+        let mut weight = 0.40 + 0.25;
+        if let Some(consts) = jaccard_opt(&self.constants, &other.constants) {
+            score += 0.20 * consts;
+            weight += 0.20;
+        }
+        if let Some(strings) = jaccard_opt(&self.strings, &other.strings) {
+            score += 0.15 * strings;
+            weight += 0.15;
+        }
+        (score / weight).clamp(0.0, 1.0)
+    }
+
     #[must_use]
     pub fn fingerprint(&self) -> String {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -167,10 +258,6 @@ impl FnIdentity {
             self.instr_count, h, self.blocks, self.calls, self.branches, self.returns
         )
     }
-}
-
-pub(super) fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    fn_identity(img, target_rva).fingerprint()
 }
 
 /// Approximate references to `target_rva`: rel32 call/jmp and x64 rip-relative lea landing on the
@@ -326,4 +413,107 @@ pub fn make_string_anchor(img: &ImageInput, target_rva: usize) -> Option<StringA
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A bare identity carrying only a mnemonic stream (and optional evidence sets), so the similarity
+    // measure can be exercised on exact streams without decoding real machine code.
+    fn ident(mnemonics: &[u32]) -> FnIdentity {
+        FnIdentity {
+            instr_count: mnemonics.len(),
+            mnemonics: mnemonics.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn mnemonic_similarity_is_one_for_identical_streams() {
+        let a = ident(&[1, 2, 3, 4, 5, 6]);
+        assert!((a.similarity(&a) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn inserted_prologue_instruction_stays_high() {
+        // The same body with one extra instruction spliced in at the front: a strict leading-prefix
+        // match would collapse to ~0, but the order-preserving LCS keeps it high.
+        let base = ident(&[10, 11, 12, 13, 14, 15]);
+        let mut with_insert = ident(&[99, 10, 11, 12, 13, 14, 15]);
+        with_insert.blocks = base.blocks;
+        with_insert.calls = base.calls;
+        let s = base.similarity(&with_insert);
+        assert!(
+            s > 0.85,
+            "one inserted instruction should stay highly similar, got {s}"
+        );
+    }
+
+    #[test]
+    fn inserted_instruction_in_the_middle_stays_high() {
+        let base = ident(&[20, 21, 22, 23, 24, 25, 26, 27]);
+        let middle = ident(&[20, 21, 22, 23, 99, 24, 25, 26, 27]);
+        let s = base.similarity(&middle);
+        assert!(s > 0.85, "a mid-body insertion should stay high, got {s}");
+    }
+
+    #[test]
+    fn changed_core_mnemonics_score_clearly_lower() {
+        let base = ident(&[1, 2, 3, 4, 5, 6]);
+        let rewritten = ident(&[1, 90, 91, 92, 93, 6]);
+        let inserted = ident(&[99, 1, 2, 3, 4, 5, 6]);
+        let sim_changed = base.similarity(&rewritten);
+        let sim_inserted = base.similarity(&inserted);
+        assert!(
+            sim_changed < 0.75,
+            "a rewritten core must drop clearly, got {sim_changed}"
+        );
+        assert!(
+            sim_changed < sim_inserted,
+            "rewriting the core ({sim_changed}) must score below a mere insertion ({sim_inserted})"
+        );
+    }
+
+    #[test]
+    fn empty_constant_and_string_sets_do_not_inflate_unrelated_functions() {
+        // Two functions with different mnemonic streams and no constants or strings: the absent
+        // evidence must be neutral, not counted as a perfect constant/string match that drags the
+        // blend up toward 1.0.
+        let a = ident(&[1, 2, 3, 4]);
+        let b = ident(&[40, 41, 42, 43]);
+        let blended = a.similarity(&b);
+        let mnem_only = mnemonic_similarity(&a.mnemonics, &b.mnemonics);
+        let structure = 1.0; // identical (zero) block/call/branch/return counts
+        let expected = (0.40 * mnem_only + 0.25 * structure) / (0.40 + 0.25);
+        assert!(
+            (blended - expected).abs() < 1e-9,
+            "empty const/string sets must drop out, got {blended} want {expected}"
+        );
+        assert!(
+            blended < 0.7,
+            "unrelated bodies must not be inflated to a high score, got {blended}"
+        );
+    }
+
+    #[test]
+    fn jaccard_opt_is_none_for_two_empty_sets() {
+        assert_eq!(jaccard_opt::<u64>(&[], &[]), None);
+        assert_eq!(jaccard_opt(&[1u64, 2], &[1, 2]), Some(1.0));
+        assert_eq!(jaccard_opt(&[1u64], &[2u64]), Some(0.0));
+    }
+
+    #[test]
+    fn shared_constants_lift_an_otherwise_equal_pair() {
+        // With identical mnemonics and structure, a shared distinctive constant should score 1.0 while
+        // disjoint constants pull the blend down: proof the constant component is actually weighed when
+        // present (the converse of the empty-set case).
+        let mut a = ident(&[1, 2, 3]);
+        let mut b = ident(&[1, 2, 3]);
+        a.constants = vec![0xDEAD_BEEF];
+        b.constants = vec![0xDEAD_BEEF];
+        assert!((a.similarity(&b) - 1.0).abs() < 1e-9);
+        b.constants = vec![0x1234_5678];
+        assert!(a.similarity(&b) < 1.0);
+    }
 }

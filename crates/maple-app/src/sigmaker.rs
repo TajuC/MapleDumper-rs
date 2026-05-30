@@ -5,9 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use maple_core::{
-    Arch, FileImage, ImageInput, SigCandidate, SigOptions, SigReport, SigStage, TargetKind,
-    TargetSpec, generate_cross_with_progress, generate_with_progress, make_string_anchor,
-    negative_corpus_hits, try_signature_from_aob,
+    Arch, FileImage, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport, SigStage,
+    TargetKind, TargetSpec, apply_negative_corpus, generate_cross_with_progress,
+    generate_with_progress, make_string_anchor, negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
 
@@ -51,6 +51,18 @@ struct PerVerView {
     match_rva: Option<String>,
     resolved_target_rva: Option<String>,
     target_type: Option<String>,
+    fingerprint_similarity: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct ScoreView {
+    uniqueness: u32,
+    stability: u32,
+    entropy: u32,
+    semantic: u32,
+    resolver_confidence: u32,
+    cross_build: u32,
+    final_score: u32,
 }
 
 #[derive(Serialize)]
@@ -58,6 +70,9 @@ struct SigCandView {
     aob: String,
     suffix: String,
     grade: String,
+    score: u32,
+    scores: ScoreView,
+    reasons: Vec<String>,
     bytes: usize,
     fixed: usize,
     wildcards: usize,
@@ -88,6 +103,14 @@ struct NegHitView {
 }
 
 #[derive(Serialize)]
+struct NegSummaryView {
+    modules_scanned: usize,
+    modules_hit: usize,
+    total_hits: usize,
+    max_hits_per_module: usize,
+}
+
+#[derive(Serialize)]
 struct SigReportView {
     arch: String,
     unique_builds: usize,
@@ -100,6 +123,7 @@ struct SigReportView {
     holdout: Vec<SigHoldoutView>,
     string_anchor: Option<String>,
     negative_hits: Vec<NegHitView>,
+    negative_summary: Option<NegSummaryView>,
 }
 
 #[derive(Serialize)]
@@ -136,6 +160,17 @@ fn sig_cand_view(c: &SigCandidate) -> SigCandView {
         aob: c.aob.clone(),
         suffix: c.suffix.as_str().to_string(),
         grade: c.grade.letter().to_string(),
+        score: c.score,
+        scores: ScoreView {
+            uniqueness: c.scores.uniqueness,
+            stability: c.scores.stability,
+            entropy: c.scores.entropy,
+            semantic: c.scores.semantic,
+            resolver_confidence: c.scores.resolver_confidence,
+            cross_build: c.scores.cross_build,
+            final_score: c.scores.final_score,
+        },
+        reasons: c.reasons.clone(),
         bytes: c.bytes_len,
         fixed: c.fixed,
         wildcards: c.wildcards,
@@ -149,6 +184,7 @@ fn sig_cand_view(c: &SigCandidate) -> SigCandView {
                 match_rva: p.match_rva.map(|v| format!("0x{v:X}")),
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
                 target_type: p.target_kind.map(|k| sig_kind_str(k).to_string()),
+                fingerprint_similarity: p.fingerprint_similarity,
             })
             .collect(),
         diags: c.diags.iter().map(|d| d.to_string()).collect(),
@@ -185,6 +221,7 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         holdout: Vec::new(),
         string_anchor: None,
         negative_hits: Vec::new(),
+        negative_summary: None,
     }
 }
 
@@ -225,19 +262,43 @@ fn enrich_report(
     spec: &TargetSpec,
     opts: &SigOptions,
 ) -> SigReportView {
-    let mut view = sig_report_view(r);
-    view.holdout = holdout_views(inputs, spec, opts);
-    view.string_anchor = string_anchor_line(r, inputs);
-    if let Some(chosen) = &r.chosen
-        && !negatives.is_empty()
+    // Score the negative corpus once, then fold it into the chosen candidate before rendering so the
+    // grade the UI shows already reflects that the signature also hits unrelated modules (the same
+    // adjustment the CLI makes), rather than only listing the hits beside an unchanged grade.
+    let hits = match &r.chosen {
+        Some(chosen) if !negatives.is_empty() => negative_corpus_hits(&chosen.aob, negatives),
+        _ => Vec::new(),
+    };
+    let mut adjusted = r.clone();
+    if !hits.is_empty()
+        && let Some(chosen) = adjusted.chosen.as_mut()
     {
-        view.negative_hits = negative_corpus_hits(&chosen.aob, negatives)
+        let counts: Vec<usize> = hits.iter().map(|h| h.count).collect();
+        apply_negative_corpus(
+            chosen,
+            NegativeEvidence::from_hits(negatives.len(), &counts),
+        );
+    }
+
+    let mut view = sig_report_view(&adjusted);
+    view.holdout = holdout_views(inputs, spec, opts);
+    view.string_anchor = string_anchor_line(&adjusted, inputs);
+    if !negatives.is_empty() {
+        let counts: Vec<usize> = hits.iter().map(|h| h.count).collect();
+        let summary = NegativeEvidence::from_hits(negatives.len(), &counts);
+        view.negative_hits = hits
             .into_iter()
             .map(|h| NegHitView {
                 label: h.label,
                 count: h.count,
             })
             .collect();
+        view.negative_summary = Some(NegSummaryView {
+            modules_scanned: summary.modules_scanned,
+            modules_hit: summary.modules_hit,
+            total_hits: summary.total_hits,
+            max_hits_per_module: summary.max_hits_per_module,
+        });
     }
     view
 }

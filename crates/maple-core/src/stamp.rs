@@ -39,6 +39,23 @@ fn fingerprint<S: MemorySource>(source: &S, regions: &[Region]) -> (u64, u64) {
     (hash, total)
 }
 
+/// Read the COFF `Machine` field of the module mapped at `module_base`, for architecture checks.
+/// Returns the raw machine value (e.g. `0x8664` amd64, `0x014C` i386); `None` if the header cannot
+/// be read or is not a PE.
+#[must_use]
+pub fn pe_machine<S: MemorySource>(source: &S, module_base: usize) -> Option<u16> {
+    let mut dos = [0u8; 0x40];
+    if source.read_into(module_base, &mut dos).ok()? < 0x40 || &dos[0..2] != b"MZ" {
+        return None;
+    }
+    let e_lfanew = u32::from_le_bytes(dos[0x3C..0x40].try_into().ok()?) as usize;
+    let mut pe = [0u8; 0x18];
+    if source.read_into(module_base + e_lfanew, &mut pe).ok()? < 0x18 || &pe[0..4] != b"PE\0\0" {
+        return None;
+    }
+    Some(u16::from_le_bytes(pe[4..6].try_into().ok()?))
+}
+
 fn pe_timestamp<S: MemorySource>(source: &S, module_base: usize) -> Option<u32> {
     let mut dos = [0u8; 0x40];
     if source.read_into(module_base, &mut dos).ok()? < 0x40 || &dos[0..2] != b"MZ" {
@@ -137,6 +154,20 @@ mod tests {
         data[0x88..0x8C].copy_from_slice(&0x6655_4433u32.to_le_bytes());
         let source = BufferSource::new(0x1_0000, data);
         assert_eq!(pe_timestamp(&source, 0x1_0000), Some(0x6655_4433));
+    }
+
+    #[test]
+    fn reads_pe_machine() {
+        let mut data = vec![0u8; 0x200];
+        data[0..2].copy_from_slice(b"MZ");
+        data[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        data[0x80..0x84].copy_from_slice(b"PE\0\0");
+        data[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes()); // IMAGE_FILE_MACHINE_AMD64
+        let source = BufferSource::new(0x1_0000, data);
+        assert_eq!(pe_machine(&source, 0x1_0000), Some(0x8664));
+        // a buffer that is not a PE yields nothing rather than a bogus machine value
+        let junk = BufferSource::new(0x2_0000, vec![0u8; 0x200]);
+        assert_eq!(pe_machine(&junk, 0x2_0000), None);
     }
 
     #[test]
