@@ -405,11 +405,11 @@ const RAND_I18N = {
 Object.keys(RAND_I18N).forEach((lang) => Object.assign(I18N[lang], RAND_I18N[lang]));
 
 const TAB_I18N = {
-  en: { "hist.matrix": "Matrix", "hist.needTwo": "Need at least two versions to build a matrix.", "hist.matrixTitle": "Matrix ({n})", "hist.rename": "Double-click to rename", "hist.diffFiles": "Diff files", "hist.diffPickTwo": "Select two dump files to compare." },
-  ja: { "hist.matrix": "マトリクス", "hist.needTwo": "マトリクスを作成するには2つ以上のバージョンが必要です。", "hist.matrixTitle": "マトリクス ({n})", "hist.rename": "ダブルクリックで名前を変更", "hist.diffFiles": "ファイルを比較", "hist.diffPickTwo": "比較する2つのダンプファイルを選択してください。" },
-  zh: { "hist.matrix": "矩阵", "hist.needTwo": "构建矩阵至少需要两个版本。", "hist.matrixTitle": "矩阵 ({n})", "hist.rename": "双击重命名", "hist.diffFiles": "比较文件", "hist.diffPickTwo": "请选择两个转储文件进行比较。" },
-  ko: { "hist.matrix": "매트릭스", "hist.needTwo": "매트릭스를 만들려면 두 개 이상의 버전이 필요합니다.", "hist.matrixTitle": "매트릭스 ({n})", "hist.rename": "더블클릭하여 이름 변경", "hist.diffFiles": "파일 비교", "hist.diffPickTwo": "비교할 덤프 파일 두 개를 선택하세요." },
-  he: { "hist.matrix": "מטריצה", "hist.needTwo": "נדרשות לפחות שתי גרסאות ליצירת מטריצה.", "hist.matrixTitle": "מטריצה ({n})", "hist.rename": "לחיצה כפולה לשינוי שם", "hist.diffFiles": "השווה קבצים", "hist.diffPickTwo": "בחר שני קבצי dump להשוואה." },
+  en: { "hist.matrix": "Matrix", "hist.needTwo": "Need at least two versions to build a matrix.", "hist.matrixTitle": "Matrix ({n})", "hist.rename": "Double-click to rename", "hist.diffFiles": "Diff files", "hist.diffPickTwo": "Select two dump files to compare.", "diag.confidence": "Confidence", "diag.trace": "Resolver trace", "diag.candidates": "Candidates" },
+  ja: { "hist.matrix": "マトリクス", "hist.needTwo": "マトリクスを作成するには2つ以上のバージョンが必要です。", "hist.matrixTitle": "マトリクス ({n})", "hist.rename": "ダブルクリックで名前を変更", "hist.diffFiles": "ファイルを比較", "hist.diffPickTwo": "比較する2つのダンプファイルを選択してください。", "diag.confidence": "信頼度", "diag.trace": "リゾルバートレース", "diag.candidates": "候補" },
+  zh: { "hist.matrix": "矩阵", "hist.needTwo": "构建矩阵至少需要两个版本。", "hist.matrixTitle": "矩阵 ({n})", "hist.rename": "双击重命名", "hist.diffFiles": "比较文件", "hist.diffPickTwo": "请选择两个转储文件进行比较。", "diag.confidence": "置信度", "diag.trace": "解析器追踪", "diag.candidates": "候选" },
+  ko: { "hist.matrix": "매트릭스", "hist.needTwo": "매트릭스를 만들려면 두 개 이상의 버전이 필요합니다.", "hist.matrixTitle": "매트릭스 ({n})", "hist.rename": "더블클릭하여 이름 변경", "hist.diffFiles": "파일 비교", "hist.diffPickTwo": "비교할 덤프 파일 두 개를 선택하세요.", "diag.confidence": "신뢰도", "diag.trace": "리졸버 추적", "diag.candidates": "후보" },
+  he: { "hist.matrix": "מטריצה", "hist.needTwo": "נדרשות לפחות שתי גרסאות ליצירת מטריצה.", "hist.matrixTitle": "מטריצה ({n})", "hist.rename": "לחיצה כפולה לשינוי שם", "hist.diffFiles": "השווה קבצים", "hist.diffPickTwo": "בחר שני קבצי dump להשוואה.", "diag.confidence": "ביטחון", "diag.trace": "מעקב פותר", "diag.candidates": "מועמדים" },
 };
 Object.keys(TAB_I18N).forEach((lang) => Object.assign(I18N[lang], TAB_I18N[lang]));
 
@@ -2449,7 +2449,8 @@ async function toggleSymDetail(tr) {
       const newAsm = await asmFor(tr.dataset.newBytes, bits, tr.dataset.new);
       body.innerHTML = `<div class="sym-cols"><div class="sym-col"><div class="sym-h">${t("diff.colOld")} <span class="mono">${esc(tr.dataset.old || "-")}</span></div>${oldAsm}</div><div class="sym-col"><div class="sym-h">${t("diff.colNew")} <span class="mono">${esc(tr.dataset.new || "-")}</span></div>${newAsm}</div></div>`;
     } else {
-      body.innerHTML = await asmFor(tr.dataset.bytes, bits, tr.dataset.addr);
+      const diag = diagnosticsHtml(tr.dataset);
+      body.innerHTML = diag + (await asmFor(tr.dataset.bytes, bits, tr.dataset.addr));
     }
   } catch (e) {
     body.textContent = String(e);
@@ -2474,6 +2475,28 @@ async function renderActiveTab() {
     toast(String(e), true);
   }
 }
+function confChip(c) {
+  if (c == null || c === "") return "";
+  const n = Number(c);
+  const cls = n >= 80 ? "hi" : n >= 40 ? "mid" : "lo";
+  return ` <span class="conf-chip ${cls}" title="${t("diag.confidence")}">${n}</span>`;
+}
+function diagnosticsHtml(ds) {
+  const parts = [];
+  if (ds.confidence != null && ds.confidence !== "") {
+    const c = Number(ds.confidence);
+    parts.push(
+      `<div class="diag-row"><span class="diag-k">${t("diag.confidence")}</span><span class="diag-bar"><span style="width:${c}%"></span></span><span class="diag-v">${c}/100</span></div>`,
+    );
+  }
+  if (ds.trace)
+    parts.push(`<div class="diag-row"><span class="diag-k">${t("diag.trace")}</span><span class="diag-v mono">${esc(ds.trace)}</span></div>`);
+  if (ds.candidates)
+    parts.push(
+      `<div class="diag-row"><span class="diag-k">${t("diag.candidates")}</span><span class="diag-v mono">${esc(ds.candidates.split(",").join("   "))}</span></div>`,
+    );
+  return parts.length ? `<div class="sym-diag">${parts.join("")}</div>` : "";
+}
 async function scanTabHtml(tab) {
   const findings = await invoke("history_findings", { id: tab.scanId });
   if (!findings.length) return `<div class="insp-hint">${t("hist.noFindings")}</div>`;
@@ -2485,7 +2508,7 @@ async function scanTabHtml(tab) {
   const rows = findings
     .map(
       (f) =>
-        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "-"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}</td></tr>`,
+        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}" data-trace="${esc(f.trace || "")}" data-candidates="${esc(f.candidates || "")}" data-confidence="${f.confidence ?? ""}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "-"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}${confChip(f.confidence)}</td></tr>`,
     )
     .join("");
   return `<div class="hist-banner" style="--vh:${hue}"><span class="hist-banner-ver">${ver}</span><span class="hist-banner-hash">${g ? esc(g.build_hash) : ""}</span><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /><button id="hist-exp" class="btn btn-soft">${t("out.copy")}</button></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("col.address")}</th><th>${t("col.category")}</th><th>${t("col.status")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;

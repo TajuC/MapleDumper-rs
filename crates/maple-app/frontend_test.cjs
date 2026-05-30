@@ -96,6 +96,10 @@ const driver = `
   ] };
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
+  globalThis.__diagHtml = diagnosticsHtml({ confidence: "50", trace: "memory pointer resolved to 0x10", candidates: "0x10,0x20" });
+  globalThis.__confHi = confChip(95);
+  globalThis.__confLo = confChip(10);
+  globalThis.__confNone = confChip(null);
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -134,6 +138,13 @@ check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "pe
 check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");
 check(rep.includes("sig-job-err") && rep.includes("bad hex byte"), "job error card missing");
 check(rep.includes("Grade legend"), "grade legend missing");
+const diag = sandbox.__diagHtml || "";
+check(diag.includes("Resolver trace") && diag.includes("memory pointer resolved to 0x10"), "diagnostics trace missing");
+check(diag.includes("Candidates") && diag.includes("0x10") && diag.includes("0x20"), "diagnostics candidates missing");
+check(diag.includes("50/100"), "diagnostics confidence value missing");
+check((sandbox.__confHi || "").includes("conf-chip hi"), "high-confidence chip missing");
+check((sandbox.__confLo || "").includes("conf-chip lo"), "low-confidence chip missing");
+check(sandbox.__confNone === "", "null confidence should yield no chip");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

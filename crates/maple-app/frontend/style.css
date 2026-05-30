@@ -1844,6 +1844,65 @@ button.btn-ico:hover {
   color: var(--t3);
   font-size: 12px;
 }
+.sym-diag {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.diag-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.diag-k {
+  min-width: 96px;
+  color: var(--t3);
+  font-size: 11px;
+}
+.diag-v {
+  color: var(--t1);
+  word-break: break-all;
+}
+.diag-bar {
+  position: relative;
+  flex: 0 0 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--inset);
+  overflow: hidden;
+}
+.diag-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--blue), var(--violet));
+}
+.conf-chip {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle;
+}
+.conf-chip.hi {
+  background: rgba(34, 197, 94, 0.18);
+  color: #34d399;
+}
+.conf-chip.mid {
+  background: rgba(234, 179, 8, 0.18);
+  color: #eab308;
+}
+.conf-chip.lo {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+}
 .hist-detail-head {
   display: flex;
   align-items: center;
