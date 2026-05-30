@@ -224,11 +224,21 @@ fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
                 .category
                 .clone()
                 .unwrap_or_else(|| maple_core::categorizer::builtin_category(base).to_string());
+            let (r#type, aob) = match &p.string_anchor {
+                Some(anchor) => {
+                    let aob = match &anchor.also {
+                        Some(also) => format!("@string={} @also={also}", anchor.text),
+                        None => format!("@string={}", anchor.text),
+                    };
+                    ("string".to_string(), aob)
+                }
+                None => (kind_label(kind).to_string(), p.signature.to_aob()),
+            };
             PatternView {
                 name: p.name.clone(),
-                r#type: kind_label(kind).to_string(),
+                r#type,
                 category,
-                aob: p.signature.to_aob(),
+                aob,
                 note: p.note.clone().unwrap_or_default(),
             }
         })
