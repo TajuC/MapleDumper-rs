@@ -515,49 +515,223 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
-// A semantic identity for a callee's entry block, so the same function matches across builds.
-//
-// Masked bytes still shift when a build reallocates registers or reorders an addressing mode, which
-// made the old byte fingerprint report the same function as different. This decodes the entry block
-// instead and folds in the sequence of mnemonics, which is invariant to register allocation and
-// operand encoding, plus a coarse control-flow shape (call / branch / return counts) so two
-// functions that share a prologue still separate.
-fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    let bytes = read_at(img.source, img.base, target_rva, 80);
-    let mut decoder = Decoder::with_ip(
-        bitness(img.arch),
-        &bytes,
-        (img.base + target_rva) as u64,
-        DecoderOptions::NONE,
-    );
+const ID_WINDOW: usize = 256;
+const ID_MAX_INSTRS: usize = 24;
+
+/// A semantic identity for a function's entry block, so the same function matches across builds even
+/// when a recompile shifts bytes. It is built from features that survive recompilation but still tell
+/// functions apart: the sequence of instruction mnemonics (invariant to register allocation and
+/// operand encoding), a CFG-lite basic-block count, the distinctive immediate constants the function
+/// uses, and the read-only strings it references. The cross-build consistency check compares these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FnIdentity {
+    pub instr_count: usize,
+    pub blocks: usize,
+    pub calls: usize,
+    pub branches: usize,
+    pub returns: usize,
+    pub constants: Vec<u64>,
+    pub strings: Vec<String>,
+    mnemonics: Vec<u32>,
+}
+
+fn fnv_fold(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+fn is_immediate_kind(k: OpKind) -> bool {
+    matches!(
+        k,
+        OpKind::Immediate8
+            | OpKind::Immediate8_2nd
+            | OpKind::Immediate16
+            | OpKind::Immediate32
+            | OpKind::Immediate64
+            | OpKind::Immediate8to16
+            | OpKind::Immediate8to32
+            | OpKind::Immediate8to64
+            | OpKind::Immediate32to64
+    )
+}
+
+// Small immediates are stack and struct offsets that do not identify a function; keep the larger
+// magic numbers, sizes, and constants that a function carries across builds.
+fn is_distinctive_const(v: u64) -> bool {
+    (v as i64).unsigned_abs() > 0xFFFF && v != u64::MAX
+}
+
+fn read_string_ref(img: &ImageInput, abs: usize) -> Option<String> {
+    if abs < img.base || abs >= img.base + img.size {
+        return None;
+    }
+    let rva = abs - img.base;
+    let bytes = read_at(img.source, img.base, rva, 64);
+    let ascii: Vec<u8> = bytes.iter().copied().take_while(|&b| b != 0).collect();
+    if ascii.len() >= 4 && ascii.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
+        return Some(String::from_utf8_lossy(&ascii[..ascii.len().min(48)]).into_owned());
+    }
+    let mut wide = String::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() && bytes[i + 1] == 0 && (0x20u8..=0x7E).contains(&bytes[i]) {
+        wide.push(bytes[i] as char);
+        i += 2;
+        if wide.len() >= 48 {
+            break;
+        }
+    }
+    (wide.len() >= 4).then_some(wide)
+}
+
+#[must_use]
+pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
+    let bytes = read_at(img.source, img.base, target_rva, ID_WINDOW);
+    let ip0 = (img.base + target_rva) as u64;
+    let end_ip = ip0 + bytes.len() as u64;
+    let mut decoder = Decoder::with_ip(bitness(img.arch), &bytes, ip0, DecoderOptions::NONE);
     let mut instr = Instruction::default();
-    let mut mnems: Vec<u32> = Vec::new();
-    let (mut calls, mut cond, mut uncond, mut rets) = (0u32, 0u32, 0u32, 0u32);
-    while decoder.can_decode() && mnems.len() < 12 {
+    let mut mnemonics: Vec<u32> = Vec::new();
+    let mut constants: Vec<u64> = Vec::new();
+    let mut strings: Vec<String> = Vec::new();
+    let mut blocks: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    let (mut calls, mut branches, mut returns) = (0usize, 0usize, 0usize);
+    blocks.insert(ip0);
+    while decoder.can_decode() && mnemonics.len() < ID_MAX_INSTRS {
         decoder.decode_out(&mut instr);
         if instr.is_invalid() || instr.len() == 0 {
             break;
         }
-        mnems.push(instr.mnemonic() as u32);
+        mnemonics.push(instr.mnemonic() as u32);
+        for i in 0..instr.op_count() {
+            if is_immediate_kind(instr.op_kind(i)) {
+                let v = instr.immediate(i);
+                // An immediate that points into the image is often a string pointer: x86 carries
+                // these as `push offset str` / `mov reg, offset str`, not a memory operand.
+                if (img.base as u64..(img.base + img.size) as u64).contains(&v)
+                    && let Some(s) = read_string_ref(img, v as usize)
+                {
+                    strings.push(s);
+                } else if is_distinctive_const(v) {
+                    constants.push(v);
+                }
+            }
+        }
+        // x64 reaches read-only strings through a rip-relative memory operand instead.
+        if let Some(abs) = mem_target(&instr, img.arch)
+            && let Some(s) = read_string_ref(img, abs)
+        {
+            strings.push(s);
+        }
         match instr.flow_control() {
             FlowControl::Call | FlowControl::IndirectCall => calls += 1,
-            FlowControl::ConditionalBranch => cond += 1,
-            FlowControl::UnconditionalBranch | FlowControl::IndirectBranch => uncond += 1,
+            FlowControl::ConditionalBranch => {
+                branches += 1;
+                let t = instr.near_branch_target();
+                if (ip0..end_ip).contains(&t) {
+                    blocks.insert(t);
+                }
+                blocks.insert(instr.next_ip());
+            }
+            FlowControl::UnconditionalBranch => {
+                branches += 1;
+                let t = instr.near_branch_target();
+                if (ip0..end_ip).contains(&t) {
+                    blocks.insert(t);
+                }
+            }
             FlowControl::Return => {
-                rets += 1;
-                break; // the first return ends the entry block
+                returns += 1;
+                break;
             }
             _ => {}
         }
     }
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for m in &mnems {
-        for b in m.to_le_bytes() {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    constants.sort_unstable();
+    constants.dedup();
+    strings.sort();
+    strings.dedup();
+    FnIdentity {
+        instr_count: mnemonics.len(),
+        blocks: blocks.len(),
+        calls,
+        branches,
+        returns,
+        constants,
+        strings,
+        mnemonics,
+    }
+}
+
+impl FnIdentity {
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for m in &self.mnemonics {
+            fnv_fold(&mut h, &m.to_le_bytes());
+        }
+        for c in &self.constants {
+            fnv_fold(&mut h, &c.to_le_bytes());
+        }
+        for s in &self.strings {
+            fnv_fold(&mut h, s.as_bytes());
+            fnv_fold(&mut h, &[0]);
+        }
+        format!(
+            "{}:{:016X}:b{}c{}j{}r{}",
+            self.instr_count, h, self.blocks, self.calls, self.branches, self.returns
+        )
+    }
+}
+
+fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
+    fn_identity(img, target_rva).fingerprint()
+}
+
+/// Approximate count of references to a function entry: rel32 calls and jumps, plus x64 rip-relative
+/// lea, whose computed target lands on `target_rva`. It is a byte scan rather than a full disassembly,
+/// so it can mis-count at an instruction boundary, but it is a stable identity signal that separates a
+/// heavily-referenced function from a one-off helper. Unlike the fingerprint it is not part of the
+/// strict cross-build equality, since the surrounding code that references a function shifts per build.
+#[must_use]
+pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
+    let target_abs = (img.base + target_rva) as i64;
+    let mut count = 0usize;
+    for region in &img.code_regions {
+        let bytes = read_region(img.source, region.base, region.size);
+        let n = bytes.len();
+        let mut i = 0;
+        while i + 5 <= n {
+            if bytes[i] == 0xE8 || bytes[i] == 0xE9 {
+                let rel =
+                    i32::from_le_bytes([bytes[i + 1], bytes[i + 2], bytes[i + 3], bytes[i + 4]])
+                        as i64;
+                if (region.base + i + 5) as i64 + rel == target_abs {
+                    count += 1;
+                }
+            }
+            i += 1;
+        }
+        if matches!(img.arch, Arch::X64) {
+            let mut j = 0;
+            while j + 7 <= n {
+                if bytes[j] == 0x48 && bytes[j + 1] == 0x8D && (bytes[j + 2] & 0xC7) == 0x05 {
+                    let disp = i32::from_le_bytes([
+                        bytes[j + 3],
+                        bytes[j + 4],
+                        bytes[j + 5],
+                        bytes[j + 6],
+                    ]) as i64;
+                    if (region.base + j + 7) as i64 + disp == target_abs {
+                        count += 1;
+                    }
+                }
+                j += 1;
+            }
         }
     }
-    format!("{}:{h:016X}:c{calls}b{cond}j{uncond}r{rets}", mnems.len())
+    count
 }
 
 // A 0-100 confidence derived from the grade band and refined by signature density and the
@@ -1424,6 +1598,56 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn fn_identity_captures_distinctive_constants() {
+        let base = 0x4000;
+        // mov eax, 0xDEADBEEF ; ret
+        let src = BufferSource::new(base, vec![0xB8, 0xEF, 0xBE, 0xAD, 0xDE, 0xC3]);
+        let id = fn_identity(&img("c", &src, base, 6), 0);
+        assert!(
+            id.constants.contains(&0xDEAD_BEEF),
+            "got {:?}",
+            id.constants
+        );
+        assert_eq!(id.returns, 1);
+        // a small struct offset is not distinctive
+        let small = BufferSource::new(base, vec![0x83, 0xC0, 0x08, 0xC3]); // add eax, 8 ; ret
+        assert!(
+            fn_identity(&img("s", &small, base, 4), 0)
+                .constants
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn fn_identity_captures_string_references() {
+        let base = 0x6000;
+        // lea rax, [rip+9] ; ret ; pad ; "Hello\0" at rva 16
+        let mut code = vec![0x48, 0x8D, 0x05, 0x09, 0x00, 0x00, 0x00, 0xC3];
+        code.resize(16, 0x00);
+        code.extend_from_slice(b"Hello\0");
+        let src = BufferSource::new(base, code);
+        let id = fn_identity(&img("str", &src, base, 22), 0);
+        assert!(
+            id.strings.iter().any(|s| s == "Hello"),
+            "got {:?}",
+            id.strings
+        );
+    }
+
+    #[test]
+    fn xref_count_finds_rel32_calls() {
+        let base = 0x10000;
+        let mut code = vec![0x90u8; 0x80];
+        for site in [0x10usize, 0x20] {
+            code[site] = 0xE8;
+            let rel = 0x40i32 - (site as i32 + 5);
+            code[site + 1..site + 5].copy_from_slice(&rel.to_le_bytes());
+        }
+        let src = BufferSource::new(base, code);
+        assert_eq!(xref_count(&img("x", &src, base, 0x80), 0x40), 2);
     }
 
     #[test]
