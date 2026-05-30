@@ -18,9 +18,12 @@ use rusqlite::Connection;
 use tauri::Emitter;
 
 mod history;
+mod jobs;
+
+use jobs::JobManager;
 
 struct AppState {
-    cancel: Arc<AtomicBool>,
+    jobs: JobManager,
     last: Arc<Mutex<Option<LastScan>>>,
     db: Arc<Mutex<Connection>>,
 }
@@ -449,11 +452,13 @@ async fn attach_and_scan(
     state: tauri::State<'_, AppState>,
     req: ScanRequest,
 ) -> Result<ScanReport, String> {
-    let cancel = state.cancel.clone();
+    let (id, token) = state.jobs.start();
     let last = state.last.clone();
     let db = state.db.clone();
-    cancel.store(false, Ordering::SeqCst);
-    match tauri::async_runtime::spawn_blocking(move || run_scan(&cancel, &last, &db, req)).await {
+    let result =
+        tauri::async_runtime::spawn_blocking(move || run_scan(token.flag(), &last, &db, req)).await;
+    state.jobs.finish(id);
+    match result {
         Ok(result) => result,
         Err(e) => Err(e.to_string()),
     }
@@ -562,9 +567,11 @@ async fn assembly_scan(
     state: tauri::State<'_, AppState>,
     req: AsmScanRequest,
 ) -> Result<AsmScanReport, String> {
-    let cancel = state.cancel.clone();
-    cancel.store(false, Ordering::SeqCst);
-    match tauri::async_runtime::spawn_blocking(move || run_asm_scan(&cancel, req)).await {
+    let (id, token) = state.jobs.start();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || run_asm_scan(token.flag(), req)).await;
+    state.jobs.finish(id);
+    match result {
         Ok(result) => result,
         Err(e) => Err(e.to_string()),
     }
@@ -572,7 +579,12 @@ async fn assembly_scan(
 
 #[tauri::command]
 fn cancel_scan(state: tauri::State<'_, AppState>) {
-    state.cancel.store(true, Ordering::SeqCst);
+    state.jobs.cancel_all();
+}
+
+#[tauri::command]
+fn cancel_job(state: tauri::State<'_, AppState>, job_id: jobs::JobId) {
+    state.jobs.cancel(job_id);
 }
 
 #[tauri::command]
@@ -1372,7 +1384,7 @@ fn open_history_db() -> Connection {
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
-            cancel: Arc::new(AtomicBool::new(false)),
+            jobs: JobManager::default(),
             last: Arc::new(Mutex::new(None)),
             db: Arc::new(Mutex::new(open_history_db())),
         })
@@ -1382,6 +1394,7 @@ fn main() {
             attach_and_scan,
             assembly_scan,
             cancel_scan,
+            cancel_job,
             export_text,
             diff_dumps,
             history_builds,
