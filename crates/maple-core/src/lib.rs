@@ -20,7 +20,9 @@ pub mod process;
 
 pub use asmscan::{AsmHit, AsmPattern, assembly_scan, parse_asm_patterns};
 pub use diff::{DiffReport, Moved, diff, parse_dump};
-pub use domain::{FailureReason, FindingStatus, SectionKind, checked_rva};
+pub use domain::{
+    ExpectedHits, FailureReason, FindingStatus, ResolvePlan, ResolverSpec, SectionKind, checked_rva,
+};
 pub use engine::{PatternRow, ProfileReport, ScanResult, profile, scan};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};

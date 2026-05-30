@@ -11,6 +11,20 @@ pub enum SectionKind {
     Unknown,
 }
 
+impl SectionKind {
+    /// Parse a section keyword used in a pattern schema (`code`, `data`, `rodata`, `import`).
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<SectionKind> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "code" | "text" | ".text" => Some(SectionKind::Code),
+            "data" | ".data" => Some(SectionKind::Data),
+            "rodata" | "readonly" | ".rdata" | ".rodata" => Some(SectionKind::ReadOnly),
+            "import" | "iat" => Some(SectionKind::Import),
+            _ => None,
+        }
+    }
+}
+
 /// Why a pattern did not produce a trustworthy result. Replaces the old habit of collapsing every
 /// failure into "not found" or a wrapped numeric RVA.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +123,96 @@ pub fn checked_rva(addr: usize, base: usize, size: usize) -> Result<u64, Failure
         return Err(FailureReason::OutOfModule);
     }
     Ok(rva as u64)
+}
+
+/// How a matched site turns into a reported value. Today this is derived from a pattern's name
+/// suffix via [`crate::resolver::Kind::spec`], but an explicit pattern schema sets it directly, so
+/// behavior is driven by a typed value rather than a string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolverSpec {
+    MatchAddress,
+    MemoryPointer,
+    StructOffset,
+    Immediate,
+    NestedCall,
+}
+
+impl ResolverSpec {
+    /// Parse a resolver-kind keyword used in a pattern schema.
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<ResolverSpec> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "direct" | "addr" | "address" | "match" => Some(ResolverSpec::MatchAddress),
+            "ptr" | "pointer" => Some(ResolverSpec::MemoryPointer),
+            "off" | "offset" => Some(ResolverSpec::StructOffset),
+            "hdr" | "header" | "imm" | "immediate" => Some(ResolverSpec::Immediate),
+            "call" => Some(ResolverSpec::NestedCall),
+            _ => None,
+        }
+    }
+}
+
+/// How many matches a pattern is expected to produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedHits {
+    Any,
+    Unique,
+    AtLeast(usize),
+}
+
+impl ExpectedHits {
+    /// Parse an expected-hits keyword: `any`, `unique`, or a count (`>=N`, `atleast:N`, or `N`).
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<ExpectedHits> {
+        let s = s.trim().to_ascii_lowercase();
+        match s.as_str() {
+            "any" => Some(ExpectedHits::Any),
+            "unique" | "1" => Some(ExpectedHits::Unique),
+            other => {
+                let n = other
+                    .strip_prefix(">=")
+                    .or_else(|| other.strip_prefix("atleast:"))
+                    .unwrap_or(other);
+                n.parse::<usize>().ok().map(ExpectedHits::AtLeast)
+            }
+        }
+    }
+
+    /// Whether `count` matches satisfy this expectation.
+    #[must_use]
+    pub fn satisfied_by(self, count: usize) -> bool {
+        match self {
+            ExpectedHits::Any => true,
+            ExpectedHits::Unique => count == 1,
+            ExpectedHits::AtLeast(n) => count >= n,
+        }
+    }
+}
+
+/// The explicit, typed resolution plan for a pattern. Built from a pattern schema, this replaces
+/// deriving behavior from the name suffix: `kind` selects the resolver and the rest refine where
+/// and how the target is read and validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvePlan {
+    pub kind: ResolverSpec,
+    pub instruction_offset: usize,
+    pub operand_index: Option<usize>,
+    pub expected_section: Option<SectionKind>,
+    pub expected_hits: ExpectedHits,
+}
+
+impl ResolvePlan {
+    /// A plan that selects a resolver kind with default refinements.
+    #[must_use]
+    pub fn new(kind: ResolverSpec) -> Self {
+        Self {
+            kind,
+            instruction_offset: 0,
+            operand_index: None,
+            expected_section: None,
+            expected_hits: ExpectedHits::Any,
+        }
+    }
 }
 
 #[cfg(test)]

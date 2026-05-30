@@ -41,17 +41,7 @@ impl Kind {
     }
 }
 
-/// How a matched site turns into a reported value. Today this is derived from the pattern name
-/// suffix via [`Kind::spec`], but it is an explicit type so behavior is driven by a value, not by a
-/// string, and a future pattern format can set it directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolverSpec {
-    MatchAddress,
-    MemoryPointer,
-    StructOffset,
-    Immediate,
-    NestedCall,
-}
+pub use crate::domain::ResolverSpec;
 
 fn bitness(arch: Arch) -> u32 {
     if matches!(arch, Arch::X64) { 64 } else { 32 }

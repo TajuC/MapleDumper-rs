@@ -75,7 +75,7 @@ pub(crate) fn read_range<S: MemorySource>(source: &S, base: usize, len: usize) -
 type Block = (usize, usize, Vec<u8>);
 
 fn resolve<S: MemorySource>(
-    kind: Kind,
+    spec: ResolverSpec,
     source: &S,
     module_base: usize,
     module_size: usize,
@@ -85,7 +85,7 @@ fn resolve<S: MemorySource>(
 ) -> Result<Resolved, FailureReason> {
     let addr_rva =
         |target: usize| checked_rva(target, module_base, module_size).map(Resolved::Addr);
-    match kind.spec() {
+    match spec {
         ResolverSpec::MatchAddress => addr_rva(addr),
         ResolverSpec::MemoryPointer => resolver::extract_pointer(bytes, addr, arch)
             .ok_or(FailureReason::Unresolved)
@@ -199,9 +199,9 @@ where
                 if let Some(index) = index.as_ref() {
                     index.scan(&buf, accept_len, |idx, off| {
                         let addr = base + off;
-                        let kind = compiled[idx].0;
+                        let spec = compiled[idx].0;
                         let outcome = resolve(
-                            kind,
+                            spec,
                             source,
                             module_base,
                             module_size,
@@ -216,7 +216,7 @@ where
                         });
                     });
                 } else {
-                    for (idx, (kind, cp)) in compiled.iter().enumerate() {
+                    for (idx, (spec, cp)) in compiled.iter().enumerate() {
                         let Some(cp) = cp else { continue };
                         if buf.len() < cp.len() {
                             continue;
@@ -227,7 +227,7 @@ where
                             }
                             let addr = base + off;
                             let outcome = resolve(
-                                *kind,
+                                *spec,
                                 source,
                                 module_base,
                                 module_size,
@@ -353,14 +353,19 @@ where
     }
 }
 
-type CompiledPat = (Kind, Option<CompiledPattern>);
+type CompiledPat = (ResolverSpec, Option<CompiledPattern>);
 
 fn compile_patterns(patterns: &[Pattern]) -> Vec<CompiledPat> {
     patterns
         .iter()
         .map(|p| {
-            let (kind, _) = Kind::classify(&p.name);
-            (kind, CompiledPattern::new(&p.signature))
+            // An explicit schema sets the resolver kind directly; otherwise it is derived from the
+            // name suffix (the legacy form).
+            let spec = p
+                .resolve
+                .as_ref()
+                .map_or_else(|| Kind::classify(&p.name).0.spec(), |plan| plan.kind);
+            (spec, CompiledPattern::new(&p.signature))
         })
         .collect()
 }
@@ -478,13 +483,13 @@ fn resolve_pass<S: MemorySource>(
     let mut acc = 0u64;
     let t = Instant::now();
     for p in found {
-        let kind = compiled[p.pat].0;
-        if kind == Kind::Call {
+        let spec = compiled[p.pat].0;
+        if spec == ResolverSpec::NestedCall {
             call_hits += 1;
         }
         let addr = bufs[p.buf].0 + p.off;
         let outcome = resolve(
-            kind,
+            spec,
             source,
             module_base,
             module_size,

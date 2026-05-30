@@ -214,7 +214,8 @@ Name AA ?? CC
 - Category sections: `[name]` sets the namespace used for the following symbols in `offsets.h`
   (default `globals`).
 
-Name suffixes select how a match is resolved:
+A name suffix selects how a match is resolved. This is the compatibility form, kept so existing
+pattern files keep working:
 
 | Suffix   | Meaning                                                                 |
 |----------|-------------------------------------------------------------------------|
@@ -223,6 +224,23 @@ Name suffixes select how a match is resolved:
 | `_OFF`   | Extract a struct member displacement (emitted as a raw offset).         |
 | `_HDR`   | Extract an immediate operand, for example a packet header opcode.       |
 | (none)   | Emit the match address itself.                                          |
+
+For an explicit, typed plan, append `@key=value` directives instead of relying on the name. `@kind`
+selects the resolver as a value rather than parsing it from a suffix, and the strict loader parses
+and validates every directive into the pattern's typed plan, rejecting an unknown key or value with
+a line number:
+
+```
+CUserLocal = 48 8B 0D ?? ?? ?? ?? @kind=ptr @section=code @hits=unique
+```
+
+| Directive   | Values                                | Meaning |
+|-------------|---------------------------------------|---------|
+| `@kind`     | `ptr`, `call`, `off`, `hdr`, `direct` | The resolver kind, overriding any suffix. Drives resolution. |
+| `@section`  | `code`, `data`, `rodata`, `import`    | The section the resolved target is expected to land in. |
+| `@hits`     | `unique`, `any`, `>=N`                | How many matches the pattern should produce. |
+| `@instr`    | a number                              | Which decoded instruction in the match window to resolve from. |
+| `@operand`  | a number                              | Which operand of that instruction to read. |
 
 See [patterns.sample.txt](patterns.sample.txt) for a worked example.
 
