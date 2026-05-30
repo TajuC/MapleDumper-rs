@@ -287,6 +287,9 @@ fn bitness(arch: Arch) -> u32 {
     if matches!(arch, Arch::X64) { 64 } else { 32 }
 }
 
+// Truncate to the bytes actually read so an unreadable tail is never handed back as real zeros: a
+// short read at a region boundary or an unmapped page must shrink the slice, not fabricate data the
+// signature logic would then anchor on.
 fn read_region(src: &dyn MemorySource, base: usize, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
     let mut off = 0;
@@ -296,6 +299,7 @@ fn read_region(src: &dyn MemorySource, base: usize, size: usize) -> Vec<u8> {
             Ok(n) => off += n,
         }
     }
+    buf.truncate(off);
     buf
 }
 
@@ -308,6 +312,7 @@ fn read_at(src: &dyn MemorySource, base: usize, rva: usize, len: usize) -> Vec<u
             Ok(n) => off += n,
         }
     }
+    buf.truncate(off);
     buf
 }
 
@@ -1593,6 +1598,41 @@ mod tests {
                 > confidence_score(Grade::A, 0.5, false, false)
         );
         assert!(confidence_score(Grade::A, 1.0, true, true) <= 100);
+    }
+
+    struct ShortSource {
+        base: usize,
+        readable: usize,
+    }
+
+    impl MemorySource for ShortSource {
+        fn read_into(&self, address: usize, buf: &mut [u8]) -> std::io::Result<usize> {
+            let off = address - self.base;
+            if off >= self.readable {
+                return Ok(0);
+            }
+            let n = buf.len().min(self.readable - off);
+            buf[..n].fill(0xCC);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn reads_drop_the_unreadable_tail_instead_of_zero_filling() {
+        let src = ShortSource {
+            base: 0x4000,
+            readable: 7,
+        };
+        let region = read_region(&src, 0x4000, 64);
+        assert_eq!(region.len(), 7, "tail past the readable range must be dropped");
+        assert!(region.iter().all(|&b| b == 0xCC));
+
+        let at = read_at(&src, 0x4000, 0, 64);
+        assert_eq!(at.len(), 7);
+        assert!(at.iter().all(|&b| b == 0xCC));
+
+        let none = read_at(&src, 0x4000, 7, 16);
+        assert!(none.is_empty(), "a read starting past the range is empty");
     }
 
     #[test]
