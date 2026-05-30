@@ -336,9 +336,11 @@
                   <button id="hist-refresh" class="btn btn-soft"><span class="ico" data-icon="activity"></span><span data-i18n="hist.refresh">Refresh</span></button>
                   <button id="hist-compare" class="btn btn-soft" disabled><span class="ico" data-icon="diff"></span><span data-i18n="hist.compare">Compare A ↔ B</span></button>
                   <button id="hist-matrix" class="btn btn-soft"><span class="ico" data-icon="grid"></span><span data-i18n="hist.matrix">Matrix</span></button>
+                  <button id="hist-difffiles" class="btn btn-soft"><span class="ico" data-icon="diff"></span><span data-i18n="hist.diffFiles">Diff files</span></button>
                   <button id="hist-clear" class="btn btn-soft" data-i18n="hist.clear">Clear all</button>
                 </div>
               </div>
+              <input type="file" id="diff-file-input" accept=".txt,.csv,.log,text/plain" multiple hidden />
               <div id="hist-pins" class="hist-pins"></div>
               <div class="hist-grid">
                 <div class="panel table-scroll" id="hist-list"></div>

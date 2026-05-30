@@ -405,11 +405,11 @@ const RAND_I18N = {
 Object.keys(RAND_I18N).forEach((lang) => Object.assign(I18N[lang], RAND_I18N[lang]));
 
 const TAB_I18N = {
-  en: { "hist.matrix": "Matrix", "hist.needTwo": "Need at least two versions to build a matrix.", "hist.matrixTitle": "Matrix ({n})", "hist.rename": "Double-click to rename" },
-  ja: { "hist.matrix": "マトリクス", "hist.needTwo": "マトリクスを作成するには2つ以上のバージョンが必要です。", "hist.matrixTitle": "マトリクス ({n})", "hist.rename": "ダブルクリックで名前を変更" },
-  zh: { "hist.matrix": "矩阵", "hist.needTwo": "构建矩阵至少需要两个版本。", "hist.matrixTitle": "矩阵 ({n})", "hist.rename": "双击重命名" },
-  ko: { "hist.matrix": "매트릭스", "hist.needTwo": "매트릭스를 만들려면 두 개 이상의 버전이 필요합니다.", "hist.matrixTitle": "매트릭스 ({n})", "hist.rename": "더블클릭하여 이름 변경" },
-  he: { "hist.matrix": "מטריצה", "hist.needTwo": "נדרשות לפחות שתי גרסאות ליצירת מטריצה.", "hist.matrixTitle": "מטריצה ({n})", "hist.rename": "לחיצה כפולה לשינוי שם" },
+  en: { "hist.matrix": "Matrix", "hist.needTwo": "Need at least two versions to build a matrix.", "hist.matrixTitle": "Matrix ({n})", "hist.rename": "Double-click to rename", "hist.diffFiles": "Diff files", "hist.diffPickTwo": "Select two dump files to compare." },
+  ja: { "hist.matrix": "マトリクス", "hist.needTwo": "マトリクスを作成するには2つ以上のバージョンが必要です。", "hist.matrixTitle": "マトリクス ({n})", "hist.rename": "ダブルクリックで名前を変更", "hist.diffFiles": "ファイルを比較", "hist.diffPickTwo": "比較する2つのダンプファイルを選択してください。" },
+  zh: { "hist.matrix": "矩阵", "hist.needTwo": "构建矩阵至少需要两个版本。", "hist.matrixTitle": "矩阵 ({n})", "hist.rename": "双击重命名", "hist.diffFiles": "比较文件", "hist.diffPickTwo": "请选择两个转储文件进行比较。" },
+  ko: { "hist.matrix": "매트릭스", "hist.needTwo": "매트릭스를 만들려면 두 개 이상의 버전이 필요합니다.", "hist.matrixTitle": "매트릭스 ({n})", "hist.rename": "더블클릭하여 이름 변경", "hist.diffFiles": "파일 비교", "hist.diffPickTwo": "비교할 덤프 파일 두 개를 선택하세요." },
+  he: { "hist.matrix": "מטריצה", "hist.needTwo": "נדרשות לפחות שתי גרסאות ליצירת מטריצה.", "hist.matrixTitle": "מטריצה ({n})", "hist.rename": "לחיצה כפולה לשינוי שם", "hist.diffFiles": "השווה קבצים", "hist.diffPickTwo": "בחר שני קבצי dump להשוואה." },
 };
 Object.keys(TAB_I18N).forEach((lang) => Object.assign(I18N[lang], TAB_I18N[lang]));
 
@@ -2465,6 +2465,7 @@ async function renderActiveTab() {
   try {
     if (tab.type === "scan") c.innerHTML = await scanTabHtml(tab);
     else if (tab.type === "diff") c.innerHTML = await diffTabHtml(tab);
+    else if (tab.type === "difffiles") c.innerHTML = await diffFilesTabHtml(tab);
     else if (tab.type === "matrix") c.innerHTML = await matrixTabHtml(tab);
     const exp = $("hist-exp");
     if (exp && tab.type === "scan") exp.addEventListener("click", () => exportHistScan(tab.scanId));
@@ -2493,6 +2494,13 @@ async function diffTabHtml(tab) {
   const view = await invoke("history_diff", { a: tab.a, b: tab.b });
   const info = scanInfo(tab.a);
   const bits = info && info.scan.arch === "x86" ? 32 : 64;
+  return diffViewHtml(view, bits);
+}
+async function diffFilesTabHtml(tab) {
+  const view = await invoke("diff_dumps", { old: tab.old, new: tab.new });
+  return diffViewHtml(view, 64);
+}
+function diffViewHtml(view, bits) {
   const label = { moved: t("diff.moved"), new: t("diff.new"), removed: t("diff.removed") };
   const cls = { moved: "moved", new: "new", removed: "removed" };
   const tail = view.changed === true ? ` (${t("diff.changed")})` : view.changed === false ? ` (${t("diff.same")})` : "";
@@ -2591,6 +2599,28 @@ function openMatrix() {
 $("hist-refresh").addEventListener("click", loadHistory);
 $("hist-compare").addEventListener("click", compareHist);
 $("hist-matrix").addEventListener("click", openMatrix);
+$("hist-difffiles").addEventListener("click", () => $("diff-file-input").click());
+$("diff-file-input").addEventListener("change", async (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  if (files.length < 2) {
+    toast(t("hist.diffPickTwo"), true);
+    return;
+  }
+  try {
+    const [a, b] = files;
+    const [oldText, newText] = await Promise.all([a.text(), b.text()]);
+    openTab({
+      type: "difffiles",
+      key: `df:${a.name}|${b.name}`,
+      title: `${a.name} ↔ ${b.name}`,
+      old: oldText,
+      new: newText,
+    });
+  } catch (err) {
+    toast(String(err), true);
+  }
+});
 $("hist-clear").addEventListener("click", clearHistory);
 $("hist-tab-content").addEventListener("click", (e) => {
   const tr = e.target.closest && e.target.closest("tr.sym-row");
