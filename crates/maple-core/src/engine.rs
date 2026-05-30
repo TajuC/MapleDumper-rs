@@ -297,14 +297,16 @@ where
                     candidates: match_count,
                 }
             } else {
+                FindingStatus::FoundUnique
+            };
+            if status.is_exportable() {
                 findings.push(Finding {
                     name: base.to_string(),
                     category: category.clone(),
                     value,
                     is_offset,
                 });
-                FindingStatus::FoundUnique
-            };
+            }
             rows.push(PatternRow {
                 name: base.to_string(),
                 category,

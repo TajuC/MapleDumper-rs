@@ -66,6 +66,9 @@ impl FindingStatus {
         }
     }
 
+    /// True for any resolved match, including an ambiguous one. This is deliberately broad, for
+    /// reporting and metrics; it is not export-safe, so use [`FindingStatus::is_exportable`] before
+    /// emitting a value as an offset.
     #[must_use]
     pub fn is_found(&self) -> bool {
         matches!(
@@ -73,15 +76,33 @@ impl FindingStatus {
             FindingStatus::FoundUnique | FindingStatus::FoundAmbiguous { .. }
         )
     }
+
+    /// True only for a single, unambiguous match.
+    #[must_use]
+    pub fn is_unique_found(&self) -> bool {
+        matches!(self, FindingStatus::FoundUnique)
+    }
+
+    /// Whether this result is safe to emit as a normal offset. Only a unique match qualifies; an
+    /// ambiguous match is shown for inspection but never exported.
+    #[must_use]
+    pub fn is_exportable(&self) -> bool {
+        self.is_unique_found()
+    }
 }
 
 /// Module-relative address of `addr` within `[base, base + size)`. Unlike a raw `wrapping_sub`, an
 /// address before the module or past its end is rejected instead of wrapping into a plausible-looking
-/// huge RVA that then flows into a header or table. Pass `size == 0` to skip the upper-bound check
-/// when the module size is unknown.
+/// huge RVA that then flows into a header or table.
+///
+/// Passing `size == 0` skips only the upper-bound check, for callers that genuinely do not know the
+/// module size yet; the lower-bound (before-base) check still applies. Do not use the `size == 0`
+/// form on any path that can reach an exporter: an export must validate against the real module size
+/// so an out-of-section or past-end address cannot become an offset.
 ///
 /// # Errors
-/// Returns [`FailureReason::OutOfModule`] when `addr < base` or `addr` lands at or past `base + size`.
+/// Returns [`FailureReason::OutOfModule`] when `addr < base`, or when `size != 0` and `addr` lands at
+/// or past `base + size`.
 pub fn checked_rva(addr: usize, base: usize, size: usize) -> Result<u64, FailureReason> {
     let rva = addr.checked_sub(base).ok_or(FailureReason::OutOfModule)?;
     if size != 0 && rva >= size {
@@ -120,6 +141,18 @@ mod tests {
     #[test]
     fn checked_rva_unbounded_when_size_zero() {
         assert_eq!(checked_rva(0x9000, 0x1000, 0), Ok(0x8000));
+    }
+
+    #[test]
+    fn only_unique_is_exportable() {
+        assert!(FindingStatus::FoundUnique.is_exportable());
+        assert!(FindingStatus::FoundUnique.is_unique_found());
+        let ambiguous = FindingStatus::FoundAmbiguous { candidates: 2 };
+        assert!(!ambiguous.is_exportable());
+        assert!(!ambiguous.is_unique_found());
+        assert!(ambiguous.is_found()); // still "found" for reporting, just not exportable
+        assert!(!FindingStatus::NotFound.is_exportable());
+        assert!(!FindingStatus::Failed(FailureReason::OutOfModule).is_exportable());
     }
 
     #[test]
