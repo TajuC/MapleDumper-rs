@@ -459,26 +459,49 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
-// Masked fingerprint of a callee's entry, so the same function matches across builds despite relocations.
+// A semantic identity for a callee's entry block, so the same function matches across builds.
+//
+// Masked bytes still shift when a build reallocates registers or reorders an addressing mode, which
+// made the old byte fingerprint report the same function as different. This decodes the entry block
+// instead and folds in the sequence of mnemonics, which is invariant to register allocation and
+// operand encoding, plus a coarse control-flow shape (call / branch / return counts) so two
+// functions that share a prologue still separate.
 fn callee_fingerprint(img: &ImageInput, target_rva: usize) -> String {
-    // A 2-instruction prologue is too generic to tell functions apart across builds, so decode a
-    // longer window and fold the instruction count in. Operand bytes stay masked, so a relocation
-    // or a shifted call target inside the callee does not change its identity.
-    let bytes = read_at(img.source, img.base, target_rva, 48);
-    let decoded = decode_masked(&bytes, img.arch, img.base, target_rva, img.reloc, 8);
-    let mut fp: Vec<u8> = Vec::new();
-    let mut off = 0;
-    for im in &decoded {
-        for k in 0..im.len {
-            fp.push(if im.fixed[k] {
-                bytes.get(off + k).copied().unwrap_or(0)
-            } else {
-                0xFF
-            });
+    let bytes = read_at(img.source, img.base, target_rva, 80);
+    let mut decoder = Decoder::with_ip(
+        bitness(img.arch),
+        &bytes,
+        (img.base + target_rva) as u64,
+        DecoderOptions::NONE,
+    );
+    let mut instr = Instruction::default();
+    let mut mnems: Vec<u32> = Vec::new();
+    let (mut calls, mut cond, mut uncond, mut rets) = (0u32, 0u32, 0u32, 0u32);
+    while decoder.can_decode() && mnems.len() < 12 {
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() || instr.len() == 0 {
+            break;
         }
-        off += im.len;
+        mnems.push(instr.mnemonic() as u32);
+        match instr.flow_control() {
+            FlowControl::Call | FlowControl::IndirectCall => calls += 1,
+            FlowControl::ConditionalBranch => cond += 1,
+            FlowControl::UnconditionalBranch | FlowControl::IndirectBranch => uncond += 1,
+            FlowControl::Return => {
+                rets += 1;
+                break; // the first return ends the entry block
+            }
+            _ => {}
+        }
     }
-    format!("{}:{fp:02X?}", decoded.len())
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for m in &mnems {
+        for b in m.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("{}:{h:016X}:c{calls}b{cond}j{uncond}r{rets}", mnems.len())
 }
 
 // A 0-100 confidence derived from the grade band and refined by signature density and the
@@ -1203,6 +1226,22 @@ mod tests {
                 > confidence_score(Grade::A, 0.5, false, false)
         );
         assert!(confidence_score(Grade::A, 1.0, true, true) <= 100);
+    }
+
+    #[test]
+    fn callee_fingerprint_is_register_invariant_but_mnemonic_sensitive() {
+        let base = 0x2000;
+        let a = BufferSource::new(base, vec![0x48, 0x89, 0xD8, 0xC3]); // mov rax, rbx ; ret
+        let b = BufferSource::new(base, vec![0x48, 0x89, 0xD1, 0xC3]); // mov rcx, rdx ; ret
+        let c = BufferSource::new(base, vec![0x48, 0x01, 0xD8, 0xC3]); // add rax, rbx ; ret
+        let fa = callee_fingerprint(&img("a", &a, base, 4), 0);
+        let fb = callee_fingerprint(&img("b", &b, base, 4), 0);
+        let fc = callee_fingerprint(&img("c", &c, base, 4), 0);
+        assert_eq!(fa, fb, "register allocation must not change the identity");
+        assert_ne!(
+            fa, fc,
+            "a different mnemonic stream must change the identity"
+        );
     }
 
     fn img<'a>(label: &str, src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
