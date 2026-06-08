@@ -354,6 +354,19 @@ fn single_build_aob(img: &ImageInput, rva: usize, opts: &SigOptions) -> Option<S
     None
 }
 
+/// #13: whether a string-anchored cross-version relocation is corroborated enough to be reported as a
+/// confident (A/B) match. Across a major recompile a lone string can resolve to a *migrated* string in
+/// a different function, and the cross-build structural identity is the tell: the corpus sweep found
+/// single-string landings under ~0.30 identity to the origin could not be confirmed as the same
+/// function. Confidence therefore requires either a second corroborating string (`paired`) or that the
+/// worst build's landing stays structurally close to the reference. A single build (`None`) carries no
+/// cross-build evidence and is governed by the separate single-build cap, not this gate. Within a
+/// lineage the landings stay highly similar, so this never downgrades there.
+fn string_relocation_confirmed(paired: bool, min_landing_similarity: Option<f64>) -> bool {
+    const MAJOR_GAP_SIM: f64 = 0.30;
+    paired || min_landing_similarity.is_none_or(|s| s >= MAJOR_GAP_SIM)
+}
+
 fn string_anchor_candidate(
     images: &[ImageInput],
     required: &[usize],
@@ -410,6 +423,21 @@ fn string_anchor_candidate(
     if required.len() < 2 && grade == Grade::A {
         grade = Grade::B;
         reasons.push("string anchor validated against only one build; capped below A".to_string());
+    }
+    // #13: a single string across a major recompile may have migrated to a different function. When the
+    // worst build's landing is structurally far from the reference and no second string corroborates
+    // it, report a candidate (cap below the confident A/B bands), never a confirmed relocation.
+    if !string_relocation_confirmed(ev.paired, ev.callee_similarity) {
+        let capped = grade.max_rank(Grade::C);
+        if capped != grade {
+            reasons.push(format!(
+                "single-string relocation across a major recompile: the worst build's landing is only \
+                 {:.0}% structurally similar to the reference and no second signal corroborates it, so \
+                 it is a candidate, not a confirmed relocation",
+                ev.callee_similarity.unwrap_or(0.0) * 100.0
+            ));
+            grade = capped;
+        }
     }
     Some(SigCandidate {
         aob,
@@ -2001,6 +2029,23 @@ pub fn generate_cross(
 mod tests {
     use super::*;
     use crate::memory::{BufferSource, Region};
+
+    #[test]
+    fn single_string_relocation_across_a_major_gap_is_not_confirmed() {
+        // Within a lineage the landings stay structurally close, so a lone string is confident.
+        assert!(string_relocation_confirmed(false, Some(0.85)));
+        assert!(
+            string_relocation_confirmed(false, Some(0.30)),
+            "at the floor still confirms"
+        );
+        // Across a major recompile the worst landing diverges; a lone string is NOT confident,
+        // because the string may have migrated to a different function.
+        assert!(!string_relocation_confirmed(false, Some(0.18)));
+        // ...unless a second corroborating string pins it.
+        assert!(string_relocation_confirmed(true, Some(0.18)));
+        // A single build carries no cross-build evidence; the separate single-build cap governs it.
+        assert!(string_relocation_confirmed(false, None));
+    }
 
     #[test]
     fn score_and_grade_agree_on_a_validated_candidate() {
