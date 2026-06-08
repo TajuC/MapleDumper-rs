@@ -556,32 +556,7 @@ const VT_MIN_CONSISTENCY: f64 = 0.30;
 // match clears the agreement and margin gates AND the landed method still resembles the IMMUTABLE
 // source (not the previous hop), so a chain cannot drift method-by-method onto a neighbour. The edge's
 // confidence is the path bottleneck so far, min(lconf, this hop's agreement).
-fn push_vtable_edges(
-    images: &[ImageInput],
-    required: &[usize],
-    src_ident: &FnIdentity,
-    anchor: &vtable::VtableAnchor,
-    lconf: f64,
-    located: &[Option<(u64, f64)>],
-    frontier: &mut Vec<(usize, u64, f64)>,
-) {
-    for &v in required {
-        if located[v].is_some() {
-            continue;
-        }
-        let Some((rva, agree, runner)) = vtable::resolve_vtable_anchor(&images[v], anchor) else {
-            continue;
-        };
-        if agree >= VT_MIN_AGREEMENT
-            && agree - runner >= VT_MIN_MARGIN
-            && fn_identity(&images[v], rva).similarity(src_ident) >= VT_MIN_CONSISTENCY
-        {
-            frontier.push((v, rva as u64, lconf.min(agree)));
-        }
-    }
-}
-
-/// Relocate the method at `ref_rva` from build `ref_idx` to every other required build by the
+/// Relocate the function at `ref_entry` from build `ref_idx` to every other required build by the
 /// maximum-bottleneck (widest) path through the build graph. Starting from the reference (confidence
 /// 1.0), each newly located build re-anchors and offers edges to the rest; a build is then taken by the
 /// highest-confidence path that reaches it, so a long version jump is crossed as a chain of short,
@@ -589,31 +564,41 @@ fn push_vtable_edges(
 /// chain is only as sure as its worst link). Returns, per build, the located RVA and the path's
 /// bottleneck confidence, or `None` for a build no gated path reaches. This is the data-driven
 /// generalisation of "diff v83->v84, then v84->v88, ...": the chain follows measured similarity, not an
-/// assumed version order, so it routes around a hop that a refactor made unexpectedly hard. x86 vtable
-/// methods only.
-fn vtable_relocate_path(
+/// assumed version order, so it routes around a hop that a refactor made unexpectedly hard.
+///
+/// Generic over the anchor (#14): `make_anchor` mints an anchor at a located function in a build, and
+/// `edge` resolves that anchor in a candidate build, returning the located RVA and the hop confidence
+/// already gated, or `None` to decline the hop. Any anchor with a make/resolve pair gets stepwise
+/// chaining from this single walk, not just the vtable.
+fn relocate_path<A>(
     images: &[ImageInput],
     required: &[usize],
     ref_idx: usize,
-    ref_rva: u64,
+    ref_entry: usize,
+    make_anchor: impl Fn(&ImageInput, usize) -> Option<A>,
+    edge: impl Fn(&ImageInput, &A) -> Option<(u64, f64)>,
 ) -> Vec<Option<(u64, f64)>> {
     let mut located: Vec<Option<(u64, f64)>> = vec![None; images.len()];
-    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
-    let Some(ref_anchor) = vtable::make_vtable_anchor(&images[ref_idx], entry) else {
+    let Some(ref_anchor) = make_anchor(&images[ref_idx], ref_entry) else {
         return located;
     };
-    let src_ident = fn_identity(&images[ref_idx], entry);
-    located[ref_idx] = Some((entry as u64, 1.0));
+    located[ref_idx] = Some((ref_entry as u64, 1.0));
     let mut frontier: Vec<(usize, u64, f64)> = Vec::new();
-    push_vtable_edges(
-        images,
-        required,
-        &src_ident,
-        &ref_anchor,
-        1.0,
-        &located,
-        &mut frontier,
-    );
+    // Offer every still-open build an edge from the just-located function `anchor` was minted at.
+    let offer = |anchor: &A,
+                 lconf: f64,
+                 located: &[Option<(u64, f64)>],
+                 frontier: &mut Vec<(usize, u64, f64)>| {
+        for &v in required {
+            if located[v].is_some() {
+                continue;
+            }
+            if let Some((rva, conf)) = edge(&images[v], anchor) {
+                frontier.push((v, rva, lconf.min(conf)));
+            }
+        }
+    };
+    offer(&ref_anchor, 1.0, &located, &mut frontier);
     loop {
         // The widest still-open edge: the highest-confidence frontier edge to a build not yet located.
         let mut pick: Option<usize> = None;
@@ -628,19 +613,38 @@ fn vtable_relocate_path(
         let (v, rva, conf) = frontier[k];
         located[v] = Some((rva, conf));
         // Re-anchor in the newly located build to carry the chain forward, then offer its edges.
-        if let Some(anchor) = vtable::make_vtable_anchor(&images[v], rva as usize) {
-            push_vtable_edges(
-                images,
-                required,
-                &src_ident,
-                &anchor,
-                conf,
-                &located,
-                &mut frontier,
-            );
+        if let Some(anchor) = make_anchor(&images[v], rva as usize) {
+            offer(&anchor, conf, &located, &mut frontier);
         }
     }
     located
+}
+
+/// Relocate a vtable method across builds via [`relocate_path`], gating each hop on per-slot agreement,
+/// a uniqueness margin, and cross-build identity so a coincidental match cannot extend the chain.
+/// x86 vtable methods only. Behaviour is identical to the earlier hand-rolled walk.
+fn vtable_relocate_path(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+) -> Vec<Option<(u64, f64)>> {
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let src_ident = fn_identity(&images[ref_idx], entry);
+    relocate_path(
+        images,
+        required,
+        ref_idx,
+        entry,
+        |img, rva| vtable::make_vtable_anchor(img, rva),
+        |img, anchor| {
+            let (rva, agree, runner) = vtable::resolve_vtable_anchor(img, anchor)?;
+            (agree >= VT_MIN_AGREEMENT
+                && agree - runner >= VT_MIN_MARGIN
+                && fn_identity(img, rva).similarity(&src_ident) >= VT_MIN_CONSISTENCY)
+                .then_some((rva as u64, agree))
+        },
+    )
 }
 
 /// Whether `aob` matches build `img` exactly once and that one match is at `rva`. The match-at-RVA
@@ -2076,6 +2080,55 @@ mod tests {
         assert!(imports::make_import_anchor(&img, 0x1000).is_none());
         assert!(callers::make_caller_anchor(&img, 0x1000).is_none());
         assert!(encoding::best_encoding_match(&img, &[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn relocate_path_bridges_a_hop_through_an_intermediate_build() {
+        // #14: the generic chainer must route through an intermediate build when the direct edge is
+        // gated out. Three builds; the direct reference->last edge declines, but reference->mid and
+        // mid->last are open, so the widest-path walk reaches the last build via the chain. Synthetic
+        // make/edge closures exercise the walk independently of any real anchor: the anchor minted at a
+        // build is that build's base, so `edge` can tell which build the hop starts from.
+        let m0 = BufferSource::new(0x1000, vec![0u8; 1]);
+        let m1 = BufferSource::new(0x2000, vec![0u8; 1]);
+        let m2 = BufferSource::new(0x3000, vec![0u8; 1]);
+        fn mk(base: usize, src: &BufferSource) -> ImageInput<'_> {
+            ImageInput {
+                label: String::new(),
+                source: src,
+                base,
+                size: 1,
+                code_regions: Vec::new(),
+                regions: Vec::new(),
+                import: None,
+                arch: Arch::X86,
+                code_hash: 0,
+                packed: false,
+                pack_reasons: Vec::new(),
+                reloc: None,
+            }
+        }
+        let images = vec![mk(0x1000, &m0), mk(0x2000, &m1), mk(0x3000, &m2)];
+        let required = [1usize, 2];
+        let make = |i: &ImageInput, _rva: usize| Some(i.base);
+        let edge = |i: &ImageInput, anchor: &usize| match (*anchor, i.base) {
+            (0x1000, 0x2000) => Some((0x10, 0.90)), // ref -> mid
+            (0x2000, 0x3000) => Some((0x20, 0.80)), // mid -> last
+            (0x1000, 0x3000) => None, // ref -> last is gated; only the chain reaches it
+            _ => None,
+        };
+        let located = relocate_path(&images, &required, 0, 0, make, edge);
+        assert_eq!(
+            located[1].map(|(rva, _)| rva),
+            Some(0x10),
+            "mid reached directly"
+        );
+        assert!(
+            located[2].is_some(),
+            "last build reached via the ref->mid->last chain"
+        );
+        // A path's confidence is its weakest hop: min(0.90, 0.80) = 0.80.
+        assert!((located[2].unwrap().1 - 0.80).abs() < 1e-9);
     }
 
     #[test]
