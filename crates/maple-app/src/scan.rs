@@ -116,11 +116,8 @@ pub fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
     maple_core::pattern::parse_patterns(&text, a)
         .iter()
         .map(|p| {
-            let (kind, base) = Kind::classify(&p.name);
-            let category = p
-                .category
-                .clone()
-                .unwrap_or_else(|| maple_core::categorizer::builtin_category(base).to_string());
+            let kind = Kind::classify(&p.name).0;
+            let category = p.category.clone();
             let (r#type, aob) = match &p.string_anchor {
                 Some(anchor) => {
                     let aob = match &anchor.also {

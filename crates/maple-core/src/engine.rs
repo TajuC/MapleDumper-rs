@@ -525,11 +525,8 @@ where
     let mut warnings = Vec::new();
 
     for (idx, pattern) in patterns.iter().enumerate() {
-        let (_, base) = Kind::classify(&pattern.name);
-        let category = pattern
-            .category
-            .clone()
-            .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+        let base = pattern.base.as_str();
+        let category = pattern.category.clone();
         let aob = pattern.signature.to_aob();
         let note = pattern.note.clone().unwrap_or_default();
         let group = &mut by_pattern[idx];
@@ -738,7 +735,7 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
         let Some(anchor) = &p.string_anchor else {
             continue;
         };
-        let (_, base) = Kind::classify(&p.name);
+        let base = p.base.as_str();
         let pattern = match &anchor.also {
             Some(also) => format!("@string={} @also={also}", anchor.text),
             None => format!("@string={}", anchor.text),
@@ -757,10 +754,7 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
             }
         }
         if let Some(rva) = resolved {
-            let category = p
-                .category
-                .clone()
-                .unwrap_or_else(|| crate::categorizer::builtin_category(base).to_string());
+            let category = p.category.clone();
             result.not_found.retain(|n| n != &p.name);
             result.found.push(p.name.clone());
             result.total_matches += 1;
