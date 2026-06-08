@@ -547,7 +547,9 @@ mod tests {
         // absolute-addressing assumption. Validated synthetically because no x64 MapleStory client
         // exists to measure against.
         use crate::memory::{BufferSource, Region};
-        const BASE: usize = 0x1_4000_0000;
+        // A low base so the test also builds on a 32-bit target (a realistic x64 base would overflow
+        // a 32-bit usize); RIP-relative resolution is base-independent, so this exercises it the same.
+        const BASE: usize = 0x1000;
         let mut buf = vec![0u8; 0x200];
         // rva 0: `lea rcx, [rip+0xF9]` (-> the string at rva 0x100, since 0 + 7 + 0xF9 = 0x100) ; `ret`.
         buf[0..7].copy_from_slice(&[0x48, 0x8D, 0x0D, 0xF9, 0x00, 0x00, 0x00]);
