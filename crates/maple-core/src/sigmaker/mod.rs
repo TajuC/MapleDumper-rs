@@ -2048,6 +2048,37 @@ mod tests {
     }
 
     #[test]
+    fn relocation_anchors_decline_cleanly_on_x64() {
+        // #12: the cross-version anchors are x86/PE32 only today. The safety half of x64 support is
+        // that each one declines on a 64-bit image rather than mis-resolving against pointer-width or
+        // call-form assumptions that do not hold there. Lock that, so adding real x64 handling later
+        // cannot silently start mis-resolving. (Full x64 relocation is gated on an x64 client corpus.)
+        let mem = BufferSource::new(0x1000, vec![0x90u8; 0x200]);
+        let region = Region {
+            base: 0x1000,
+            size: 0x200,
+        };
+        let img = ImageInput {
+            label: "x64".to_string(),
+            source: &mem,
+            base: 0x1000,
+            size: 0x200,
+            code_regions: vec![region],
+            regions: vec![region],
+            import: Some((0x1000, 0x1100)),
+            arch: Arch::X64,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        assert!(vtable::make_vtable_anchor(&img, 0x1000).is_none());
+        assert!(imports::make_import_anchor(&img, 0x1000).is_none());
+        assert!(callers::make_caller_anchor(&img, 0x1000).is_none());
+        assert!(encoding::best_encoding_match(&img, &[1, 2, 3]).is_none());
+    }
+
+    #[test]
     fn score_and_grade_agree_on_a_validated_candidate() {
         // A validated _CALL to code: its grade is read off final_score, the sub-scores are exposed,
         // and the backward-compatible `score` field mirrors final_score.
