@@ -52,15 +52,34 @@ fn cstr(img: &ImageInput, abs: usize) -> String {
         .collect()
 }
 
-/// Parse the PE32 import directory into a map of IAT slot VA to `"dll!func"`. Every loop is bounded so
-/// a malformed directory in an untrusted image cannot spin or read out of range.
+fn rd64(img: &ImageInput, abs: usize) -> Option<u64> {
+    let rva = abs.checked_sub(img.base)?;
+    let b = read_at(img.source, img.base, rva, 8);
+    (b.len() == 8).then(|| u64::from_le_bytes(b[..8].try_into().unwrap()))
+}
+
+/// Parse the PE32 / PE32+ import directory into a map of IAT slot VA to `"dll!func"`. Every loop is
+/// bounded so a malformed directory in an untrusted image cannot spin or read out of range. The
+/// `IMAGE_IMPORT_DESCRIPTOR` layout is identical for both; only the thunk width (4 vs 8 bytes) and the
+/// import-by-ordinal flag (bit 31 vs bit 63) differ, so x64 reads 8-byte thunks.
 pub(super) fn import_map(img: &ImageInput) -> HashMap<usize, String> {
     let mut out = HashMap::new();
-    if !matches!(img.arch, Arch::X86) {
-        return out;
-    }
     let Some((start, end)) = img.import else {
         return out;
+    };
+    let x64 = matches!(img.arch, Arch::X64);
+    let thunk = if x64 { 8 } else { 4 };
+    let ordinal_flag: u64 = if x64 {
+        0x8000_0000_0000_0000
+    } else {
+        0x8000_0000
+    };
+    let read_thunk = |at: usize| -> Option<u64> {
+        if x64 {
+            rd64(img, at)
+        } else {
+            rd32(img, at).map(u64::from)
+        }
     };
     let mut desc = start;
     let mut guard = 0;
@@ -76,17 +95,21 @@ pub(super) fn import_map(img: &ImageInput) -> HashMap<usize, String> {
         let int = if orig != 0 { orig } else { first };
         let mut i = 0usize;
         while i < 8192 {
-            let Some(t) = rd32(img, img.base + int as usize + i * 4) else {
+            let Some(t) = read_thunk(img.base + int as usize + i * thunk) else {
                 break;
             };
             if t == 0 {
                 break;
             }
-            let slot = img.base + first as usize + i * 4;
-            let name = if t & 0x8000_0000 != 0 {
+            let slot = img.base + first as usize + i * thunk;
+            let name = if t & ordinal_flag != 0 {
                 format!("{dll}!#{}", t & 0xFFFF)
             } else {
-                format!("{dll}!{}", cstr(img, img.base + t as usize + 2))
+                // The low 31 bits are the RVA of the hint/name entry; skip its 2-byte hint.
+                format!(
+                    "{dll}!{}",
+                    cstr(img, img.base + (t & 0x7FFF_FFFF) as usize + 2)
+                )
             };
             out.insert(slot, name);
             i += 1;
@@ -128,17 +151,21 @@ pub(super) fn import_set(
         if matches!(
             instr.flow_control(),
             FlowControl::IndirectCall | FlowControl::IndirectBranch
-        ) {
-            for i in 0..instr.op_count() {
-                if instr.op_kind(i) == OpKind::Memory
-                    && instr.memory_base() == Register::None
-                    && instr.memory_index() == Register::None
-                {
-                    let slot = instr.memory_displacement64() as usize;
-                    if let Some(name) = map.get(&slot) {
-                        out.insert(name.clone());
-                    }
-                }
+        ) && instr.op_kinds().any(|k| k == OpKind::Memory)
+        {
+            // The IAT slot the call dereferences: `call [abs]` on x86 (no base/index) or the
+            // `call [rip+disp]` form on x64, whose effective address iced resolves for us.
+            let slot = if instr.is_ip_rel_memory_operand() {
+                Some(instr.ip_rel_memory_address() as usize)
+            } else if instr.memory_base() == Register::None
+                && instr.memory_index() == Register::None
+            {
+                Some(instr.memory_displacement64() as usize)
+            } else {
+                None
+            };
+            if let Some(name) = slot.and_then(|s| map.get(&s)) {
+                out.insert(name.clone());
             }
         }
         if instr.flow_control() == FlowControl::Return {
@@ -171,9 +198,6 @@ fn function_entries(img: &ImageInput) -> Vec<usize> {
 /// distinctive enough ([`MIN_IMPORTS`]). Uniqueness is validated at resolve time. x86 only.
 #[must_use]
 pub(super) fn make_import_anchor(img: &ImageInput, rva: usize) -> Option<ImportAnchor> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let map = import_map(img);
     let set = import_set(img, &map, rva);
     (set.len() >= MIN_IMPORTS).then(|| ImportAnchor {
@@ -185,9 +209,6 @@ pub(super) fn make_import_anchor(img: &ImageInput, rva: usize) -> Option<ImportA
 /// `None` if no function matches or more than one does (an ambiguous anchor declines rather than guess).
 #[must_use]
 pub(super) fn resolve_import_anchor(img: &ImageInput, anchor: &ImportAnchor) -> Option<usize> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let map = import_map(img);
     let want: BTreeSet<&str> = anchor.names.iter().map(String::as_str).collect();
     let mut found = None;
@@ -208,7 +229,7 @@ mod tests {
     use super::*;
     use crate::memory::{BufferSource, Region};
 
-    fn img<'a>(src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
+    fn img_arch<'a>(src: &'a BufferSource, base: usize, size: usize, arch: Arch) -> ImageInput<'a> {
         ImageInput {
             label: "t".into(),
             source: src,
@@ -217,12 +238,15 @@ mod tests {
             code_regions: vec![Region { base, size }],
             regions: vec![Region { base, size }],
             import: None,
-            arch: Arch::X86,
+            arch,
             code_hash: 0,
             packed: false,
             pack_reasons: Vec::new(),
             reloc: None,
         }
+    }
+    fn img<'a>(src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
+        img_arch(src, base, size, Arch::X86)
     }
 
     #[test]
@@ -253,5 +277,49 @@ mod tests {
         let map = HashMap::new(); // no names -> empty set
         assert!(import_set(&image, &map, 0).is_empty());
         assert!(make_import_anchor(&image, 0).is_none());
+    }
+
+    #[test]
+    fn import_set_collects_x64_rip_relative_calls() {
+        // #12: x64 dereferences the IAT RIP-relatively. call [rip+0x1FFA] (6 bytes, next IP base+6 ->
+        // base+0x2000) ; call [rip+0x1FFC] (next IP base+12 -> base+0x2008) ; ret.
+        let code = vec![
+            0xFF, 0x15, 0xFA, 0x1F, 0x00, 0x00, // call [rip+0x1FFA]
+            0xFF, 0x15, 0xFC, 0x1F, 0x00, 0x00, // call [rip+0x1FFC]
+            0xC3,
+        ];
+        let src = BufferSource::new(0x1000, code);
+        let image = img_arch(&src, 0x1000, 0x20, Arch::X64);
+        let mut map = HashMap::new();
+        map.insert(0x1000 + 0x2000, "ws2_32.dll!socket".to_string());
+        map.insert(0x1000 + 0x2008, "ws2_32.dll!closesocket".to_string());
+        let set = import_set(&image, &map, 0);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains("ws2_32.dll!socket"));
+        assert!(set.contains("ws2_32.dll!closesocket"));
+    }
+
+    #[test]
+    fn import_map_parses_pe32plus_thunks() {
+        // #12: a minimal PE32+ import directory naming one ws2_32 import via 8-byte thunks; import_map
+        // must read the 8-byte INT entry, follow it to the hint/name, and key the IAT slot by it.
+        const BASE: usize = 0x1000;
+        let mut buf = vec![0u8; 0x200];
+        buf[0x100..0x10B].copy_from_slice(b"ws2_32.dll\0"); // DLL name @ 0x100
+        buf[0x122..0x129].copy_from_slice(b"socket\0"); // name @ 0x122 (after a 2-byte hint @ 0x120)
+        buf[0x140..0x148].copy_from_slice(&0x120u64.to_le_bytes()); // INT thunk[0] -> hint/name @ 0x120
+        buf[0x160..0x168].copy_from_slice(&0x120u64.to_le_bytes()); // IAT thunk[0] (pre-load mirror)
+        // IMAGE_IMPORT_DESCRIPTOR @ 0x180: OriginalFirstThunk, _, _, Name, FirstThunk (then a null one).
+        buf[0x180..0x184].copy_from_slice(&0x140u32.to_le_bytes()); // OriginalFirstThunk = INT rva
+        buf[0x18C..0x190].copy_from_slice(&0x100u32.to_le_bytes()); // Name = DLL-name rva
+        buf[0x190..0x194].copy_from_slice(&0x160u32.to_le_bytes()); // FirstThunk = IAT rva
+        let src = BufferSource::new(BASE, buf);
+        let mut image = img_arch(&src, BASE, 0x200, Arch::X64);
+        image.import = Some((BASE + 0x180, BASE + 0x180 + 40));
+        let map = import_map(&image);
+        assert_eq!(
+            map.get(&(BASE + 0x160)).map(String::as_str),
+            Some("ws2_32.dll!socket")
+        );
     }
 }

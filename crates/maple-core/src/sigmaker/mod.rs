@@ -2103,11 +2103,11 @@ mod tests {
 
     #[test]
     fn relocation_anchors_decline_cleanly_on_x64() {
-        // #12: the import and vtable anchors are still x86/PE32 only (PE32+ IAT and 8-byte / RIP-relative
-        // vtable layout are not handled yet), so each must decline on a 64-bit image rather than
-        // mis-resolve. Lock that, so adding their x64 handling later cannot silently start mis-resolving.
-        // The encoding, string, and caller anchors are arch-neutral and DO cross to x64 (see their own
-        // tests), so they are deliberately excluded here.
+        // #12: the vtable anchor is the last one still x86-only (its 8-byte pointers and RIP-relative
+        // table loads on x64 are not handled yet), so it must decline on a 64-bit image rather than
+        // mis-resolve. Lock that, so adding its x64 handling later cannot silently start mis-resolving.
+        // The encoding, string, caller, and import anchors are arch-neutral and DO cross to x64 (see
+        // their own tests), so they are deliberately excluded here.
         let mem = BufferSource::new(0x1000, vec![0x90u8; 0x200]);
         let region = Region {
             base: 0x1000,
@@ -2128,7 +2128,6 @@ mod tests {
             reloc: None,
         };
         assert!(vtable::make_vtable_anchor(&img, 0x1000).is_none());
-        assert!(imports::make_import_anchor(&img, 0x1000).is_none());
     }
 
     #[test]
