@@ -14,6 +14,7 @@ pub mod domain;
 pub mod engine;
 pub mod fileimage;
 pub mod health;
+pub mod live;
 pub mod memory;
 pub mod output;
 pub mod pattern;
@@ -31,11 +32,10 @@ pub use domain::{
     ExpectedHits, FailureReason, FindingStatus, ResolvePlan, ResolveTrace, ResolverSpec,
     SectionKind, checked_rva,
 };
-pub use engine::{
-    PatternRow, ProfileReport, ScanResult, apply_string_anchors, profile, scan, scan_in, scan_live,
-};
+pub use engine::{PatternRow, ProfileReport, ScanResult, profile, scan, scan_in};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};
+pub use live::{apply_string_anchors, scan_live};
 pub use memory::{MemorySource, Region};
 pub use output::Finding;
 pub use pattern::{Arch, Pattern, Signature, arch_mismatch};
