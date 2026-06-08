@@ -481,43 +481,96 @@ fn import_relocate(
     }
     let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
     let anchor = imports::make_import_anchor(&images[ref_idx], entry)?;
+    let src_ident = fn_identity(&images[ref_idx], entry);
+    // Reach builds over the maximum-confidence chain (#14), so an import set that drifted past direct
+    // ref->target resolution is still bridged through an intermediate build. Each hop is validated
+    // against the IMMUTABLE source identity, so the chain cannot drift onto a neighbouring function, and
+    // coverage is partial by design: report every build a confident path reaches.
+    let located = relocate_path(
+        images,
+        required,
+        ref_idx,
+        entry,
+        imports::make_import_anchor,
+        |img, a| {
+            let rva = imports::resolve_import_anchor(img, a)?;
+            let sim = fn_identity(img, rva).similarity(&src_ident);
+            (sim >= IMPORT_MIN_CONSISTENCY).then_some((rva as u64, sim))
+        },
+    );
 
     let mut per_version = Vec::with_capacity(required.len());
-    let mut idents: Vec<FnIdentity> = Vec::new();
+    let mut idents: Vec<Option<FnIdentity>> = Vec::with_capacity(required.len());
+    let mut diags: Vec<Diag> = Vec::new();
+    let mut min_conf = 1.0f64;
+    let mut reached = 0usize;
     for &idx in required {
-        let resolved = imports::resolve_import_anchor(&images[idx], &anchor)? as u64;
-        idents.push(fn_identity(&images[idx], resolved as usize));
-        per_version.push(PerVersion {
-            label: images[idx].label.clone(),
-            match_rva: Some(resolved),
-            resolved_target_rva: Some(resolved),
-            target_kind: Some(TargetKind::Code),
-            fingerprint_similarity: None,
-            aob: single_build_aob(&images[idx], resolved as usize, opts),
-        });
+        match located[idx] {
+            Some((rva, conf)) => {
+                reached += 1;
+                if idx != ref_idx {
+                    min_conf = min_conf.min(conf);
+                }
+                idents.push(Some(fn_identity(&images[idx], rva as usize)));
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: Some(rva),
+                    resolved_target_rva: Some(rva),
+                    target_kind: Some(TargetKind::Code),
+                    fingerprint_similarity: None,
+                    aob: single_build_aob(&images[idx], rva as usize, opts),
+                });
+            }
+            None => {
+                diags.push(Diag::MissingInImage {
+                    label: images[idx].label.clone(),
+                });
+                idents.push(None);
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: None,
+                    resolved_target_rva: None,
+                    target_kind: None,
+                    fingerprint_similarity: None,
+                    aob: None,
+                });
+            }
+        }
     }
-    for k in 1..idents.len() {
-        per_version[k].fingerprint_similarity = Some(idents[0].similarity(&idents[k]));
+    // The reference plus at least one other build are needed to claim a cross-version relocation.
+    if reached < 2 {
+        return None;
     }
-    // The same import set must resolve to the SAME function across builds, not merely to some function
-    // in each: the conservative minimum cross-build similarity must clear the bar.
-    let mutual = scoring::callee_similarity(&idents).unwrap_or(1.0);
+    let ref_ident = required
+        .iter()
+        .position(|&i| i == ref_idx)
+        .and_then(|p| idents[p].clone());
+    for (pv, id) in per_version.iter_mut().zip(&idents) {
+        if let (Some(id), Some(rid)) = (id, &ref_ident) {
+            pv.fingerprint_similarity = Some(rid.similarity(id));
+        }
+    }
+    // The same import set must resolve to the SAME function across the builds it reached, not merely to
+    // some function in each: the conservative minimum cross-build similarity must clear the bar.
+    let reached_idents: Vec<FnIdentity> = idents.iter().flatten().cloned().collect();
+    let mutual = scoring::callee_similarity(&reached_idents).unwrap_or(1.0);
     if mutual < IMPORT_MIN_CONSISTENCY {
         return None;
     }
 
     let aob = format!("@imports={}", anchor.names.join(","));
     let ev = scoring::FingerprintEvidence {
-        builds: required.len(),
-        min_similarity: mutual,
+        builds: reached,
+        min_similarity: min_conf,
         mutual_similarity: mutual,
-        ref_ident: idents.first().cloned(),
+        ref_ident: ref_ident.clone(),
     };
     let (scores, mut reasons) = scoring::score_fingerprint(&ev);
     reasons.insert(
         0,
         format!(
-            "relocated across builds by a distinctive set of {} imported APIs",
+            "relocated to {reached} of {} builds by a distinctive set of {} imported APIs",
+            required.len(),
             anchor.names.len()
         ),
     );
@@ -537,7 +590,7 @@ fn import_relocate(
         scores,
         reasons,
         per_version,
-        diags: Vec::new(),
+        diags,
     })
 }
 
@@ -551,11 +604,6 @@ const VT_MIN_MARGIN: f64 = 0.10;
 // whole point is to relocate methods whose own bytes churned, so only a gross mismatch is rejected.
 const VT_MIN_CONSISTENCY: f64 = 0.30;
 
-// Push every confident relocation edge from an already-located build `anchor` (located at confidence
-// `lconf`) to each not-yet-located required build into the frontier. An edge survives only if the table
-// match clears the agreement and margin gates AND the landed method still resembles the IMMUTABLE
-// source (not the previous hop), so a chain cannot drift method-by-method onto a neighbour. The edge's
-// confidence is the path bottleneck so far, min(lconf, this hop's agreement).
 /// Relocate the function at `ref_entry` from build `ref_idx` to every other required build by the
 /// maximum-bottleneck (widest) path through the build graph. Starting from the reference (confidence
 /// 1.0), each newly located build re-anchors and offers edges to the rest; a build is then taken by the
