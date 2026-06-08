@@ -29,8 +29,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/mapledumper.exe dist/mapledumper.exe
-          Get-ChildItem -Recurse -Filter *.cdx.json |
-            ForEach-Object { Copy-Item $_.FullName (Join-Path 'dist' $_.Name) }
+          $sboms = @(Get-ChildItem -Recurse -Filter *.cdx.json | Where-Object FullName -NotLike '*\dist\*')
+          foreach ($f in $sboms) { Copy-Item $f.FullName -Destination (Join-Path 'dist' $f.Name) }
           $sums = Get-FileHash dist/* -Algorithm SHA256 |
             ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) }
           $sums | Out-File -Encoding ascii dist/SHA256SUMS.txt
