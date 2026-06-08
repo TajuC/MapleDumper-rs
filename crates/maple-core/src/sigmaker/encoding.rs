@@ -24,7 +24,6 @@ use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, OpKind};
 
 use super::types::ImageInput;
 use super::{bitness, read_at, read_region};
-use crate::pattern::Arch;
 
 // How many instructions of encoding to fingerprint. Long enough to span a template instance's body
 // past its shared prologue, short enough not to spill into the self-similar neighbour that follows it
@@ -175,7 +174,11 @@ pub(super) fn best_encoding_match(
     img: &ImageInput,
     reference: &[u64],
 ) -> Option<(usize, f64, f64, usize)> {
-    if !matches!(img.arch, Arch::X86) || reference.is_empty() {
+    // Arch-agnostic: the stream is decoded at the image's own bitness and operand VALUES are masked,
+    // so it fingerprints x86 and x64 the same way (a RIP-relative displacement is masked out, not a
+    // false difference). The mis-resolution gates the caller applies (similarity, uniqueness margin,
+    // mutual consistency) are arch-neutral too, so enabling x64 cannot produce a confident wrong match.
+    if reference.is_empty() {
         return None;
     }
     const MIN_DISTINCT_GAP: usize = 16;
@@ -247,9 +250,10 @@ pub(super) fn best_encoding_match(
 mod tests {
     use super::*;
     use crate::memory::{BufferSource, Region};
+    use crate::pattern::Arch;
     use crate::sigmaker::types::ImageInput;
 
-    fn img<'a>(src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
+    fn img_arch<'a>(src: &'a BufferSource, base: usize, size: usize, arch: Arch) -> ImageInput<'a> {
         ImageInput {
             label: "t".into(),
             source: src,
@@ -258,12 +262,15 @@ mod tests {
             code_regions: vec![Region { base, size }],
             regions: vec![Region { base, size }],
             import: None,
-            arch: Arch::X86,
+            arch,
             code_hash: 0,
             packed: false,
             pack_reasons: Vec::new(),
             reloc: None,
         }
+    }
+    fn img<'a>(src: &'a BufferSource, base: usize, size: usize) -> ImageInput<'a> {
+        img_arch(src, base, size, Arch::X86)
     }
 
     #[test]
@@ -336,5 +343,42 @@ mod tests {
         assert_eq!(rva, 0, "the reference window itself is the best match");
         assert!((sim - 1.0).abs() < 1e-9);
         assert_eq!(ties, 1, "only one window shares the leading signature");
+    }
+
+    #[test]
+    fn matches_an_x64_function_by_encoding_fingerprint() {
+        // #12: the encoding-fingerprint anchor is arch-agnostic, so it relocates x64 targets too. A
+        // buffer holding one copy of an x64 reference signature plus a sibling that differs only in the
+        // first instruction's source register: the prefix prefilter drops the sibling, so the x64 match
+        // is unique. Validated synthetically because no x64 MapleStory client exists to measure against;
+        // the value-masking means the RIP-relative displacement (the `05 10 00 00 00` below) does not
+        // perturb the fingerprint.
+        let mut data = vec![
+            0x48, 0x89, 0xE5, // mov rbp, rsp
+            0x48, 0x83, 0xEC, 0x20, // sub rsp, 0x20
+            0x8B, 0x45, 0x08, // mov eax, [rbp+8]
+            0x48, 0x8B, 0x05, 0x10, 0x00, 0x00,
+            0x00, // mov rax, [rip+0x10]  (masked displacement)
+            0xC3, // ret
+        ];
+        data.resize(0x40, 0x90);
+        data.extend_from_slice(&[
+            0x48, 0x89, 0xD5, // mov rbp, rdx  (different source register: prefilter drops it)
+            0x48, 0x83, 0xEC, 0x20, 0x8B, 0x45, 0x08, 0x48, 0x8B, 0x05, 0x10, 0x00, 0x00, 0x00,
+            0xC3,
+        ]);
+        data.resize(0x80, 0x90);
+        let src = BufferSource::new(0x1000, data);
+        let image = img_arch(&src, 0x1000, 0x80, Arch::X64);
+        let reference = encoding_stream(&image, 0);
+        assert!(
+            reference.len() >= 4,
+            "x64 reference should decode to several tokens"
+        );
+        let (rva, sim, _runner, ties) =
+            best_encoding_match(&image, &reference).expect("an x64 encoding match");
+        assert_eq!(rva, 0, "the reference window itself is the best x64 match");
+        assert!((sim - 1.0).abs() < 1e-9);
+        assert_eq!(ties, 1, "only one window shares the leading x64 signature");
     }
 }
