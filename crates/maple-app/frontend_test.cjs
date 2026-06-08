@@ -201,6 +201,30 @@ check(!wsBody.includes("0x10<script>"), "workspace value must not render a raw u
 check(wsBody.includes('tabindex="0"'), "result rows must be keyboard-focusable (a11y DESK-1)");
 check(wsBody.includes("aria-selected"), "result rows must expose selection state (a11y DESK-1)");
 
+// Static accessibility gate over the markup (DESK-1). A focused structural check rather than a full
+// axe/jsdom run, which would pull a large npm tree into a deliberately zero-dependency frontend; it
+// covers the high-impact rules (text alternatives, header semantics, landmark/dialog roles, and an
+// accessible name on every icon-only control) so a regression in those fails CI.
+const indexHtml = fs.readFileSync(path.join(__dirname, "frontend", "index.html"), "utf8");
+const imgsMissingAlt = indexHtml.match(/<img\b(?![^>]*\balt=)[^>]*>/g) || [];
+check(imgsMissingAlt.length === 0, `every <img> needs an alt (a11y): ${imgsMissingAlt.join(" ")}`);
+check(indexHtml.includes('scope="col"'), "results table headers need scope=col (a11y)");
+check(
+  indexHtml.includes('role="region"') && indexHtml.includes('aria-labelledby="insp-name"'),
+  "inspector needs role=region + aria-labelledby (a11y)",
+);
+check(
+  indexHtml.includes('role="dialog"') && indexHtml.includes('aria-labelledby="modal-title"'),
+  "modal needs role=dialog + aria-labelledby (a11y)",
+);
+for (const id of ["win-min", "win-max", "win-close", "mask-toggle", "w-source-btn"]) {
+  const tag = (indexHtml.match(new RegExp(`<button[^>]*\\bid="${id}"[^>]*>`)) || [""])[0];
+  check(
+    /\baria-label=|\btitle=|\bdata-i18n-title=/.test(tag),
+    `icon-only button #${id} needs an accessible name (aria-label/title) (a11y)`,
+  );
+}
+
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");
   for (const f of fails) console.error("  - " + f);
