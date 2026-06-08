@@ -1624,6 +1624,122 @@ mod tests {
     }
 
     #[test]
+    fn json_report_pins_the_address_and_field_contract() {
+        use maple_core::sigmaker::{AobRange, Shortlist, ShortlistEntry};
+        use maple_core::{
+            Diag, DupGroup, HoldoutResult, InputInfo, NegativeHit, SigCandidate, SigReport,
+            TargetKind,
+        };
+        use serde_json::Value;
+
+        let chosen = SigCandidate {
+            aob: "48 8B 05 ?? ?? ?? ??".to_string(),
+            suffix: Suffix::Call,
+            grade: Grade::A,
+            score: 84,
+            bytes_len: 16,
+            fixed: 9,
+            wildcards: 7,
+            fixed_ratio: 0.5625,
+            reloc_safe: true,
+            gated: false,
+            packed: false,
+            scores: SubScores {
+                uniqueness: 90,
+                stability: 80,
+                entropy: 70,
+                semantic: 60,
+                resolver_confidence: 88,
+                cross_build: 77,
+                final_score: 84,
+            },
+            reasons: vec!["unique across corpus".to_string()],
+            per_version: vec![PerVersion {
+                label: "v83".to_string(),
+                match_rva: Some(0x0040_1000),
+                resolved_target_rva: Some(0x0040_2ABC),
+                target_kind: Some(TargetKind::Code),
+                fingerprint_similarity: Some(0.95),
+                aob: Some("AA BB CC".to_string()),
+            }],
+            diags: vec![Diag::CalleeMismatch],
+        };
+        let report = SigReport {
+            arch: Arch::X64,
+            inputs: vec![InputInfo {
+                label: "v83".to_string(),
+                packed: false,
+                reasons: vec![],
+            }],
+            unique_builds: 1,
+            duplicate_groups: vec![DupGroup {
+                code_hash: 0xDEAD_BEEF,
+                labels: vec!["v83".to_string(), "v84".to_string()],
+            }],
+            chosen: Some(chosen),
+            alternates: vec![],
+            rejected: vec![],
+            shortlists: vec![Shortlist {
+                label: "v95".to_string(),
+                entries: vec![ShortlistEntry {
+                    rva: 0x0040_10F0,
+                    similarity: 0.81,
+                    aob: None,
+                }],
+            }],
+            aob_ranges: vec![AobRange {
+                aob: "48 8B".to_string(),
+                minted_in: "v83".to_string(),
+                first_label: "v83".to_string(),
+                last_label: "v88".to_string(),
+                labels: vec!["v83".to_string(), "v88".to_string()],
+            }],
+            diagnostics: vec![Diag::NotUnique],
+        };
+        let negatives = vec![NegativeHit {
+            label: "kernel32.dll".to_string(),
+            count: 2,
+        }];
+        let holdout = vec![HoldoutResult {
+            held_out: "v84".to_string(),
+            generated: true,
+            matched_holdout: true,
+        }];
+
+        let json = json_report(&report, &negatives, 5, &holdout, Some("@anchor"));
+        let v: Value = serde_json::from_str(&json).expect("--json output must be valid JSON");
+
+        // Addresses serialize as hex strings, never integers. This is the load-bearing part of the
+        // --json contract: a consumer parses "0x401000", not 4198400. The eventual Serialize refactor
+        // must preserve it (a plain derive on the u64 fields would silently break every consumer).
+        assert_eq!(v["arch"], "x64");
+        assert_eq!(v["duplicate_groups"][0]["code_hash"], "00000000DEADBEEF");
+        let pv = &v["chosen"]["per_version"][0];
+        assert_eq!(pv["match_rva"], "0x401000");
+        assert_eq!(pv["resolved_target_rva"], "0x402ABC");
+        assert_eq!(pv["target_type"], "code");
+        assert_eq!(v["shortlists"][0]["candidates"][0]["rva"], "0x4010F0");
+
+        // Field names the core types do not themselves carry are pinned here.
+        assert_eq!(v["chosen"]["bytes"], 16);
+        assert!(v["chosen"].get("bytes_len").is_none());
+        assert_eq!(v["holdout"][0]["matched"], true);
+        assert!(v["holdout"][0].get("matched_holdout").is_none());
+
+        // negative_summary is derived CLI-side from the raw per-module hit counts.
+        assert_eq!(v["negative_summary"]["modules_scanned"], 5);
+        assert_eq!(v["negative_summary"]["modules_hit"], 1);
+        assert_eq!(v["negative_summary"]["total_hits"], 2);
+        assert_eq!(v["negative_summary"]["max_hits_per_module"], 2);
+
+        // Enum and suffix rendering go through the CLI's display helpers.
+        assert_eq!(v["chosen"]["grade"], "A");
+        assert_eq!(v["chosen"]["suffix"], "_CALL");
+        assert_eq!(v["chosen"]["scores"]["final_score"], 84);
+        assert_eq!(v["string_anchor"], "@anchor");
+    }
+
+    #[test]
     fn exit_codes_are_stable() {
         assert_eq!(ExitKind::Success.code(), 0);
         assert_eq!(ExitKind::Internal.code(), 1);
