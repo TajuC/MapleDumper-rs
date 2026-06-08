@@ -120,6 +120,8 @@ const driver = `
   ];
   renderResults();
   globalThis.__wsBody = document.getElementById("w-body").innerHTML;
+  globalThis.__cap = capRows(new Array(900).fill(0));
+  globalThis.__more = moreRow(100, 4);
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -224,6 +226,10 @@ for (const id of ["win-min", "win-max", "win-close", "mask-toggle", "w-source-bt
     `icon-only button #${id} needs an accessible name (aria-label/title) (a11y)`,
   );
 }
+// Large-result-set rendering: history views cap how many rows they materialize (DESK-2).
+const cap = sandbox.__cap;
+check(cap && cap.items.length === 800 && cap.hidden === 100, "history views must cap rendered rows (DESK-2)");
+check((sandbox.__more || "").includes("more"), "a capped history view must render a more-rows notice (DESK-2)");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

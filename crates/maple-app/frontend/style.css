@@ -2048,6 +2048,12 @@ button.btn-ico:hover {
   color: var(--amber);
   white-space: nowrap;
 }
+.more-row td {
+  text-align: center;
+  color: var(--t3);
+  font-style: italic;
+  padding: 8px;
+}
 .hist-banner .btn {
   margin-left: auto;
 }
