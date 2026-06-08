@@ -5,22 +5,35 @@ the project aims to follow Semantic Versioning while in its 0.x line.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-08
+
+An audit-remediation and hardening release driven by an external code review.
+
 ### Added
+- 32-bit (x86) support is verified: a PE32+ image base that cannot fit a 32-bit address space is
+  rejected rather than truncated, and a `win32` CI job builds and tests the engine and CLI for
+  `i686-pc-windows-msvc`.
 - Community health files (CONTRIBUTING, SECURITY, CODE_OF_CONDUCT), issue and pull request templates,
-  and a Dependabot configuration.
-- A real-corpus coverage and false-positive sweep for the cross-version relocation anchors
-  (`cross_version_relocation_coverage_and_false_positive_sweep`, run with `--ignored`).
-- `cargo-deny` policy (`deny.toml`) gating advisories, licenses, bans, and sources, plus a forced-AVX2
-  scanner test and a frontend render job in CI.
-- `ARCHITECTURE.md` and a vendored-Monaco manifest with aggregated third-party license notes.
+  and a Dependabot configuration; `ARCHITECTURE.md`, `CHANGELOG.md`, `.editorconfig`, and a
+  vendored-Monaco manifest with aggregated third-party license notes.
+- A tag-triggered release workflow that publishes the CLI with an embedded dependency list
+  (`cargo auditable`), a CycloneDX SBOM, and SHA-256 checksums.
+- `cargo-deny` policy gating advisories, licenses, bans, and sources; a forced-AVX2 scanner test; a
+  frontend render job and public-API doctests in CI; and two `--ignored` real-corpus diagnostics (a
+  cross-version coverage/false-positive sweep and a grade-calibration harness).
+- `maple_core::scan_live` (shared live-scan orchestration), `output::export` (single format
+  dispatcher), `Arch::parse`/`arch_mismatch` (validated, shared), and `apply_negatives`.
 
 ### Changed
-- Hardened CI: least-privilege token, SHA-pinned actions, clippy `--all-features`, a doctest step, and
-  dependency caching.
-- Reframed the README cross-version efficacy figures around the measured sweep results.
+- Hardened CI: least-privilege token, SHA-pinned actions, clippy `--all-features`, doctest and
+  all-targets test steps, and dependency caching.
+- The CLI and desktop app share one live-scan path and one architecture-mismatch message instead of
+  drifting copies; the negative corpus is scored once; export-format selection is dispatched once.
+- The profiler measures the shipping scanner; the history connection uses one poison-recovering lock.
+- Reframed the README cross-version efficacy figures around measured sweep results.
 
 ### Fixed
-- `module_arch` now rejects ARM and other non-x86/x64 machines instead of mapping them onto a bitness.
+- `module_arch` rejects ARM and other non-x86/x64 machines instead of mapping them onto a bitness.
 - The negative-corpus re-grade reads typed `packed`/`gated` flags instead of substring-matching reasons.
 - Bounds and overflow hardening: checked `rel32` slicing, saturating region arithmetic, and the
   compiled-pattern anchor encoded as a non-optional field.
