@@ -98,6 +98,7 @@ const driver = `
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
   globalThis.__diagHtml = diagnosticsHtml({ confidence: "50", trace: "memory pointer resolved to 0x10", candidates: "0x10,0x20" });
+  globalThis.__diagStructured = diagnosticsHtml({ resolverTrace: JSON.stringify({ resolver: "nested call", mnemonic: "call", operand_kind: "nearbranch64", target_rva: 0x24190, target_section: "code", checks: ["range", "section"], failure: null }) });
   globalThis.__confHi = confChip(95);
   globalThis.__confLo = confChip(10);
   globalThis.__confNone = confChip(null);
@@ -176,6 +177,11 @@ const diag = sandbox.__diagHtml || "";
 check(diag.includes("Resolver trace") && diag.includes("memory pointer resolved to 0x10"), "diagnostics trace missing");
 check(diag.includes("Candidates") && diag.includes("0x10") && diag.includes("0x20"), "diagnostics candidates missing");
 check(diag.includes("50/100"), "diagnostics confidence value missing");
+const diagS = sandbox.__diagStructured || "";
+check(
+  diagS.includes("nested call") && diagS.includes("nearbranch64") && diagS.includes("0x24190") && diagS.includes("code"),
+  "structured ResolveTrace fields must render in history diagnostics (#17)",
+);
 check((sandbox.__confHi || "").includes("conf-chip hi"), "high-confidence chip missing");
 check((sandbox.__confLo || "").includes("conf-chip lo"), "low-confidence chip missing");
 check(sandbox.__confNone === "", "null confidence should yield no chip");

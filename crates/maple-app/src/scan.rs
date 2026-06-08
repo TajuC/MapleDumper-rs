@@ -330,6 +330,10 @@ fn run_scan(
                         .collect::<Vec<_>>()
                         .join(",")
                 }),
+                resolver_trace: r
+                    .trace_detail
+                    .as_ref()
+                    .and_then(|t| serde_json::to_string(t).ok()),
             }
         })
         .collect();
@@ -356,6 +360,11 @@ fn run_scan(
         module_size: target.module.size as i64,
         pattern_set_hash: pattern_set_hash(&patterns),
         scanner_version: maple_core::VERSION.to_string(),
+        read_gaps: if result.read_gaps.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&result.read_gaps).ok()
+        },
     };
     {
         let mut conn = crate::state::lock_db(db);

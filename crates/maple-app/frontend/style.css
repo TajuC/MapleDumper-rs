@@ -2043,6 +2043,11 @@ button.btn-ico:hover {
   font-size: 11px;
   color: var(--t3);
 }
+.hist-banner-cov {
+  font-size: 11px;
+  color: var(--amber);
+  white-space: nowrap;
+}
 .hist-banner .btn {
   margin-left: auto;
 }

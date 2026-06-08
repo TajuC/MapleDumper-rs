@@ -49,7 +49,7 @@ fn confidence_of(status: &FindingStatus, candidates: &[u64]) -> u8 {
 /// A region window whose read returned fewer bytes than asked for, i.e. part of it was unreadable
 /// (a decommitted or guard page, a racing unmap). Tracked so a "not found" over a partial region is
 /// reported as inconclusive rather than as a confident absence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct ReadGap {
     pub base: usize,
     pub requested: usize,

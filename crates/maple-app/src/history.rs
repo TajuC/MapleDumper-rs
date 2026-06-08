@@ -24,6 +24,9 @@ pub struct NewScan {
     pub pattern_set_hash: String,
     /// The engine version that produced the scan.
     pub scanner_version: String,
+    /// JSON of the scan's read gaps (`Vec<ReadGap>`), so a saved scan records that its coverage was
+    /// partial. `None` when every region read in full.
+    pub read_gaps: Option<String>,
 }
 
 pub struct NewFinding {
@@ -38,6 +41,9 @@ pub struct NewFinding {
     pub confidence: i64,
     pub trace: Option<String>,
     pub candidates: Option<String>,
+    /// JSON of the structured `ResolveTrace`, so a saved finding is explained as richly as a live
+    /// one (not just the human one-liner in `trace`). `None` when the resolver produced no detail.
+    pub resolver_trace: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -76,6 +82,9 @@ pub struct FindingRow {
     pub confidence: Option<i64>,
     pub trace: Option<String>,
     pub candidates: Option<String>,
+    /// JSON of the structured `ResolveTrace` (resolver kind, operand, target, checks, failure), so a
+    /// saved finding's diagnostics match a live one. `None` for rows written before this was stored.
+    pub resolver_trace: Option<String>,
 }
 
 #[must_use]
@@ -88,7 +97,7 @@ pub fn default_db_path() -> PathBuf {
     dir.join("history.db")
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -160,6 +169,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         add_column_if_missing(conn, "scans", "pattern_set_hash", "TEXT")?;
         add_column_if_missing(conn, "scans", "scanner_version", "TEXT")?;
         version = 4;
+    }
+    if version < 5 {
+        // The structured resolver trace (per finding) and the scan's partial-read coverage. Nullable:
+        // rows written before this version read back as unknown rather than a fabricated value.
+        add_column_if_missing(conn, "findings", "resolver_trace", "TEXT")?;
+        add_column_if_missing(conn, "scans", "read_gaps", "TEXT")?;
+        version = 5;
     }
 
     conn.execute_batch(&format!("PRAGMA user_version = {version}"))?;
@@ -248,8 +264,8 @@ pub fn insert_scan(
     tx.execute(
         "INSERT INTO scans (created_at, module, module_base, arch, build_hash, build_version,
             build_timestamp, bytes, regions, found, unresolved, not_found, total_matches, scan_ms,
-            result_hash, module_size, pattern_set_hash, scanner_version)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            result_hash, module_size, pattern_set_hash, scanner_version, read_gaps)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         params![
             scan.created_at,
             scan.module,
@@ -269,13 +285,14 @@ pub fn insert_scan(
             scan.module_size,
             scan.pattern_set_hash,
             scan.scanner_version,
+            scan.read_gaps,
         ],
     )?;
     let id = tx.last_insert_rowid();
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO findings (scan_id, name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates, resolver_trace)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         )?;
         for f in findings {
             stmt.execute(params![
@@ -291,6 +308,7 @@ pub fn insert_scan(
                 f.confidence,
                 f.trace,
                 f.candidates,
+                f.resolver_trace,
             ])?;
         }
     }
@@ -371,7 +389,7 @@ pub fn scan_row(conn: &Connection, scan_id: i64) -> rusqlite::Result<Option<Scan
 
 pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<FindingRow>> {
     let mut stmt = conn.prepare(
-        "SELECT name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates
+        "SELECT name, category, value, is_offset, status, matches, note, bytes, confidence, trace, candidates, resolver_trace
          FROM findings WHERE scan_id = ?1 ORDER BY category, name",
     )?;
     let rows = stmt.query_map([scan_id], |r| {
@@ -387,9 +405,22 @@ pub fn findings(conn: &Connection, scan_id: i64) -> rusqlite::Result<Vec<Finding
             confidence: r.get(8)?,
             trace: r.get(9)?,
             candidates: r.get(10)?,
+            resolver_trace: r.get(11)?,
         })
     })?;
     rows.collect()
+}
+
+/// The JSON-encoded read gaps for a saved scan (its partial-read coverage), or `None` if it read in
+/// full or predates the column. Kept as a focused query so the scan-list mapping stays untouched.
+pub fn scan_read_gaps(conn: &Connection, scan_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT read_gaps FROM scans WHERE id = ?1",
+        [scan_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(Option::flatten)
 }
 
 pub fn delete_scan(conn: &Connection, scan_id: i64) -> rusqlite::Result<()> {
@@ -418,6 +449,7 @@ mod tests {
             confidence: 100,
             trace: None,
             candidates: None,
+            resolver_trace: None,
         }
     }
 
@@ -440,6 +472,7 @@ mod tests {
             module_size: 0x10_0000,
             pattern_set_hash: "patternset".to_string(),
             scanner_version: "0.0.0-test".to_string(),
+            read_gaps: None,
         }
     }
 
@@ -467,7 +500,10 @@ mod tests {
         f.confidence = 50;
         f.trace = Some("memory pointer resolved to 0x10".to_string());
         f.candidates = Some("0x10,0x20".to_string());
-        let id = insert_scan(&mut conn, &scan("AAAA"), &[f]).unwrap();
+        f.resolver_trace = Some(r#"{"kind":"MemoryPointer","target_rva":16}"#.to_string());
+        let mut s = scan("AAAA");
+        s.read_gaps = Some(r#"[{"base":4096,"requested":4096,"got":2048}]"#.to_string());
+        let id = insert_scan(&mut conn, &s, &[f]).unwrap();
         let rows = findings(&conn, id).unwrap();
         assert_eq!(rows[0].confidence, Some(50));
         assert_eq!(
@@ -475,6 +511,15 @@ mod tests {
             Some("memory pointer resolved to 0x10")
         );
         assert_eq!(rows[0].candidates.as_deref(), Some("0x10,0x20"));
+        // The structured trace and the scan's partial-read coverage round-trip.
+        assert_eq!(
+            rows[0].resolver_trace.as_deref(),
+            Some(r#"{"kind":"MemoryPointer","target_rva":16}"#)
+        );
+        assert_eq!(
+            scan_read_gaps(&conn, id).unwrap().as_deref(),
+            Some(r#"[{"base":4096,"requested":4096,"got":2048}]"#)
+        );
     }
 
     #[test]
