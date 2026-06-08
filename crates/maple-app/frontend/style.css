@@ -10,7 +10,9 @@
   --line-2: rgba(255, 255, 255, 0.11);
   --t1: #e7ebf2;
   --t2: #9aa6b6;
-  --t3: #616e7e;
+  /* Tertiary/muted text. Lightened from #616e7e to clear WCAG AA (4.5:1) for normal text on the
+     dark surfaces; the old value sat at ~3.4:1. */
+  --t3: #7a8a9e;
   --blue: #3b82f6;
   --blue-hi: #5b97f9;
   --blue-soft: rgba(59, 130, 246, 0.15);

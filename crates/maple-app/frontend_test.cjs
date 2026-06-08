@@ -192,6 +192,8 @@ check(scanDiag.includes("tl-attach") && scanDiag.includes("tl-scan"), "job timel
 const wsBody = sandbox.__wsBody || "";
 check(wsBody.includes("0x10&lt;script&gt;"), "workspace value must be HTML-escaped (SEC-4)");
 check(!wsBody.includes("0x10<script>"), "workspace value must not render a raw unescaped tag (SEC-4)");
+check(wsBody.includes('tabindex="0"'), "result rows must be keyboard-focusable (a11y DESK-1)");
+check(wsBody.includes("aria-selected"), "result rows must expose selection state (a11y DESK-1)");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");
