@@ -449,20 +449,29 @@ fn xref_sites(img: &ImageInput, data_abs: usize) -> Vec<usize> {
         .collect()
 }
 
-// Walk back to the nearest standard x86 frame prologue so an anchor resolves to the function entry,
-// not the mid-body reference. This also collapses several references inside one function to a single
-// site. x64 prologues vary too much to pin this way, so there the reference site stands.
+// Walk back to the nearest standard frame prologue so an anchor resolves to the function entry, not
+// the mid-body reference; this also collapses several references inside one function to a single site.
+// The prologue is arch-specific: `push ebp; mov ebp, esp` on x86, `push rbp; mov rbp, rsp` on x64. A
+// frameless function (common on optimized x64) has no such marker, so the reference site stands and the
+// caller's uniqueness/identity gates reject any wrong landing; authoritative .pdata/RUNTIME_FUNCTION
+// detection would pin the frameless ones too (tracked on #12).
 pub(super) fn enclosing_function(img: &ImageInput, site_rva: usize) -> usize {
-    if !matches!(img.arch, Arch::X86) {
-        return site_rva;
-    }
+    let prologue: &[u8] = match img.arch {
+        Arch::X86 => &[0x55, 0x8B, 0xEC],
+        Arch::X64 => &[0x55, 0x48, 0x8B, 0xEC],
+    };
     let start = site_rva.saturating_sub(1024);
-    let bytes = read_at(img.source, img.base, start, site_rva - start + 3);
+    let bytes = read_at(
+        img.source,
+        img.base,
+        start,
+        site_rva - start + prologue.len(),
+    );
     bytes
-        .windows(3)
+        .windows(prologue.len())
         .enumerate()
         .rev()
-        .find(|(_, w)| *w == [0x55, 0x8B, 0xEC])
+        .find(|(_, w)| *w == prologue)
         .map_or(site_rva, |(i, _)| start + i)
 }
 

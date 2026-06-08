@@ -18,7 +18,6 @@ use super::identity::{
 use super::types::ImageInput;
 use super::{bitness, read_at, read_region};
 use crate::domain::StringAnchor;
-use crate::pattern::Arch;
 
 // Instruction cap when scanning a caller for its callees (bounds untrusted input).
 const SCAN_INSTRS: usize = 400;
@@ -118,9 +117,6 @@ fn best_callee(
 /// Returns `None` if no caller string-anchors or the target is not the caller's distinctive callee.
 #[must_use]
 pub(super) fn make_caller_anchor(img: &ImageInput, target_rva: usize) -> Option<CallerAnchor> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let target = fn_identity(img, target_rva);
     for caller in callers_of(img, target_rva) {
         let Some(sa) = make_string_anchor(img, caller) else {
@@ -145,9 +141,6 @@ pub(super) fn make_caller_anchor(img: &ImageInput, target_rva: usize) -> Option<
 /// callee whose identity matches the target, requiring a confident, unambiguous match.
 #[must_use]
 pub(super) fn resolve_caller_anchor(img: &ImageInput, anchor: &CallerAnchor) -> Option<usize> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let caller = resolve_string_anchor(img, &anchor.caller)?;
     let (best, sim, runner) = best_callee(img, caller, &anchor.target)?;
     (sim >= CALLER_MIN_SIM && sim - runner >= CALLER_MIN_MARGIN).then_some(best)
@@ -157,6 +150,7 @@ pub(super) fn resolve_caller_anchor(img: &ImageInput, anchor: &CallerAnchor) -> 
 mod tests {
     use super::*;
     use crate::memory::{BufferSource, Region};
+    use crate::pattern::Arch;
 
     #[test]
     fn caller_anchor_round_trips_through_a_string_anchored_caller() {
@@ -239,5 +233,54 @@ mod tests {
             reloc: None,
         };
         assert!(make_caller_anchor(&img, 0x180).is_none());
+    }
+
+    #[test]
+    fn caller_anchor_round_trips_on_x64() {
+        // #12: the caller anchor is arch-neutral once entry detection is, its E8 rel32 scan and the
+        // string anchor already are, and enclosing_function now matches the x64 framed prologue. A
+        // caller G references a unique string by a RIP-relative lea and calls the target C; the anchor
+        // pins C through G's string and re-resolves to C on a 64-bit image. Validated synthetically (no
+        // x64 MapleStory client exists to measure against).
+        const BASE: usize = 0x40_0000;
+        let mut buf = vec![0u8; 0x400];
+        // G @ 0x100: push rbp ; mov rbp,rsp ; lea rcx,[rip+0x1F5] (-> str @ 0x300) ; call C ; pop rbp ; ret
+        buf[0x100..0x104].copy_from_slice(&[0x55, 0x48, 0x8B, 0xEC]);
+        buf[0x104..0x10B].copy_from_slice(&[0x48, 0x8D, 0x0D, 0xF5, 0x01, 0x00, 0x00]);
+        buf[0x10B] = 0xE8;
+        let rel = 0x180i32 - (0x10B + 5);
+        buf[0x10C..0x110].copy_from_slice(&rel.to_le_bytes());
+        buf[0x110..0x112].copy_from_slice(&[0x5D, 0xC3]);
+        // C @ 0x180: a small distinctive x64 function, referenced by no string.
+        buf[0x180..0x188].copy_from_slice(&[0x55, 0x48, 0x8B, 0xEC, 0x33, 0xC0, 0x5D, 0xC3]);
+        let s = b"UniqueAnchorString\0";
+        buf[0x300..0x300 + s.len()].copy_from_slice(s);
+
+        let src = BufferSource::new(BASE, buf);
+        let img = ImageInput {
+            label: "t".into(),
+            source: &src,
+            base: BASE,
+            size: 0x400,
+            code_regions: vec![Region {
+                base: BASE + 0x100,
+                size: 0x100,
+            }],
+            regions: vec![Region {
+                base: BASE,
+                size: 0x400,
+            }],
+            import: None,
+            arch: Arch::X64,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+
+        let anchor =
+            make_caller_anchor(&img, 0x180).expect("an x64 caller anchor for C via G's string");
+        assert_eq!(anchor.caller.text, "UniqueAnchorString");
+        assert_eq!(resolve_caller_anchor(&img, &anchor), Some(0x180));
     }
 }
