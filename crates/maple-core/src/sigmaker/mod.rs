@@ -636,7 +636,7 @@ fn vtable_relocate_path(
         required,
         ref_idx,
         entry,
-        |img, rva| vtable::make_vtable_anchor(img, rva),
+        vtable::make_vtable_anchor,
         |img, anchor| {
             let (rva, agree, runner) = vtable::resolve_vtable_anchor(img, anchor)?;
             (agree >= VT_MIN_AGREEMENT
