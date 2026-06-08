@@ -15,8 +15,8 @@ use maple_core::{
 };
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeEvidence, NegativeHit, SigCandidate, SigOptions,
-    SigReport, TargetKind, TargetSpec, apply_negatives, generate, holdout_validate,
-    make_string_anchor, negative_corpus_hits,
+    SigReport, TargetSpec, apply_negatives, generate, holdout_validate, make_string_anchor,
+    negative_corpus_hits,
 };
 
 /// A stable process exit code. Automation can branch on the specific outcome instead of treating
@@ -1003,23 +1003,6 @@ fn print_diff(report: &DiffReport) {
     }
 }
 
-fn arch_str(arch: Arch) -> &'static str {
-    if matches!(arch, Arch::X64) {
-        "x64"
-    } else {
-        "x86"
-    }
-}
-
-fn kind_str(kind: TargetKind) -> &'static str {
-    match kind {
-        TargetKind::Code => "code",
-        TargetKind::Data => "data",
-        TargetKind::Import => "import",
-        TargetKind::Unknown => "unknown",
-    }
-}
-
 fn file_label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1199,7 +1182,7 @@ fn jcand(c: &SigCandidate) -> JCand {
                 label: p.label.clone(),
                 match_rva: p.match_rva.map(|v| format!("0x{v:X}")),
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
-                target_type: p.target_kind.map(|k| kind_str(k).to_string()),
+                target_type: p.target_kind.map(|k| k.wire_str().to_string()),
                 fingerprint_similarity: p.fingerprint_similarity,
                 aob: p.aob.clone(),
             })
@@ -1218,7 +1201,7 @@ fn json_report(
     let neg_counts: Vec<usize> = negatives.iter().map(|h| h.count).collect();
     let neg_summary = NegativeEvidence::from_hits(negatives_scanned, &neg_counts);
     let report = JReport {
-        arch: arch_str(r.arch).to_string(),
+        arch: r.arch.label().to_string(),
         unique_builds: r.unique_builds,
         inputs: r
             .inputs
@@ -1333,7 +1316,7 @@ fn print_candidate(tag: &str, c: &SigCandidate) {
 fn print_sig_report(r: &SigReport, opts: &SigOptions) {
     println!(
         "[+] arch {} | {} unique build(s)",
-        arch_str(r.arch),
+        r.arch.label(),
         r.unique_builds
     );
     println!(
@@ -1585,7 +1568,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maple_core::{Grade, PatternRow, PerVersion, SubScores, Suffix};
+    use maple_core::{Grade, PatternRow, PerVersion, SubScores, Suffix, TargetKind};
 
     fn mkrow(name: &str, status: FindingStatus, candidates: Vec<u64>) -> PatternRow {
         PatternRow {

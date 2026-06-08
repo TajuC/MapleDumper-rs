@@ -114,6 +114,20 @@ pub enum TargetKind {
     Unknown,
 }
 
+impl TargetKind {
+    /// The stable lowercase wire name (`code`/`data`/`import`/`unknown`). Both front-ends emit this
+    /// in their serialized reports; keeping the mapping here is the single source for that vocabulary.
+    #[must_use]
+    pub fn wire_str(self) -> &'static str {
+        match self {
+            TargetKind::Code => "code",
+            TargetKind::Data => "data",
+            TargetKind::Import => "import",
+            TargetKind::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Diag {
     NoInputs,

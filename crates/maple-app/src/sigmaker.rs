@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use maple_core::{
-    Arch, FileImage, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport, SigStage,
-    TargetKind, TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
+    FileImage, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport, SigStage,
+    TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
     make_string_anchor, negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
@@ -156,15 +156,6 @@ pub struct SigGenResponse {
     jobs: Vec<SigJobResultView>,
 }
 
-fn sig_kind_str(kind: TargetKind) -> &'static str {
-    match kind {
-        TargetKind::Code => "code",
-        TargetKind::Data => "data",
-        TargetKind::Import => "import",
-        TargetKind::Unknown => "unknown",
-    }
-}
-
 fn sig_cand_view(c: &SigCandidate) -> SigCandView {
     SigCandView {
         aob: c.aob.clone(),
@@ -193,7 +184,7 @@ fn sig_cand_view(c: &SigCandidate) -> SigCandView {
                 label: p.label.clone(),
                 match_rva: p.match_rva.map(|v| format!("0x{v:X}")),
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
-                target_type: p.target_kind.map(|k| sig_kind_str(k).to_string()),
+                target_type: p.target_kind.map(|k| k.wire_str().to_string()),
                 fingerprint_similarity: p.fingerprint_similarity,
             })
             .collect(),
@@ -203,12 +194,7 @@ fn sig_cand_view(c: &SigCandidate) -> SigCandView {
 
 fn sig_report_view(r: &SigReport) -> SigReportView {
     SigReportView {
-        arch: if matches!(r.arch, Arch::X64) {
-            "x64"
-        } else {
-            "x86"
-        }
-        .to_string(),
+        arch: r.arch.label().to_string(),
         unique_builds: r.unique_builds,
         inputs: r
             .inputs
@@ -354,12 +340,7 @@ pub fn inspect_pe(path: String) -> Result<PeInfoView, String> {
         .unwrap_or_else(|| path.clone());
     Ok(PeInfoView {
         name,
-        arch: if matches!(img.arch(), Arch::X64) {
-            "x64"
-        } else {
-            "x86"
-        }
-        .to_string(),
+        arch: img.arch().label().to_string(),
         packed: report.likely_packed,
         reasons: report.reasons,
         max_entropy: report.max_code_entropy,
@@ -572,5 +553,109 @@ pub async fn generate_signature(
     match tauri::async_runtime::spawn_blocking(move || run_generate_signature(&app, req)).await {
         Ok(result) => result,
         Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maple_core::pattern::Arch;
+    use maple_core::sigmaker::{AobRange, Shortlist, ShortlistEntry};
+    use maple_core::{Diag, DupGroup, Grade, InputInfo, PerVersion, SubScores, Suffix, TargetKind};
+    use serde_json::Value;
+
+    fn fixture() -> SigReport {
+        SigReport {
+            arch: Arch::X64,
+            inputs: vec![InputInfo {
+                label: "v83".to_string(),
+                packed: false,
+                reasons: vec![],
+            }],
+            unique_builds: 1,
+            duplicate_groups: vec![DupGroup {
+                code_hash: 0xDEAD_BEEF,
+                labels: vec!["v83".to_string(), "v84".to_string()],
+            }],
+            chosen: Some(SigCandidate {
+                aob: "48 8B".to_string(),
+                suffix: Suffix::Call,
+                grade: Grade::A,
+                score: 84,
+                bytes_len: 16,
+                fixed: 9,
+                wildcards: 7,
+                fixed_ratio: 0.5,
+                reloc_safe: true,
+                gated: false,
+                packed: false,
+                scores: SubScores {
+                    uniqueness: 90,
+                    stability: 80,
+                    entropy: 70,
+                    semantic: 60,
+                    resolver_confidence: 88,
+                    cross_build: 77,
+                    final_score: 84,
+                },
+                reasons: vec![],
+                per_version: vec![PerVersion {
+                    label: "v83".to_string(),
+                    match_rva: Some(0x0040_1000),
+                    resolved_target_rva: Some(0x0040_2ABC),
+                    target_kind: Some(TargetKind::Code),
+                    fingerprint_similarity: Some(0.95),
+                    aob: Some("AA BB".to_string()),
+                }],
+                diags: vec![Diag::CalleeMismatch],
+            }),
+            alternates: vec![],
+            rejected: vec![],
+            shortlists: vec![Shortlist {
+                label: "v95".to_string(),
+                entries: vec![ShortlistEntry {
+                    rva: 0x0040_10F0,
+                    similarity: 0.8,
+                    aob: None,
+                }],
+            }],
+            aob_ranges: vec![AobRange {
+                aob: "48 8B".to_string(),
+                minted_in: "v83".to_string(),
+                first_label: "v83".to_string(),
+                last_label: "v88".to_string(),
+                labels: vec!["v83".to_string(), "v88".to_string()],
+            }],
+            diagnostics: vec![Diag::NotUnique],
+        }
+    }
+
+    // The desktop view shares the CLI's hex address contract but is otherwise a DIFFERENT wire shape,
+    // and the frontend depends on these differences. Pinning them keeps a future unification of the
+    // report model (#27) from silently changing what the UI receives.
+    #[test]
+    fn sig_report_view_pins_the_desktop_wire_contract() {
+        let v: Value = serde_json::to_value(sig_report_view(&fixture())).unwrap();
+
+        assert_eq!(v["arch"], "x64");
+
+        // duplicate_groups are [hash, [labels]] arrays here, not {code_hash, labels} objects.
+        let dg = &v["duplicate_groups"][0];
+        assert!(dg.is_array(), "duplicate group serializes as a tuple");
+        assert_eq!(dg[0], "00000000DEADBEEF");
+        assert_eq!(dg[1][0], "v83");
+
+        // Addresses are hex strings; per_version carries no minted aob in the desktop view.
+        let pv = &v["chosen"]["per_version"][0];
+        assert_eq!(pv["match_rva"], "0x401000");
+        assert_eq!(pv["target_type"], "code");
+        assert!(pv.get("aob").is_none(), "desktop per_version omits aob");
+
+        // The desktop report drops shortlists, and an empty negative summary is null (not an object).
+        assert!(
+            v.get("shortlists").is_none(),
+            "desktop report omits shortlists"
+        );
+        assert!(v["negative_summary"].is_null());
     }
 }
