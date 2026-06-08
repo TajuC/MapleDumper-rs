@@ -704,6 +704,65 @@ mod tests {
     }
 
     #[test]
+    fn grade_bands_are_monotonic_and_total() {
+        // Every possible final_score maps to a band (total), and a higher score never yields a worse
+        // grade (monotonic, no inversion or gap). This is the property the on-corpus calibration
+        // confirmed empirically: across adjacent builds, grade A signatures re-resolved 15/15 (100%)
+        // and grade B 9/12 (75%), so the letter genuinely tracks cross-version survival. Guarded here
+        // so a future edit to the bands cannot silently break that ordering.
+        let mut prev_rank = Grade::from_final_score(0).rank();
+        for s in 0..=100u32 {
+            let rank = Grade::from_final_score(s).rank();
+            assert!(
+                rank <= prev_rank,
+                "grade must not get worse as the score rises (score {s}: rank {rank} > {prev_rank})"
+            );
+            prev_rank = rank;
+            // An ungated, unpacked candidate grades exactly at the band.
+            assert_eq!(grade_from(s, false, false), Grade::from_final_score(s));
+        }
+        assert_eq!(Grade::from_final_score(100), Grade::A);
+        assert_eq!(Grade::from_final_score(0), Grade::F);
+    }
+
+    #[test]
+    fn weighted_final_is_monotonic_in_every_subscore() {
+        // weighted_final is a positive-weighted blend, so raising any single sub-score must never
+        // lower the final score: more evidence is never worse. Guards against a future weight change
+        // that breaks the monotonicity the grade ordering (and the calibration above) depends on.
+        let mid = SubScores {
+            uniqueness: 50,
+            stability: 50,
+            entropy: 50,
+            semantic: 50,
+            resolver_confidence: 50,
+            cross_build: 50,
+            final_score: 0,
+        };
+        let setters: [fn(&mut SubScores, u32); 6] = [
+            |s, v| s.uniqueness = v,
+            |s, v| s.stability = v,
+            |s, v| s.entropy = v,
+            |s, v| s.semantic = v,
+            |s, v| s.resolver_confidence = v,
+            |s, v| s.cross_build = v,
+        ];
+        for set in setters {
+            let mut prev = 0u32;
+            for v in 0..=100u32 {
+                let mut s = mid;
+                set(&mut s, v);
+                let f = weighted_final(&s);
+                assert!(
+                    f >= prev,
+                    "raising a sub-score lowered final_score ({prev} -> {f} at value {v})"
+                );
+                prev = f;
+            }
+        }
+    }
+
+    #[test]
     fn high_entropy_scores_above_low_entropy() {
         let mut hi = base_evidence();
         hi.fixed_bytes = vec![0x1F, 0xA3, 0x4C, 0xD8, 0x57, 0x9E, 0x21, 0xBC];

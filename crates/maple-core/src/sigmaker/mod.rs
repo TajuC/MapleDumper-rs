@@ -5126,42 +5126,53 @@ mod tests {
         let step = (entries.len() / N).max(1);
         let sample: Vec<usize> = entries.iter().copied().step_by(step).take(N).collect();
 
-        // grade -> (signatures, holdout builds tested, holdout builds re-resolved)
-        let mut by_grade: BTreeMap<char, (usize, usize, usize)> = BTreeMap::new();
-        for &e in &sample {
-            let spec = TargetSpec::Ref {
-                image: 0,
-                rva: e as u64,
-            };
-            let report = generate(&inputs, &spec, &opts);
-            let Some(chosen) = &report.chosen else {
-                continue;
-            };
-            let hold = holdout_validate(&inputs, &spec, &opts);
-            let total = hold.iter().filter(|h| h.generated).count();
-            let matched = hold.iter().filter(|h| h.matched_holdout).count();
-            let entry = by_grade.entry(chosen.grade.letter()).or_default();
-            entry.0 += 1;
-            entry.1 += total;
-            entry.2 += matched;
+        // Measure per-grade leave-one-out re-resolution over two spans. The full span includes the
+        // v95.1 structural break, where byte signatures almost never survive, so it yields very few
+        // gradeable signatures. The pre-break span (v83..v91) is the realistic relocation regime and
+        // populates the grade range, which is what a recalibration needs. grade -> (signatures,
+        // holdout builds generated, holdout builds re-resolved).
+        let spans: [(&str, &[ImageInput]); 2] = [
+            (
+                "v83 -> v84/v88/v91/v95.1 (full, across the v95 break)",
+                &inputs[..],
+            ),
+            ("v83 -> v84/v88/v91 (pre-break)", &inputs[..4]),
+        ];
+        let mut grand_total = 0usize;
+        for (title, span) in spans {
+            let mut by_grade: BTreeMap<char, (usize, usize, usize)> = BTreeMap::new();
+            for &e in &sample {
+                let spec = TargetSpec::Ref {
+                    image: 0,
+                    rva: e as u64,
+                };
+                let report = generate(span, &spec, &opts);
+                let Some(chosen) = &report.chosen else {
+                    continue;
+                };
+                let hold = holdout_validate(span, &spec, &opts);
+                let total = hold.iter().filter(|h| h.generated).count();
+                let matched = hold.iter().filter(|h| h.matched_holdout).count();
+                let entry = by_grade.entry(chosen.grade.letter()).or_default();
+                entry.0 += 1;
+                entry.1 += total;
+                entry.2 += matched;
+            }
+            eprintln!(
+                "\n=== grade calibration ({title}), {} sampled ===",
+                sample.len()
+            );
+            eprintln!("  grade  sigs  holdout re-resolved");
+            for (g, (n, tot, mat)) in &by_grade {
+                let pct = if *tot == 0 {
+                    "n/a".to_string()
+                } else {
+                    format!("{:.0}%", 100.0 * (*mat as f64) / (*tot as f64))
+                };
+                eprintln!("  {g}      {n:>4}  {mat}/{tot} ({pct})");
+            }
+            grand_total += by_grade.values().map(|v| v.0).sum::<usize>();
         }
-
-        eprintln!(
-            "\n=== grade calibration (GMS v83 -> v84/v88/v91/v95.1), {} sampled ===",
-            sample.len()
-        );
-        eprintln!("  grade  sigs  holdout re-resolved");
-        for (g, (n, tot, mat)) in &by_grade {
-            let pct = if *tot == 0 {
-                "n/a".to_string()
-            } else {
-                format!("{:.0}%", 100.0 * (*mat as f64) / (*tot as f64))
-            };
-            eprintln!("  {g}      {n:>4}  {mat}/{tot} ({pct})");
-        }
-        assert!(
-            by_grade.values().map(|v| v.0).sum::<usize>() > 0,
-            "expected at least one generated signature"
-        );
+        assert!(grand_total > 0, "expected at least one generated signature");
     }
 }
