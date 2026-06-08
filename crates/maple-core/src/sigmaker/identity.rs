@@ -539,6 +539,51 @@ mod tests {
     }
 
     #[test]
+    fn string_anchor_resolves_an_x64_rip_relative_reference() {
+        // #12: the string anchor is arch-neutral. fn_identity reads referenced strings through the
+        // arch-aware mem_target (which resolves x64 RIP-relative operands), and the reverse xref scan
+        // has a dedicated x64 `lea reg,[rip+d]` arm, so a function that references a unique string by a
+        // RIP-relative lea is anchored and re-resolved on x64 exactly as on x86, with no x86-only
+        // absolute-addressing assumption. Validated synthetically because no x64 MapleStory client
+        // exists to measure against.
+        use crate::memory::{BufferSource, Region};
+        const BASE: usize = 0x1_4000_0000;
+        let mut buf = vec![0u8; 0x200];
+        // rva 0: `lea rcx, [rip+0xF9]` (-> the string at rva 0x100, since 0 + 7 + 0xF9 = 0x100) ; `ret`.
+        buf[0..7].copy_from_slice(&[0x48, 0x8D, 0x0D, 0xF9, 0x00, 0x00, 0x00]);
+        buf[7] = 0xC3;
+        buf[0x100..0x109].copy_from_slice(b"MapleX64\0");
+        let src = BufferSource::new(BASE, buf);
+        let img = ImageInput {
+            label: "x64".into(),
+            source: &src,
+            base: BASE,
+            size: 0x200,
+            code_regions: vec![Region {
+                base: BASE,
+                size: 0x80,
+            }],
+            regions: vec![Region {
+                base: BASE,
+                size: 0x200,
+            }],
+            import: None,
+            arch: Arch::X64,
+            code_hash: 0,
+            packed: false,
+            pack_reasons: Vec::new(),
+            reloc: None,
+        };
+        let anchor = make_string_anchor(&img, 0).expect("an x64 string anchor");
+        assert_eq!(anchor.text, "MapleX64");
+        assert_eq!(
+            resolve_string_anchor(&img, &anchor),
+            Some(0),
+            "the x64 RIP-relative string reference re-resolves to the function"
+        );
+    }
+
+    #[test]
     fn mnemonic_similarity_is_one_for_identical_streams() {
         let a = ident(&[1, 2, 3, 4, 5, 6]);
         assert!((a.similarity(&a) - 1.0).abs() < 1e-9);
