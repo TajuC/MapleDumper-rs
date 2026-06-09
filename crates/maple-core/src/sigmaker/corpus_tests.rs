@@ -279,6 +279,58 @@ fn graph_seed_densification_across_v95_is_measured_and_reverse_consistent() {
     );
 }
 
+// Equivalence gate for the single-decode fingerprint scan optimisation (run with `--ignored`): the fast
+// `for_each_boundary_identity` (one linear decode per region) must reproduce the naive per-boundary
+// `fn_identity` EXACTLY, at every instruction boundary of every real GMS build. A single divergence in any
+// field of any boundary's identity fails the gate, so the speedup is proven output-identical on real code
+// rather than only argued. This is what lets `best_fingerprint_match`/`fingerprint_topk` switch to the fast
+// scan with the false-positive floor and the golden snapshot untouched.
+#[test]
+#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+fn fingerprint_scan_is_byte_equivalent_to_the_naive_decode_on_real_gms() {
+    use crate::fileimage::FileImage;
+    use std::path::Path;
+
+    let dir = Path::new(r"X:\Client_Unpacked");
+    let names = [
+        "GMS_v61.1_U_DEVM.exe",
+        "GMS_v83.1_U_DEVM.exe",
+        "GMS_v95.1_U_DEVM.exe",
+        "GMS_v111.1_U_DEVM.exe",
+    ];
+    if names.iter().any(|n| !dir.join(n).exists()) {
+        eprintln!("real GMS clients not present; skipping");
+        return;
+    }
+    fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+        let pack = img.pack_report();
+        ImageInput {
+            label: label.to_string(),
+            source: img,
+            base: img.base(),
+            size: img.size(),
+            code_regions: img.code_regions(),
+            regions: img.regions(),
+            import: img.import_range(),
+            arch: img.arch(),
+            code_hash: img.code_hash(),
+            packed: pack.likely_packed,
+            pack_reasons: pack.reasons,
+            reloc: None,
+        }
+    }
+    for name in names {
+        let fi = FileImage::open(&dir.join(name)).expect("open build");
+        let img = mk(name, &fi);
+        match identity::fingerprint_scan_divergence(&img) {
+            None => eprintln!("{name}: fast scan identical to the naive decode at every boundary"),
+            Some((rva, naive, streamed)) => panic!(
+                "{name}: fingerprint scan diverged at rva {rva:#x}: naive {naive} vs streamed {streamed}"
+            ),
+        }
+    }
+}
+
 // Broad cross-version validation sweep (run with `--ignored`): on the real GMS lineage, how many
 // functions each relocation anchor actually carries from v83 to v95.1, and at what false-positive
 // (wrong-address) rate. This turns "validated on a handful of cases" into corpus-wide numbers.

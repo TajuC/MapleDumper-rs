@@ -148,6 +148,185 @@ pub fn fn_identity(img: &ImageInput, target_rva: usize) -> FnIdentity {
     }
 }
 
+// Per-instruction features captured in a SINGLE linear decode of a region, so the per-boundary identity
+// scan does not re-decode the same instruction once per overlapping window. Everything `fn_identity` reads
+// from a decoded instruction is recorded here; `identity_from_events` then reproduces `fn_identity` exactly
+// by aggregating these forward, with no further decoding. See `for_each_boundary_identity`.
+struct InstrFeat {
+    ip: u64,
+    len: u64,
+    mnemonic: u32,
+    flow: FlowControl,
+    branch_target: u64,
+    next_ip: u64,
+    strings: Vec<String>,
+    constants: Vec<u64>,
+}
+
+// One linear decode of a code region, mirroring `instruction_boundaries`' resync byte-for-byte: a decode
+// position yields `Some(feat)` for a valid instruction and `None` for an invalid byte (after which the
+// decoder advances one byte). The position list is therefore identical to `instruction_boundaries`, and
+// each `Some` carries exactly what `fn_identity` extracts from that instruction (string/constant refs
+// computed once here instead of at every overlapping window).
+fn region_events(
+    img: &ImageInput,
+    region_base: usize,
+    region_size: usize,
+) -> Vec<(usize, Option<InstrFeat>)> {
+    let bytes = read_region(img.source, region_base, region_size);
+    let mut decoder = Decoder::with_ip(
+        bitness(img.arch),
+        &bytes,
+        region_base as u64,
+        DecoderOptions::NONE,
+    );
+    let mut instr = Instruction::default();
+    let mut out: Vec<(usize, Option<InstrFeat>)> = Vec::new();
+    while decoder.can_decode() {
+        let pos = decoder.position();
+        // iced's `set_position` (used on resync below) moves the buffer offset but NOT the IP, so after an
+        // invalid byte the decoder's IP drifts from the real position. Re-anchor the IP to this position
+        // every step so `instr.ip()`/`next_ip()`/`near_branch_target()` match a fresh decode from here,
+        // exactly as the naive per-boundary `fn_identity` (a fresh decoder with `with_ip`) sees them.
+        decoder.set_ip((region_base + pos) as u64);
+        let rva = (region_base - img.base) + pos;
+        decoder.decode_out(&mut instr);
+        if instr.is_invalid() || instr.len() == 0 {
+            out.push((rva, None));
+            let _ = decoder.set_position(pos + 1);
+            continue;
+        }
+        let mut strings: Vec<String> = Vec::new();
+        let mut constants: Vec<u64> = Vec::new();
+        let immediates = (0..instr.op_count())
+            .filter(|&i| is_immediate_kind(instr.op_kind(i)))
+            .map(|i| instr.immediate(i));
+        let refs = immediates.chain(mem_target(&instr, img.arch).map(|a| a as u64));
+        for v in refs {
+            if let Some(s) = read_string_ref(img, v as usize) {
+                strings.push(s);
+            } else if !in_image(img, v) && is_distinctive_const(v) {
+                constants.push(v);
+            }
+        }
+        out.push((
+            rva,
+            Some(InstrFeat {
+                ip: instr.ip(),
+                len: instr.len() as u64,
+                mnemonic: instr.mnemonic() as u32,
+                flow: instr.flow_control(),
+                branch_target: instr.near_branch_target(),
+                next_ip: instr.next_ip(),
+                strings,
+                constants,
+            }),
+        ));
+    }
+    out
+}
+
+// Reproduce `fn_identity` for the boundary at `events[e]` by aggregating the precomputed features forward,
+// with NO decoding. Output-identical to `fn_identity(img, events[e].0)` for every interior boundary: the
+// instruction stream a fresh decode would walk from `ip0` is exactly the contiguous run of `Some` events
+// here (x86 decode is stateless per instruction). The only window `fn_identity` reads that this region pass
+// cannot see is one that spills past the region end into adjacent data; for those boundaries (within one
+// `ID_WINDOW` of the region end) it falls back to the real `fn_identity`, so the result is exact everywhere.
+fn identity_from_events(
+    img: &ImageInput,
+    region_end_ip: u64,
+    events: &[(usize, Option<InstrFeat>)],
+    e: usize,
+) -> FnIdentity {
+    let rva = events[e].0;
+    let ip0 = (img.base + rva) as u64;
+    // The window can read past the region into data; reproduce that by decoding it directly.
+    if ip0 + ID_WINDOW as u64 > region_end_ip {
+        return fn_identity(img, rva);
+    }
+    // An invalid byte yields an immediate break in fn_identity: just the entry block, nothing else.
+    if events[e].1.is_none() {
+        return FnIdentity {
+            blocks: 1,
+            ..FnIdentity::default()
+        };
+    }
+    let end_ip = ip0 + ID_WINDOW as u64;
+    let mut mnemonics: Vec<u32> = Vec::new();
+    let mut constants: Vec<u64> = Vec::new();
+    let mut strings: Vec<String> = Vec::new();
+    let mut blocks: BTreeSet<u64> = BTreeSet::from([ip0]);
+    let (mut calls, mut branches, mut returns) = (0usize, 0usize, 0usize);
+    let mut expected = ip0;
+    let mut j = e;
+    while j < events.len() && mnemonics.len() < ID_MAX_INSTRS {
+        let Some(f) = &events[j].1 else { break };
+        // Non-contiguous (only across a resync) or an instruction the 256-byte window cannot hold: a fresh
+        // decode would hit an invalid/short read here and break, so stop without including it.
+        if f.ip != expected || f.ip + f.len > end_ip {
+            break;
+        }
+        mnemonics.push(f.mnemonic);
+        strings.extend(f.strings.iter().cloned());
+        constants.extend(f.constants.iter().copied());
+        match f.flow {
+            FlowControl::Call | FlowControl::IndirectCall => calls += 1,
+            FlowControl::ConditionalBranch => {
+                branches += 1;
+                if (ip0..end_ip).contains(&f.branch_target) {
+                    blocks.insert(f.branch_target);
+                }
+                blocks.insert(f.next_ip);
+            }
+            FlowControl::UnconditionalBranch => {
+                branches += 1;
+                if (ip0..end_ip).contains(&f.branch_target) {
+                    blocks.insert(f.branch_target);
+                }
+            }
+            FlowControl::Return => {
+                returns += 1;
+                break;
+            }
+            _ => {}
+        }
+        expected += f.len;
+        j += 1;
+    }
+    constants.sort_unstable();
+    constants.dedup();
+    strings.sort();
+    strings.dedup();
+    FnIdentity {
+        instr_count: mnemonics.len(),
+        blocks: blocks.len(),
+        calls,
+        branches,
+        returns,
+        constants,
+        strings,
+        mnemonics,
+    }
+}
+
+// Visit every instruction-boundary window in the image's code (the same boundaries and identities as
+// `instruction_boundaries` + `fn_identity` at each), decoding each region only ONCE instead of re-decoding
+// every overlapping 24-instruction window. This is the hot path of the fingerprint scan: best-match and
+// top-k both stream through it. x86 only, matching the windowing of `enclosing_function`.
+fn for_each_boundary_identity(img: &ImageInput, mut f: impl FnMut(usize, &FnIdentity)) {
+    if !matches!(img.arch, Arch::X86) {
+        return;
+    }
+    for region in &img.code_regions {
+        let region_end_ip = (region.base + region.size) as u64;
+        let events = region_events(img, region.base, region.size);
+        for e in 0..events.len() {
+            let id = identity_from_events(img, region_end_ip, &events, e);
+            f(events[e].0, &id);
+        }
+    }
+}
+
 // Jaccard over two evidence sets. Returns `None` when both are empty: no constants (or no strings) in
 // either function is an absence of evidence, not a match, so the caller drops the component and
 // reweights rather than letting two empty sets count as a perfect 1.0 and inflate the blend.
@@ -300,6 +479,10 @@ pub fn xref_count(img: &ImageInput, target_rva: usize) -> usize {
 /// (the real GMS v83/v84 target is a *mid-function* code site reached by neither), so the only
 /// enumeration that can relocate an arbitrary code window is the set of real instruction starts. On an
 /// invalid byte the sweep advances one byte and resyncs, so a data island in `.text` cannot derail it.
+/// Now the test-only reference enumeration: the production fingerprint scan streams through
+/// [`for_each_boundary_identity`] (one decode per region), and the corpus equivalence test checks the two
+/// agree boundary-for-boundary and identity-for-identity.
+#[cfg(test)]
 fn instruction_boundaries(img: &ImageInput) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     for region in &img.code_regions {
@@ -344,16 +527,15 @@ pub fn best_fingerprint_match(
     const MIN_DISTINCT_GAP: usize = 16;
     let mut best: Option<(usize, f64, FnIdentity)> = None;
     let mut runner_up = 0.0f64;
-    for rva in instruction_boundaries(img) {
-        let id = fn_identity(img, rva);
-        let sim = reference.similarity(&id);
+    for_each_boundary_identity(img, |rva, id| {
+        let sim = reference.similarity(id);
         match best.take() {
             // A new winner: the old winner becomes a rival only if it is far enough to be distinct.
             Some((brva, bsim, _)) if sim > bsim => {
                 if brva.abs_diff(rva) >= MIN_DISTINCT_GAP {
                     runner_up = runner_up.max(bsim);
                 }
-                best = Some((rva, sim, id));
+                best = Some((rva, sim, id.clone()));
             }
             // Not a winner: it raises the runner-up only if far enough from the current winner.
             Some(prev) => {
@@ -362,9 +544,9 @@ pub fn best_fingerprint_match(
                 }
                 best = Some(prev);
             }
-            None => best = Some((rva, sim, id)),
+            None => best = Some((rva, sim, id.clone())),
         }
-    }
+    });
     best.map(|(rva, sim, id)| (rva, sim, runner_up, id))
 }
 
@@ -383,13 +565,13 @@ pub(super) fn fingerprint_topk(
         return Vec::new();
     }
     const GAP: usize = 16;
-    let mut scored: Vec<(usize, f64)> = instruction_boundaries(img)
-        .into_iter()
-        .filter_map(|rva| {
-            let sim = reference.similarity(&fn_identity(img, rva));
-            (sim >= floor).then_some((rva, sim))
-        })
-        .collect();
+    let mut scored: Vec<(usize, f64)> = Vec::new();
+    for_each_boundary_identity(img, |rva, id| {
+        let sim = reference.similarity(id);
+        if sim >= floor {
+            scored.push((rva, sim));
+        }
+    });
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     let mut out: Vec<(usize, f64)> = Vec::new();
     for (rva, sim) in scored {
@@ -402,6 +584,33 @@ pub(super) fn fingerprint_topk(
         }
     }
     out
+}
+
+/// Test-only equivalence oracle: confirm the fast single-decode scan ([`for_each_boundary_identity`])
+/// reproduces the naive per-boundary [`fn_identity`] EXACTLY for `img`. Returns `None` when every boundary
+/// agrees (same rva, same identity in every field), or `Some((rva, naive, streamed))` for the first
+/// divergence. Driven over the real GMS lineage by the `--ignored` corpus harness, so the optimisation is
+/// proven byte-equivalent on real code, not merely argued.
+#[cfg(test)]
+pub(super) fn fingerprint_scan_divergence(img: &ImageInput) -> Option<(usize, String, String)> {
+    let naive: Vec<(usize, FnIdentity)> = instruction_boundaries(img)
+        .into_iter()
+        .map(|rva| (rva, fn_identity(img, rva)))
+        .collect();
+    let mut streamed: Vec<(usize, FnIdentity)> = Vec::new();
+    for_each_boundary_identity(img, |rva, id| streamed.push((rva, id.clone())));
+    if naive.len() != streamed.len() {
+        return Some((
+            0,
+            format!("naive {} boundaries", naive.len()),
+            format!("streamed {} boundaries", streamed.len()),
+        ));
+    }
+    naive
+        .iter()
+        .zip(&streamed)
+        .find(|((r1, a), (r2, b))| r1 != r2 || a != b)
+        .map(|((r1, a), (_, b))| (*r1, a.fingerprint(), b.fingerprint()))
 }
 
 fn find_string_in_data(img: &ImageInput, text: &str) -> Option<usize> {
