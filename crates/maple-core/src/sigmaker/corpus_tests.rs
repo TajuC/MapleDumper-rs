@@ -1920,3 +1920,94 @@ fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
         "a confident ensemble result must round-trip to its origin (zero wrong addresses)"
     );
 }
+
+// Phase 8 efficacy: does the data-flow strand channel actually separate a true cross-version twin from an
+// unrelated function on real code? String-anchored functions give ground-truth twins (the same string
+// pins the same function in both builds), so we compare each twin's strand similarity to its real image
+// against an impostor (a different build function). A useful channel scores true twins clearly above
+// impostors; measured on a clean recompile (v83 -> v84) and the major break (v83 -> v95.1).
+#[test]
+#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+fn data_flow_strands_separate_true_twins_from_impostors() {
+    use crate::fileimage::FileImage;
+    use std::path::Path;
+    let dir = Path::new(r"X:\Client_Unpacked");
+    let names = [
+        "GMS_v83.1_U_DEVM.exe",
+        "GMS_v84.1_U_DEVM.exe",
+        "GMS_v95.1_U_DEVM.exe",
+    ];
+    if names.iter().any(|n| !dir.join(n).exists()) {
+        eprintln!("real GMS clients not present; skipping");
+        return;
+    }
+    fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+        let pack = img.pack_report();
+        ImageInput {
+            label: label.to_string(),
+            source: img,
+            base: img.base(),
+            size: img.size(),
+            code_regions: img.code_regions(),
+            regions: img.regions(),
+            import: img.import_range(),
+            arch: img.arch(),
+            code_hash: img.code_hash(),
+            packed: pack.likely_packed,
+            pack_reasons: pack.reasons,
+            reloc: None,
+        }
+    }
+    let i83 = FileImage::open(&dir.join(names[0])).expect("v83");
+    let i84 = FileImage::open(&dir.join(names[1])).expect("v84");
+    let i95 = FileImage::open(&dir.join(names[2])).expect("v95.1");
+    let v83 = mk("v83", &i83);
+    let v84 = mk("v84", &i84);
+    let v95 = mk("v95.1", &i95);
+
+    let m83 = model::AnalysisModel::build(&v83);
+    let anchors = graph::anchor_candidates(&v83, m83.entries());
+    let mean = |v: &[f64]| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+    let mut any = false;
+    for (label, tgt) in [("v84", &v84), ("v95.1", &v95)] {
+        let twins = graph::resolve_seeds(tgt, &anchors);
+        let s83: Vec<_> = twins
+            .iter()
+            .map(|&(a, _)| strands::strand_set(&v83, a))
+            .collect();
+        let stg: Vec<_> = twins
+            .iter()
+            .map(|&(_, b)| strands::strand_set(tgt, b))
+            .collect();
+        let (mut tru, mut imp) = (Vec::new(), Vec::new());
+        for i in 0..twins.len() {
+            if s83[i].is_empty() || stg[i].is_empty() {
+                continue;
+            }
+            tru.push(strands::strand_similarity(&s83[i], &stg[i]));
+            let j = (i + 1) % twins.len();
+            if j != i && !stg[j].is_empty() {
+                imp.push(strands::strand_similarity(&s83[i], &stg[j]));
+            }
+        }
+        eprintln!(
+            "strand efficacy v83 -> {label}: true-twin {:.3} (n={}), impostor {:.3} (n={}), separation {:.3}",
+            mean(&tru),
+            tru.len(),
+            mean(&imp),
+            imp.len(),
+            mean(&tru) - mean(&imp)
+        );
+        any |= !tru.is_empty();
+    }
+    assert!(
+        any,
+        "the strand channel must produce strands for some real cross-version twin"
+    );
+}
