@@ -117,10 +117,17 @@ impl FileImage {
             return Err(bad("not a PE image (missing MZ)"));
         }
         let e_lfanew = rd_u32(&data, 0x3C).ok_or_else(|| bad("truncated DOS header"))? as usize;
-        if data.get(e_lfanew..e_lfanew + 4) != Some(b"PE\0\0".as_slice()) {
+        // checked_add so a crafted e_lfanew near u32::MAX cannot overflow the offset: the range read is
+        // already bounds-checked, but the addition itself would panic in a 32-bit debug build (release
+        // wraps to a start>end range and reads None). This matches the checked-extent discipline used for
+        // the section and import bounds below. Once coff is in range, the small +2/+16/+20 reads cannot
+        // overflow (the file length is bounded by isize::MAX).
+        let coff = e_lfanew
+            .checked_add(4)
+            .ok_or_else(|| bad("PE header offset overflows"))?;
+        if data.get(e_lfanew..coff) != Some(b"PE\0\0".as_slice()) {
             return Err(bad("missing PE signature"));
         }
-        let coff = e_lfanew + 4;
         let num_sections =
             rd_u16(&data, coff + 2).ok_or_else(|| bad("truncated COFF header"))? as usize;
         let size_opt =
@@ -555,6 +562,18 @@ mod tests {
         // WPE-3: a PE32+ image base is 64-bit and cannot be represented on a 32-bit build, so parse
         // refuses it rather than truncating the high dword. build_pe(false) uses base 0x1_4000_0000.
         assert!(FileImage::parse(build_pe(false, None)).is_err());
+    }
+
+    #[test]
+    fn a_huge_e_lfanew_errors_rather_than_overflowing() {
+        // F5: a crafted e_lfanew near u32::MAX must return Err, never an arithmetic-overflow panic. On a
+        // 32-bit build the checked_add catches the overflow; on a 64-bit build the bounds-checked range
+        // read returns None. The proptest fuzzer will not reliably hit this 4-in-4-billion value, so it
+        // is pinned explicitly.
+        let mut d = vec![0u8; 0x40];
+        d[0..2].copy_from_slice(b"MZ");
+        d[0x3C..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(FileImage::parse(d).is_err());
     }
 
     #[test]
