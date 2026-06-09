@@ -14,6 +14,7 @@ pub mod domain;
 pub mod engine;
 pub mod fileimage;
 pub mod health;
+pub mod live;
 pub mod memory;
 pub mod output;
 pub mod pattern;
@@ -31,11 +32,10 @@ pub use domain::{
     ExpectedHits, FailureReason, FindingStatus, ResolvePlan, ResolveTrace, ResolverSpec,
     SectionKind, checked_rva,
 };
-pub use engine::{
-    PatternRow, ProfileReport, ScanResult, apply_string_anchors, profile, scan, scan_in, scan_live,
-};
+pub use engine::{PatternRow, ProfileReport, ScanResult, profile, scan, scan_in};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};
+pub use live::{apply_string_anchors, scan_live};
 pub use memory::{MemorySource, Region};
 pub use output::Finding;
 pub use pattern::{Arch, Pattern, Signature, arch_mismatch};
@@ -44,11 +44,11 @@ pub use resolver::{Kind, ResolveDetail, ResolveFail, ResolveOp, resolve_op};
 pub use scanner::{CompiledPattern, find_all};
 pub use sigmaker::{
     BuildProfile, CrossReport, Diag, DupGroup, FnIdentity, Grade, HoldoutResult, ImageInput,
-    InputInfo, NegativeEvidence, NegativeHit, PerVersion, SigCandidate, SigOptions, SigReport,
-    SigStage, StringAnchor, SubScores, Suffix, TargetKind, TargetSpec, apply_negative_corpus,
-    apply_negatives, best_fingerprint_match, fn_identity, generate, generate_cross,
-    generate_cross_with_progress, generate_with_progress, holdout_validate, make_string_anchor,
-    negative_corpus_hits, resolve_string_anchor, xref_count,
+    InputInfo, NegativeEvidence, NegativeHit, PerVersion, RelocationLedger, SigCandidate,
+    SigOptions, SigReport, SigStage, StringAnchor, SubScores, Suffix, TargetKind, TargetSpec,
+    apply_negative_corpus, apply_negatives, best_fingerprint_match, fn_identity, generate,
+    generate_cross, generate_cross_with_progress, generate_with_progress, holdout_validate,
+    make_string_anchor, negative_corpus_hits, resolve_string_anchor, xref_count,
 };
 pub use stamp::{BuildStamp, parse_stamp, pe_machine};
 

@@ -64,7 +64,7 @@ function renderResults() {
     .map((r) => {
       const pct = (r.matches / maxHits) * 100;
       const value = r.value ? `<span class="mono d-addr">${esc(r.value)}</span>` : '<span class="muted"></span>';
-      return `<tr data-name="${esc(r.name)}" class="${state.selected === r.name ? "selected" : ""}">
+      return `<tr data-name="${esc(r.name)}" tabindex="0" aria-selected="${state.selected === r.name}" class="${state.selected === r.name ? "selected" : ""}">
         <td><div class="name-cell"><span class="dot-acc ${accentClass(r)}"></span>
           <div><div class="name-main d-name">${esc(r.name)}</div><div class="name-sub d-cat">${esc(r.category)}</div></div></div></td>
         <td>${value}</td>
@@ -76,7 +76,15 @@ function renderResults() {
     })
     .join("");
 
-  body.querySelectorAll("tr[data-name]").forEach((tr) => tr.addEventListener("click", () => selectRow(tr.dataset.name)));
+  body.querySelectorAll("tr[data-name]").forEach((tr) => {
+    tr.addEventListener("click", () => selectRow(tr.dataset.name));
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectRow(tr.dataset.name);
+      }
+    });
+  });
 }
 
 function autoSelect() {
@@ -97,7 +105,11 @@ function selectRow(name) {
   const row = state.rows.find((r) => r.name === name);
   if (!row) return;
   state.selected = name;
-  document.querySelectorAll("#w-body tr").forEach((tr) => tr.classList.toggle("selected", tr.dataset.name === name));
+  document.querySelectorAll("#w-body tr").forEach((tr) => {
+    const sel = tr.dataset.name === name;
+    tr.classList.toggle("selected", sel);
+    if (tr.dataset.name) tr.setAttribute("aria-selected", String(sel));
+  });
 
   $("insp-name").textContent = row.name;
   const sb = $("insp-status");

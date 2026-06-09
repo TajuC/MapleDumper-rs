@@ -51,6 +51,18 @@ const COUNT_TOLERANCE: usize = 8;
 // Instructions decoded when following a dispatch thunk (an adjustor thunk is two instructions).
 const THUNK_INSTRS: usize = 2;
 
+// The structural match is accepted only at this weighted-agreement floor and runner-up margin; below
+// them the class has refactored past the per-slot fingerprint and the constructor-string grounding is
+// tried instead. Measured basis: on the GMS lineage the structural chain holds within v83-v91 and
+// declines to zero at the v95 class refactor (see CROSS_VERSION_BASELINE.md), and the round-trip sweep
+// records zero conclusive wrong addresses under these gates. An installer-grounded match cannot report a
+// real weighted agreement (it is located by string, not by alignment), so it returns the sentinel score
+// below to mark itself grounded rather than structural. These are `pub(super)` so the production gate and
+// the corpus harness that mirrors it share one source and cannot drift apart.
+pub(super) const VT_STRUCT_MIN_AGREEMENT: f64 = 0.72;
+pub(super) const VT_STRUCT_MIN_MARGIN: f64 = 0.10;
+pub(super) const VT_GROUNDED_SCORE: f64 = 0.9;
+
 /// The recompile-stable identity of a virtual method: the per-slot mnemonic fingerprint of the vtable it
 /// is dispatched from, the index of its slot, and whether that slot dispatches through an adjustor thunk.
 pub(super) struct VtableAnchor {
@@ -78,33 +90,50 @@ fn whole_image(img: &ImageInput) -> Vec<u8> {
     read_region(img.source, img.base, img.size)
 }
 
-/// Every vtable in the image: a run of at least [`MIN_RUN`] consecutive 4-aligned pointers into
-/// executable code. Returns each run's start RVA and the slot target RVAs. Vtables sit in `.rdata` or,
-/// in this corpus, in `.text`; scanning the whole image by pointer-into-code finds them wherever they
-/// live. Every loop is bounded by the buffer length so a malformed image cannot spin.
+// Code-pointer width: 4 bytes on x86, 8 on x64. Vtable slots, and the pointer runs that identify a
+// vtable, are this wide.
+fn ptr_size(arch: Arch) -> usize {
+    if matches!(arch, Arch::X64) { 8 } else { 4 }
+}
+
+// Read a `psize`-wide little-endian pointer at `i`, or `None` if it runs past `buf`.
+fn read_ptr(buf: &[u8], i: usize, psize: usize) -> Option<usize> {
+    let b = buf.get(i..i + psize)?;
+    Some(if psize == 8 {
+        u64::from_le_bytes(b.try_into().ok()?) as usize
+    } else {
+        u32::from_le_bytes(b.try_into().ok()?) as usize
+    })
+}
+
+/// Every vtable in the image: a run of at least [`MIN_RUN`] consecutive pointer-wide (4 bytes on x86,
+/// 8 on x64) values into executable code. Returns each run's start RVA and the slot target RVAs. Vtables
+/// sit in `.rdata` or, in this corpus, in `.text`; scanning the whole image by pointer-into-code finds
+/// them wherever they live. Every loop is bounded by the buffer length so a malformed image cannot spin.
 fn vtables(img: &ImageInput, buf: &[u8]) -> Vec<(usize, Vec<usize>)> {
     let base = img.base;
+    let psize = ptr_size(img.arch);
     let mut out = Vec::new();
     let mut i = 0usize;
-    let end = buf.len() & !3;
-    while i + 4 <= end {
-        let v = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+    let end = buf.len() & !(psize - 1);
+    while i + psize <= end {
+        let v = read_ptr(buf, i, psize).unwrap_or(0);
         if in_code(img, v) {
             let start = i;
             let mut slots = Vec::new();
-            while i + 4 <= end {
-                let v = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+            while i + psize <= end {
+                let v = read_ptr(buf, i, psize).unwrap_or(0);
                 if !in_code(img, v) {
                     break;
                 }
                 slots.push(v - base);
-                i += 4;
+                i += psize;
             }
             if slots.len() >= MIN_RUN {
                 out.push((start, slots));
             }
         } else {
-            i += 4;
+            i += psize;
         }
     }
     out
@@ -459,9 +488,6 @@ fn resolve_via_installer(img: &ImageInput, anchor: &VtableAnchor) -> Option<usiz
 /// dispatches the method. x86 only.
 #[must_use]
 pub(super) fn make_vtable_anchor(img: &ImageInput, target_entry: usize) -> Option<VtableAnchor> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let buf = whole_image(img);
     let vts = vtables(img, &buf);
     // How many distinct tables share each method: an inherited base method recurs across many vtables, a
@@ -495,7 +521,14 @@ pub(super) fn make_vtable_anchor(img: &ImageInput, target_entry: usize) -> Optio
     // take the largest. Probe in priority order, bounded so a widely shared method does not explode.
     let mut choice: Option<(usize, usize, bool, Option<StringAnchor>)> = None;
     for &(_, start, slot, via) in candidates.iter().take(32) {
-        let inst = find_installer(img, &buf, (img.base + start) as u32);
+        // Constructor grounding scans for an absolute 4-byte reference to the table, an x86/PE32 form.
+        // x64 references the table RIP-relatively and its address exceeds u32, so x64 relies on the
+        // structural per-slot match alone rather than a truncated, potentially wrong scan.
+        let inst = if matches!(img.arch, Arch::X86) {
+            find_installer(img, &buf, (img.base + start) as u32)
+        } else {
+            None
+        };
         let grounded = inst.is_some();
         if choice.is_none() || grounded {
             choice = Some((start, slot, via, inst));
@@ -533,9 +566,6 @@ pub(super) fn resolve_vtable_anchor(
     img: &ImageInput,
     anchor: &VtableAnchor,
 ) -> Option<(usize, f64, f64)> {
-    if !matches!(img.arch, Arch::X86) {
-        return None;
-    }
     let buf = whole_image(img);
     let vts = vtables(img, &buf);
     let rl = anchor.fingerprint.len();
@@ -574,13 +604,13 @@ pub(super) fn resolve_vtable_anchor(
     // applies). When it is weak or ambiguous, the class refactored past the per-slot matcher: ground the
     // table through its constructor's build-stable string instead, which names the exact table.
     if let Some((r, a, runner)) = structural
-        && a >= 0.72
-        && a - runner >= 0.10
+        && a >= VT_STRUCT_MIN_AGREEMENT
+        && a - runner >= VT_STRUCT_MIN_MARGIN
     {
         return Some((r, a, runner));
     }
     if let Some(real) = resolve_via_installer(img, anchor) {
-        return Some((real, 0.9, 0.0));
+        return Some((real, VT_GROUNDED_SCORE, 0.0));
     }
     structural
 }
@@ -633,6 +663,186 @@ mod tests {
             pack_reasons: Vec::new(),
             reloc: None,
         }
+    }
+
+    // An x64 image: ten tiny functions (distinct single-byte instructions, since 0x40..0x47 are REX
+    // prefixes on x64) and a data-tail vtable of 8-byte pointers into them.
+    fn synthetic_x64() -> (Vec<u8>, Vec<usize>, usize) {
+        const OPS: [u8; 10] = [0x90, 0x99, 0x98, 0x9C, 0x9D, 0xF5, 0xF8, 0xF9, 0xFC, 0xFD];
+        let mut buf = vec![0u8; 0x400];
+        let mut fn_rvas = Vec::new();
+        for j in 0..10usize {
+            let rva = 0x100 + j * 0x20;
+            fn_rvas.push(rva);
+            for k in 0..(j + 2) {
+                buf[rva + k] = OPS[j];
+            }
+            buf[rva + j + 2] = 0xC3; // ret
+        }
+        let table = 0x300usize;
+        for (k, &rva) in fn_rvas.iter().enumerate() {
+            let abs = (BASE + rva) as u64;
+            buf[table + k * 8..table + k * 8 + 8].copy_from_slice(&abs.to_le_bytes());
+        }
+        (buf, fn_rvas, table)
+    }
+
+    fn image_x64<'a>(src: &'a BufferSource, code: Region) -> ImageInput<'a> {
+        ImageInput {
+            arch: Arch::X64,
+            ..image(src, code)
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn rtti_is_sparse_and_exception_only_not_a_general_anchor() {
+        // Phase 3 premise check: real classes carry navigable RTTI, and the mangled class names persist
+        // across the v95 refactor that drives the structural chain reach to 0% (CROSS_VERSION_BASELINE).
+        // If this holds, RTTI class-name grounding bridges exactly where the per-slot matcher declines.
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = ["GMS_v83.1_U_DEVM.exe", "GMS_v95.1_U_DEVM.exe"];
+        if names.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk(img: &FileImage) -> ImageInput<'_> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: String::new(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i83 = FileImage::open(&dir.join(names[0])).unwrap();
+        let img = mk(&i83);
+        let base = img.base;
+        let buf = whole_image(&img);
+        // A: are the TypeDescriptor name strings even present in the mapped image (as opposed to only in
+        // the raw file)? Scan for the mangled-name marker and report where.
+        let mut td_name_rvas: Vec<usize> = Vec::new();
+        let mut w = 0usize;
+        while w + 4 <= buf.len() {
+            if &buf[w..w + 4] == b".?AV" || &buf[w..w + 4] == b".?AU" {
+                td_name_rvas.push(w);
+            }
+            w += 1;
+        }
+        eprintln!(
+            "v83 base=0x{base:X} size=0x{:X}; '.?AV/.?AU' RTTI name occurrences in mapped image: {}",
+            img.size,
+            td_name_rvas.len()
+        );
+        for &r in td_name_rvas.iter().take(6) {
+            let end = buf[r..].iter().take(96).position(|&b| b == 0).unwrap_or(0);
+            eprintln!(
+                "  name@rva 0x{r:X}: {}",
+                String::from_utf8_lossy(&buf[r..r + end])
+            );
+        }
+        // C/D: reverse-walk from the first few names. td = name-8, td_va = base+td_rva. Find a COL whose
+        // +0x0C points at td_va (and whose +0 signature is 0), then a pointer equal to that COL's VA (a
+        // vtable[-1]). This reveals whether the COL/locator chain exists and at what offsets, independent
+        // of any assumption the forward reader makes.
+        for &name_rva in td_name_rvas.iter().take(5) {
+            let td_va = base + name_rva - 8;
+            let mut col_rva = None;
+            let mut c = 0usize;
+            while c + 0x10 <= buf.len() {
+                if read_ptr(&buf, c + 0x0C, 4) == Some(td_va) && read_ptr(&buf, c, 4) == Some(0) {
+                    col_rva = Some(c);
+                    break;
+                }
+                c += 4;
+            }
+            match col_rva {
+                None => eprintln!("  td_va 0x{td_va:X}: no COL (sig0 + +0xC->td) found"),
+                Some(cr) => {
+                    let col_va = base + cr;
+                    let mut vtm1 = None;
+                    let mut p = 0usize;
+                    while p + 4 <= buf.len() {
+                        if read_ptr(&buf, p, 4) == Some(col_va) {
+                            vtm1 = Some(p);
+                            break;
+                        }
+                        p += 4;
+                    }
+                    eprintln!(
+                        "  td_va 0x{td_va:X}: COL@rva 0x{cr:X} (va 0x{col_va:X}); vtable[-1]@rva {vtm1:X?} (vtable starts at +4)"
+                    );
+                }
+            }
+        }
+        // Finding (Phase 3): RTTI is present but sparse and exception/framework-only. v83 carries ~16
+        // type descriptors, every one an exception/error/security type (the C++ classes whose exception
+        // handling forces RTTI); the gameplay classes a user actually relocates (CWvsContext, CUser,
+        // packet handlers) carry none, because the client is built /GR- everywhere else. The reverse-walk
+        // above confirms the locator chain is real where it exists, so this is not a reader bug. The
+        // consequence: RTTI class-name grounding cannot bridge the v95 break for the targets that matter,
+        // so the audit's "RTTI is the highest-value vtable anchor" does not hold for this corpus. The real
+        // cross-v95 bridge is the ensemble plus graph alignment (Phases 4/7), not RTTI. This test pins the
+        // finding so a future, RTTI-rich corpus would re-open the question.
+        assert!(
+            !td_name_rvas.is_empty(),
+            "RTTI name strings are present (sparse) on real GMS"
+        );
+        assert!(
+            td_name_rvas.len() < 64,
+            "RTTI is expected to be sparse/exception-only here; {} names would suggest a richer corpus worth re-evaluating",
+            td_name_rvas.len()
+        );
+    }
+
+    #[test]
+    fn vtable_round_trips_on_x64() {
+        // #12: the structural per-slot matcher is arch-neutral, and vtables now reads 8-byte x64
+        // pointers. A synthetic x64 image with one 10-slot table of 8-byte function pointers: vtables
+        // enumerates it, and an anchor for one slot relocates back onto itself. Constructor grounding
+        // stays x86-only, so x64 uses the structural match alone (installer is None). Validated
+        // synthetically because no x64 MapleStory client exists to measure against.
+        let (buf, fn_rvas, table) = synthetic_x64();
+        let src = BufferSource::new(BASE, buf.clone());
+        let img = image_x64(
+            &src,
+            Region {
+                base: BASE + 0x100,
+                size: 0x200,
+            },
+        );
+        let found = vtables(&img, &buf);
+        let vt = found
+            .iter()
+            .find(|(start, _)| *start == table)
+            .expect("the x64 8-byte-pointer table is enumerated as a vtable");
+        assert_eq!(
+            vt.1, fn_rvas,
+            "all ten 8-byte slots resolve to the function RVAs"
+        );
+
+        let target = fn_rvas[3];
+        let anchor = make_vtable_anchor(&img, target).expect("the x64 method is a vtable slot");
+        assert_eq!(anchor.slot, 3);
+        assert!(
+            anchor.installer.is_none(),
+            "x64 grounds structurally, with no installer fallback"
+        );
+        let (rva, agreement, _runner) =
+            resolve_vtable_anchor(&img, &anchor).expect("the x64 table relocates onto itself");
+        assert_eq!(rva, target, "the slot reads back to the same method");
+        assert!(agreement > 0.99);
     }
 
     #[test]

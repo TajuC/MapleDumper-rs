@@ -98,6 +98,7 @@ const driver = `
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
   globalThis.__diagHtml = diagnosticsHtml({ confidence: "50", trace: "memory pointer resolved to 0x10", candidates: "0x10,0x20" });
+  globalThis.__diagStructured = diagnosticsHtml({ resolverTrace: JSON.stringify({ resolver: "nested call", mnemonic: "call", operand_kind: "nearbranch64", target_rva: 0x24190, target_section: "code", checks: ["range", "section"], failure: null }) });
   globalThis.__confHi = confChip(95);
   globalThis.__confLo = confChip(10);
   globalThis.__confNone = confChip(null);
@@ -119,6 +120,8 @@ const driver = `
   ];
   renderResults();
   globalThis.__wsBody = document.getElementById("w-body").innerHTML;
+  globalThis.__cap = capRows(new Array(900).fill(0));
+  globalThis.__more = moreRow(100, 4);
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -176,6 +179,11 @@ const diag = sandbox.__diagHtml || "";
 check(diag.includes("Resolver trace") && diag.includes("memory pointer resolved to 0x10"), "diagnostics trace missing");
 check(diag.includes("Candidates") && diag.includes("0x10") && diag.includes("0x20"), "diagnostics candidates missing");
 check(diag.includes("50/100"), "diagnostics confidence value missing");
+const diagS = sandbox.__diagStructured || "";
+check(
+  diagS.includes("nested call") && diagS.includes("nearbranch64") && diagS.includes("0x24190") && diagS.includes("code"),
+  "structured ResolveTrace fields must render in history diagnostics (#17)",
+);
 check((sandbox.__confHi || "").includes("conf-chip hi"), "high-confidence chip missing");
 check((sandbox.__confLo || "").includes("conf-chip lo"), "low-confidence chip missing");
 check(sandbox.__confNone === "", "null confidence should yield no chip");
@@ -192,6 +200,36 @@ check(scanDiag.includes("tl-attach") && scanDiag.includes("tl-scan"), "job timel
 const wsBody = sandbox.__wsBody || "";
 check(wsBody.includes("0x10&lt;script&gt;"), "workspace value must be HTML-escaped (SEC-4)");
 check(!wsBody.includes("0x10<script>"), "workspace value must not render a raw unescaped tag (SEC-4)");
+check(wsBody.includes('tabindex="0"'), "result rows must be keyboard-focusable (a11y DESK-1)");
+check(wsBody.includes("aria-selected"), "result rows must expose selection state (a11y DESK-1)");
+
+// Static accessibility gate over the markup (DESK-1). A focused structural check rather than a full
+// axe/jsdom run, which would pull a large npm tree into a deliberately zero-dependency frontend; it
+// covers the high-impact rules (text alternatives, header semantics, landmark/dialog roles, and an
+// accessible name on every icon-only control) so a regression in those fails CI.
+const indexHtml = fs.readFileSync(path.join(__dirname, "frontend", "index.html"), "utf8");
+const imgsMissingAlt = indexHtml.match(/<img\b(?![^>]*\balt=)[^>]*>/g) || [];
+check(imgsMissingAlt.length === 0, `every <img> needs an alt (a11y): ${imgsMissingAlt.join(" ")}`);
+check(indexHtml.includes('scope="col"'), "results table headers need scope=col (a11y)");
+check(
+  indexHtml.includes('role="region"') && indexHtml.includes('aria-labelledby="insp-name"'),
+  "inspector needs role=region + aria-labelledby (a11y)",
+);
+check(
+  indexHtml.includes('role="dialog"') && indexHtml.includes('aria-labelledby="modal-title"'),
+  "modal needs role=dialog + aria-labelledby (a11y)",
+);
+for (const id of ["win-min", "win-max", "win-close", "mask-toggle", "w-source-btn"]) {
+  const tag = (indexHtml.match(new RegExp(`<button[^>]*\\bid="${id}"[^>]*>`)) || [""])[0];
+  check(
+    /\baria-label=|\btitle=|\bdata-i18n-title=/.test(tag),
+    `icon-only button #${id} needs an accessible name (aria-label/title) (a11y)`,
+  );
+}
+// Large-result-set rendering: history views cap how many rows they materialize (DESK-2).
+const cap = sandbox.__cap;
+check(cap && cap.items.length === 800 && cap.hidden === 100, "history views must cap rendered rows (DESK-2)");
+check((sandbox.__more || "").includes("more"), "a capped history view must render a more-rows notice (DESK-2)");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

@@ -100,7 +100,13 @@ impl Signature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pattern {
     pub name: String,
-    pub category: Option<String>,
+    /// The display name with any resolver suffix (`_PTR`/`_CALL`/`_OFF`/`_HDR`) stripped, resolved
+    /// once at parse time so the scan engine never re-derives it.
+    pub base: String,
+    /// The output grouping, resolved once at parse time: the `[section]` header in effect if present,
+    /// otherwise the built-in category for the base name. Always concrete (never deferred to a
+    /// consumer), which is what keeps the scan engine free of any categorizer knowledge.
+    pub category: String,
     pub note: Option<String>,
     pub signature: Signature,
     /// An explicit, typed resolution plan from a pattern schema. `None` means the resolver kind is
@@ -109,6 +115,34 @@ pub struct Pattern {
     /// A string-anchored target (located by referenced strings, not bytes). When set, `signature` is
     /// empty and the engine resolves this by string reference instead of scanning.
     pub string_anchor: Option<StringAnchor>,
+}
+
+impl Pattern {
+    /// Build a pattern, resolving the derived fields once. `explicit_category` is the `[section]`
+    /// header in effect, if any; with none, the base name's built-in category is used. Doing this
+    /// here, in the parser, is what lets the scan engine read `base`/`category` directly instead of
+    /// re-running name classification and the categorizer for every pattern on every scan.
+    fn finalize(
+        name: String,
+        explicit_category: Option<String>,
+        note: Option<String>,
+        signature: Signature,
+        resolve: Option<ResolvePlan>,
+        string_anchor: Option<StringAnchor>,
+    ) -> Self {
+        let base = Kind::classify(&name).1.to_string();
+        let category = explicit_category
+            .unwrap_or_else(|| crate::categorizer::builtin_category(&base).to_string());
+        Self {
+            name,
+            base,
+            category,
+            note,
+            signature,
+            resolve,
+            string_anchor,
+        }
+    }
 }
 
 enum Token {
@@ -359,14 +393,14 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
             let resolve = build_resolve_plan(&name, &directives).ok().flatten();
             let signature = parse_signature(&aob);
             if !signature.is_empty() || string_anchor.is_some() {
-                out.push(Pattern {
+                out.push(Pattern::finalize(
                     name,
-                    category: category.clone(),
-                    note: (!note.is_empty()).then_some(note),
+                    category.clone(),
+                    (!note.is_empty()).then_some(note),
                     signature,
                     resolve,
                     string_anchor,
-                });
+                ));
             }
         }
     }
@@ -484,17 +518,17 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
                 continue;
             }
             seen_names.insert(name.clone(), line_no);
-            out.push(Pattern {
+            out.push(Pattern::finalize(
                 name,
-                category: category.clone(),
-                note: (!note.is_empty()).then_some(note),
-                signature: Signature {
+                category.clone(),
+                (!note.is_empty()).then_some(note),
+                Signature {
                     bytes: Vec::new(),
                     mask: Vec::new(),
                 },
-                resolve: None,
-                string_anchor: Some(anchor),
-            });
+                None,
+                Some(anchor),
+            ));
             continue;
         }
         let resolve = match build_resolve_plan(&name, &directives) {
@@ -593,14 +627,14 @@ pub fn parse_patterns_strict(text: &str, arch: Arch) -> Result<ParsedPatterns, V
             });
         }
         seen_names.insert(name.clone(), line_no);
-        out.push(Pattern {
+        out.push(Pattern::finalize(
             name,
-            category: category.clone(),
-            note: (!note.is_empty()).then_some(note),
+            category.clone(),
+            (!note.is_empty()).then_some(note),
             signature,
             resolve,
-            string_anchor: None,
-        });
+            None,
+        ));
     }
 
     if issues.iter().any(|x| x.severity == ParseSeverity::Error) {
@@ -772,18 +806,25 @@ mod tests {
     }
 
     #[test]
-    fn default_category_is_unspecified() {
+    fn category_resolves_at_parse_time() {
         let p = parse_patterns("Foo = AA", Arch::X64);
-        assert_eq!(p[0].category, None);
+        // No [section] header and "Foo" matches no built-in rule, so it resolves to uncategorized,
+        // and the suffix-stripped base is stored alongside it.
+        assert_eq!(p[0].category, "uncategorized");
+        assert_eq!(p[0].base, "Foo");
+        // A resolver suffix is stripped for the base but kept in the name.
+        let q = parse_patterns("Hp_PTR = AA BB", Arch::X64);
+        assert_eq!(q[0].name, "Hp_PTR");
+        assert_eq!(q[0].base, "Hp");
     }
 
     #[test]
     fn category_sections_apply_to_following_patterns() {
         let text = "[functions]\nFoo = AA\n[offsets]\nBar = BB\nBaz = CC";
         let p = parse_patterns(text, Arch::X64);
-        assert_eq!(p[0].category.as_deref(), Some("functions"));
-        assert_eq!(p[1].category.as_deref(), Some("offsets"));
-        assert_eq!(p[2].category.as_deref(), Some("offsets"));
+        assert_eq!(p[0].category, "functions");
+        assert_eq!(p[1].category, "offsets");
+        assert_eq!(p[2].category, "offsets");
     }
 
     #[test]

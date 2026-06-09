@@ -221,13 +221,49 @@ function diagnosticsHtml(ds) {
       `<div class="diag-row"><span class="diag-k">${t("diag.confidence")}</span><span class="diag-bar"><span style="width:${c}%"></span></span><span class="diag-v">${c}/100</span></div>`,
     );
   }
-  if (ds.trace)
+  let traceShown = false;
+  if (ds.resolverTrace) {
+    try {
+      const rt = JSON.parse(ds.resolverTrace);
+      const seg = [];
+      if (rt.resolver) seg.push(esc(rt.resolver));
+      if (rt.mnemonic) seg.push(esc(rt.mnemonic));
+      if (rt.operand_kind) seg.push(esc(rt.operand_kind));
+      if (rt.target_rva != null) seg.push("&rarr; 0x" + Number(rt.target_rva).toString(16).toUpperCase());
+      if (rt.target_section) seg.push(esc(rt.target_section));
+      if (Array.isArray(rt.checks) && rt.checks.length) seg.push("&check; " + rt.checks.map(esc).join(" "));
+      if (rt.failure) seg.push("&cross; " + esc(rt.failure));
+      if (seg.length) {
+        // The structured trace is richer than the human one-liner (operand, target, checks), so when
+        // it round-tripped from history we show it in preference to the plain string.
+        parts.push(`<div class="diag-row"><span class="diag-k">${t("diag.trace")}</span><span class="diag-v mono d-addr">${seg.join("  &middot;  ")}</span></div>`);
+        traceShown = true;
+      }
+    } catch {
+      /* malformed JSON: fall back to the human string below */
+    }
+  }
+  if (!traceShown && ds.trace)
     parts.push(`<div class="diag-row"><span class="diag-k">${t("diag.trace")}</span><span class="diag-v mono d-addr">${esc(ds.trace)}</span></div>`);
   if (ds.candidates)
     parts.push(
       `<div class="diag-row"><span class="diag-k">${t("diag.candidates")}</span><span class="diag-v mono d-addr">${esc(ds.candidates.split(",").join("   "))}</span></div>`,
     );
   return parts.length ? `<div class="sym-diag">${parts.join("")}</div>` : "";
+}
+// Bound how many rows a history view materializes at once (DESK-2). A large saved scan, comparison
+// matrix, or diff otherwise builds thousands of DOM nodes; the hist-search box narrows the set, and
+// this caps the initial render, appending a notice for the remainder.
+const MAX_HIST_ROWS = 800;
+function capRows(items) {
+  return items.length > MAX_HIST_ROWS
+    ? { items: items.slice(0, MAX_HIST_ROWS), hidden: items.length - MAX_HIST_ROWS }
+    : { items, hidden: 0 };
+}
+function moreRow(hidden, cols) {
+  return hidden > 0
+    ? `<tr class="more-row"><td colspan="${cols}">${t("hist.more", { n: hidden })}</td></tr>`
+    : "";
 }
 async function scanTabHtml(tab) {
   const findings = await invoke("history_findings", { id: tab.scanId });
@@ -237,13 +273,25 @@ async function scanTabHtml(tab) {
   const bits = info && info.scan.arch === "x86" ? 32 : 64;
   const ver = g && g.build_version ? `v${esc(g.build_version)}` : t("hist.unknownVer");
   const hue = g ? hueOf(g.build_hash) : 210;
-  const rows = findings
-    .map(
-      (f) =>
-        `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}" data-trace="${esc(f.trace || "")}" data-candidates="${esc(f.candidates || "")}" data-confidence="${f.confidence ?? ""}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "-"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}${confChip(f.confidence)}</td></tr>`,
-    )
-    .join("");
-  return `<div class="hist-banner" style="--vh:${hue}"><span class="hist-banner-ver">${ver}</span><span class="hist-banner-hash">${g ? esc(g.build_hash) : ""}</span><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /><button id="hist-exp" class="btn btn-soft">${t("out.copy")}</button></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("col.address")}</th><th>${t("col.category")}</th><th>${t("col.status")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const capped = capRows(findings);
+  const rows =
+    capped.items
+      .map(
+        (f) =>
+          `<tr class="sym-row" data-kind="scan" data-bits="${bits}" data-addr="${esc(f.value || "")}" data-bytes="${esc(f.bytes || "")}" data-trace="${esc(f.trace || "")}" data-candidates="${esc(f.candidates || "")}" data-confidence="${f.confidence ?? ""}" data-resolver-trace="${escAttr(f.resolver_trace || "")}"><td class="d-name">${esc(f.name)}</td><td class="mono d-addr">${f.value ? esc(f.value) : "-"}</td><td>${catChip(f.category)}</td><td>${statusBadge(f.status)}${confChip(f.confidence)}</td></tr>`,
+      )
+      .join("") + moreRow(capped.hidden, 4);
+  let coverage = "";
+  try {
+    const gapsJson = await invoke("history_read_gaps", { id: tab.scanId });
+    if (typeof gapsJson === "string" && gapsJson) {
+      const unread = JSON.parse(gapsJson).reduce((a, x) => a + Math.max(0, (x.requested || 0) - (x.got || 0)), 0);
+      if (unread > 0) coverage = `<span class="hist-banner-cov" title="${t("diag.coverage")}">&#9888; ${t("diag.coverage")}: ${unread} B</span>`;
+    }
+  } catch {
+    /* a malformed or absent gaps blob just shows no coverage note */
+  }
+  return `<div class="hist-banner" style="--vh:${hue}"><span class="hist-banner-ver">${ver}</span><span class="hist-banner-hash">${g ? esc(g.build_hash) : ""}</span>${coverage}<input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /><button id="hist-exp" class="btn btn-soft">${t("out.copy")}</button></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("col.address")}</th><th>${t("col.category")}</th><th>${t("col.status")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 async function diffTabHtml(tab) {
   const view = await invoke("history_diff", { a: tab.a, b: tab.b });
@@ -261,32 +309,35 @@ function diffViewHtml(view, bits) {
   const tail = view.changed === true ? ` (${t("diff.changed")})` : view.changed === false ? ` (${t("diff.same")})` : "";
   const head = `${view.old_build || "?"} → ${view.new_build || "?"}${tail}`;
   const summary = `${t("diff.unchanged")} ${view.unchanged} · ${t("diff.new")} ${view.added} · ${t("diff.moved")} ${view.moved} · ${t("diff.removed")} ${view.removed}`;
-  const rows = view.rows.length
-    ? view.rows
+  const capped = capRows(view.rows);
+  const rows = capped.items.length
+    ? capped.items
         .map(
           (r) =>
             `<tr class="sym-row" data-kind="diff" data-bits="${bits}" data-old="${esc(r.old || "")}" data-new="${esc(r.new || "")}" data-old-bytes="${esc(r.old_bytes || "")}" data-new-bytes="${esc(r.new_bytes || "")}"><td class="d-name">${esc(r.name)}</td><td><span class="diff-tag ${cls[r.state]}">${label[r.state]}</span></td><td class="mono d-addr">${esc(r.old || "-")}</td><td class="mono d-addr">${esc(r.new || "-")}</td><td class="d-cat">${esc(r.category)}</td></tr>`,
         )
-        .join("")
+        .join("") + moreRow(capped.hidden, 5)
     : `<tr class="empty"><td colspan="5">${t("diff.noChanges")}</td></tr>`;
   return `<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 async function matrixTabHtml(tab) {
   const view = await invoke("history_matrix", { ids: tab.ids });
   const cols = view.columns.map((c) => `<th class="mx-col">${esc(c.label)}</th>`).join("");
-  const rows = view.rows
-    .map((r) => {
-      let prev = null;
-      const cells = r.cells
-        .map((v) => {
-          const changed = v != null && prev != null && v !== prev;
-          if (v != null) prev = v;
-          return `<td class="mono d-addr${changed ? " mx-changed" : ""}">${v ? esc(v) : "-"}</td>`;
-        })
-        .join("");
-      return `<tr><td class="d-name mx-name">${esc(r.name)}</td><td>${catChip(r.category)}</td>${cells}</tr>`;
-    })
-    .join("");
+  const capped = capRows(view.rows);
+  const rows =
+    capped.items
+      .map((r) => {
+        let prev = null;
+        const cells = r.cells
+          .map((v) => {
+            const changed = v != null && prev != null && v !== prev;
+            if (v != null) prev = v;
+            return `<td class="mono d-addr${changed ? " mx-changed" : ""}">${v ? esc(v) : "-"}</td>`;
+          })
+          .join("");
+        return `<tr><td class="d-name mx-name">${esc(r.name)}</td><td>${catChip(r.category)}</td>${cells}</tr>`;
+      })
+      .join("") + moreRow(capped.hidden, view.columns.length + 2);
   return `<div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll mx-scroll"><table class="grid-table mx-table"><thead><tr><th class="mx-name">${t("col.name")}</th><th>${t("col.category")}</th>${cols}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function selectHistScan(id) {

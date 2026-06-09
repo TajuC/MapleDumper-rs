@@ -138,12 +138,12 @@
                     <table class="grid-table">
                       <thead>
                         <tr>
-                          <th data-i18n="col.name">Name</th>
-                          <th data-i18n="col.address">Address (RVA)</th>
-                          <th data-i18n="col.signature">Signature</th>
-                          <th data-i18n="col.status">Status</th>
-                          <th data-i18n="col.type">Type</th>
-                          <th data-i18n="col.hits">Hits</th>
+                          <th scope="col" data-i18n="col.name">Name</th>
+                          <th scope="col" data-i18n="col.address">Address (RVA)</th>
+                          <th scope="col" data-i18n="col.signature">Signature</th>
+                          <th scope="col" data-i18n="col.status">Status</th>
+                          <th scope="col" data-i18n="col.type">Type</th>
+                          <th scope="col" data-i18n="col.hits">Hits</th>
                         </tr>
                       </thead>
                       <tbody id="w-body">
@@ -153,7 +153,7 @@
                   </div>
                 </div>
 
-                <aside class="panel inspector">
+                <aside class="panel inspector" role="region" aria-labelledby="insp-name">
                   <div class="insp-head">
                     <div class="insp-id">
                       <div class="insp-icon"><span class="ico" data-icon="boxes"></span></div>
@@ -167,7 +167,7 @@
                     </div>
                     <div id="insp-hint" class="insp-hint" data-i18n="insp.hint">Run a scan, then select a result to inspect its metadata and hit count.</div>
                   </div>
-                  <div class="insp-body" id="insp-body" hidden>
+                  <div class="insp-body" id="insp-body" aria-live="polite" hidden>
                     <div class="kv"><span data-i18n="insp.rva">RVA</span><b id="insp-rva" class="d-addr"></b></div>
                     <div class="kv"><span data-i18n="insp.absolute">Absolute</span><b id="insp-abs" class="d-addr"></b></div>
                     <div class="kv"><span data-i18n="insp.signature">Signature</span><b id="insp-aob" class="mono d-sig"></b></div>
@@ -422,7 +422,7 @@
     </div>
 
     <div id="modal" class="modal" hidden>
-      <div class="modal-card">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <h2 id="modal-title">Add pattern</h2>
         <div class="modal-grid">
           <label><span data-i18n="modal.name">Name</span><input id="f-name" class="d-name" type="text" spellcheck="false" placeholder="SendPacket_PTR" /></label>

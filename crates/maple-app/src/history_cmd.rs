@@ -92,6 +92,17 @@ pub fn history_findings(
     history::findings(&conn, id).map_err(|e| e.to_string())
 }
 
+/// The JSON-encoded read gaps for a saved scan (its partial-read coverage), or `None` if it read in
+/// full. The History view shows a coverage note when this is present.
+#[tauri::command]
+pub fn history_read_gaps(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<Option<String>, String> {
+    let conn = crate::state::lock_db(&state.db);
+    history::scan_read_gaps(&conn, id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn history_diff(state: tauri::State<'_, AppState>, a: i64, b: i64) -> Result<DiffView, String> {
     let conn = crate::state::lock_db(&state.db);

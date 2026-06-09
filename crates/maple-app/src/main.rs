@@ -41,6 +41,7 @@ fn main() {
             history_cmd::history_builds,
             history_cmd::history_page,
             history_cmd::history_findings,
+            history_cmd::history_read_gaps,
             history_cmd::history_diff,
             history_cmd::history_delete,
             history_cmd::history_clear,
