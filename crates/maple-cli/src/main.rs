@@ -1087,6 +1087,14 @@ struct JCand {
     reloc_safe: bool,
     per_version: Vec<JPer>,
     diags: Vec<String>,
+    relocation: Option<JRelocation>,
+}
+#[derive(Serialize)]
+struct JRelocation {
+    anchor: String,
+    support: usize,
+    corroborators: Vec<String>,
+    conflict: bool,
 }
 #[derive(Serialize)]
 struct JInput {
@@ -1188,6 +1196,12 @@ fn jcand(c: &SigCandidate) -> JCand {
             })
             .collect(),
         diags: c.diags.iter().map(|d| d.to_string()).collect(),
+        relocation: c.relocation.as_ref().map(|r| JRelocation {
+            anchor: r.anchor.clone(),
+            support: r.support,
+            corroborators: r.corroborators.clone(),
+            conflict: r.conflict,
+        }),
     }
 }
 
@@ -1646,7 +1660,12 @@ mod tests {
                 aob: Some("AA BB CC".to_string()),
             }],
             diags: vec![Diag::CalleeMismatch],
-            relocation: None,
+            relocation: Some(maple_core::RelocationLedger {
+                anchor: "string".to_string(),
+                support: 2,
+                corroborators: vec!["caller".to_string()],
+                conflict: false,
+            }),
         };
         let report = SigReport {
             arch: Arch::X64,
@@ -1703,6 +1722,11 @@ mod tests {
         assert_eq!(pv["resolved_target_rva"], "0x402ABC");
         assert_eq!(pv["target_type"], "code");
         assert_eq!(v["shortlists"][0]["candidates"][0]["rva"], "0x4010F0");
+        // The relocation evidence ledger surfaces the ensemble's vote in the JSON contract.
+        assert_eq!(v["chosen"]["relocation"]["anchor"], "string");
+        assert_eq!(v["chosen"]["relocation"]["support"], 2);
+        assert_eq!(v["chosen"]["relocation"]["corroborators"][0], "caller");
+        assert_eq!(v["chosen"]["relocation"]["conflict"], false);
 
         // Field names the core types do not themselves carry are pinned here.
         assert_eq!(v["chosen"]["bytes"], 16);
