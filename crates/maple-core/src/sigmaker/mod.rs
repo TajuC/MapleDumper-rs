@@ -226,6 +226,7 @@ mod identity;
 mod imports;
 mod model;
 mod relocate;
+mod strands;
 mod validate;
 mod vtable;
 use aob::collapse_aob_ranges;
