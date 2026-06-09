@@ -14,11 +14,6 @@
 //! and measured before it would join the default decision path; this module is the algorithm plus its
 //! synthetic correctness tests, exercised without a real image.
 
-// Foundation module: the algorithm and its synthetic correctness tests land here; it is wired into the
-// ensemble only after a real-corpus efficacy measurement (Phase 8 is gated), so it is not yet called from
-// non-test code.
-#![allow(dead_code)]
-
 use std::collections::{BTreeSet, HashMap};
 
 use iced_x86::{
@@ -31,6 +26,11 @@ use super::{bitness, read_at};
 const STRAND_MAX_INSTRS: usize = 80;
 const STRAND_WINDOW: usize = STRAND_MAX_INSTRS * 8;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// A function with fewer than this many observable output values is too thin to identify by its data
+/// flow: a couple of generic outputs match half the image, so the strand channel declines rather than
+/// guess. The relocation driver and the corpus sweep both gate on this.
+pub(super) const STRAND_MIN_OUTPUTS: usize = 4;
 
 fn reads(a: OpAccess) -> bool {
     matches!(
@@ -132,6 +132,40 @@ pub(super) fn strand_similarity(a: &BTreeSet<u64>, b: &BTreeSet<u64>) -> f64 {
     (2.0 * inter as f64) / (a.len() + b.len()) as f64
 }
 
+/// The candidate (by index into `cand_strands`) whose strand set is most similar to `reference`, together
+/// with that similarity and the best similarity of any *other* candidate (the runner-up), so the caller can
+/// demand a uniqueness margin. Candidates whose entry is within `GAP` bytes of the winner are treated as the
+/// same site shifted by an instruction, not a distinct rival, mirroring `identity::best_fingerprint_match`.
+/// `None` only when the candidate list is empty.
+#[must_use]
+pub(super) fn best_strand_match(
+    reference: &BTreeSet<u64>,
+    cand_rvas: &[usize],
+    cand_strands: &[BTreeSet<u64>],
+) -> Option<(usize, f64, f64)> {
+    const GAP: usize = 16;
+    let mut best: Option<(usize, f64)> = None;
+    let mut runner = 0.0f64;
+    for (i, s) in cand_strands.iter().enumerate() {
+        let sim = strand_similarity(reference, s);
+        match best {
+            Some((bi, bsim)) if sim > bsim => {
+                if cand_rvas[bi].abs_diff(cand_rvas[i]) >= GAP {
+                    runner = runner.max(bsim);
+                }
+                best = Some((i, sim));
+            }
+            Some((bi, _)) => {
+                if cand_rvas[bi].abs_diff(cand_rvas[i]) >= GAP {
+                    runner = runner.max(sim);
+                }
+            }
+            None => best = Some((i, sim)),
+        }
+    }
+    best.map(|(i, sim)| (i, sim, runner))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +227,45 @@ mod tests {
         assert!(
             strand_similarity(&a, &c) < 1.0,
             "a different computation must not be a perfect strand match"
+        );
+    }
+
+    #[test]
+    fn best_strand_match_picks_the_winner_and_reports_a_distinct_runner_up() {
+        let reference: BTreeSet<u64> = [1, 2, 3, 4].into_iter().collect();
+        // Candidate 1 (rva 0x400) is the perfect match; candidate 2 (rva 0x800, far enough to count as a
+        // distinct rival) overlaps half; candidate 0 (rva 0x100) shares nothing.
+        let cand_rvas = [0x100usize, 0x400, 0x800];
+        let cand_strands: Vec<BTreeSet<u64>> = vec![
+            [9, 8, 7].into_iter().collect(),
+            [1, 2, 3, 4].into_iter().collect(),
+            [1, 2, 5, 6].into_iter().collect(),
+        ];
+        let (idx, sim, runner) =
+            best_strand_match(&reference, &cand_rvas, &cand_strands).expect("a winner");
+        assert_eq!(idx, 1, "the identical strand set wins");
+        assert!((sim - 1.0).abs() < 1e-9, "the winner is a perfect match");
+        assert!(
+            (runner - 0.5).abs() < 1e-9,
+            "the runner-up is the half-overlapping rival, not the winner itself (got {runner})"
+        );
+    }
+
+    #[test]
+    fn best_strand_match_ignores_a_near_duplicate_window_as_its_own_runner_up() {
+        // Two entries a few bytes apart are the same site shifted by an instruction; the second must not be
+        // reported as a distinct runner-up, so a lone true match keeps a zero runner-up (full margin).
+        let reference: BTreeSet<u64> = [1, 2, 3, 4].into_iter().collect();
+        let cand_rvas = [0x400usize, 0x404];
+        let cand_strands: Vec<BTreeSet<u64>> = vec![
+            [1, 2, 3, 4].into_iter().collect(),
+            [1, 2, 3, 4].into_iter().collect(),
+        ];
+        let (_, _, runner) =
+            best_strand_match(&reference, &cand_rvas, &cand_strands).expect("a winner");
+        assert!(
+            runner.abs() < 1e-9,
+            "a within-gap near-duplicate is not a distinct rival (got {runner})"
         );
     }
 }

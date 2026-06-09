@@ -1029,3 +1029,184 @@ pub(super) fn constant_relocate(
         relocation: None,
     })
 }
+
+// Data-flow strand relocation gates (Phase 8). The strand set captures WHAT a function computes, which a
+// recompile preserves even as it rewrites bytes, registers, and block order; the measured separation on the
+// real lineage is wide (true cross-version twins ~0.90, unrelated functions ~0.22 within a lineage), so the
+// similarity floor sits well above the impostor band and the margin rejects a near-tie between two plausible
+// twins. These two plus a mutual-best round-trip are the whole gate: the channel carries no content of the
+// target itself, so it must DECLINE rather than guess whenever the evidence is ambiguous. Tuned against the
+// `--ignored` sweep, which judges its false positives against the independent string oracle and must read 0.
+pub(super) const STRAND_MIN_SIMILARITY: f64 = 0.78;
+pub(super) const STRAND_MIN_MARGIN: f64 = 0.10;
+
+/// Cross-version relocation by static data-flow STRAND similarity (Phase 8), for a function a true recompile
+/// rewrote past the byte, encoding, and mnemonic anchors but whose computation is source-determined and so
+/// survives. The reference function's strand set (each output value hashed by the data flow that produced it,
+/// register- and order-invariant; see [`strands`]) is matched against every decode-verified function entry in
+/// each build. A build contributes only when its single best entry clears [`STRAND_MIN_SIMILARITY`], leads the
+/// runner-up by [`STRAND_MIN_MARGIN`], AND is mutual-best (that entry's own best strand match back in the
+/// reference is the target function, not some other), so a one-directional coincidence cannot slip through.
+/// Content-free like the graph anchor, so capped at grade B. Emits when the reference plus one other build are
+/// pinned. x86 only. This is an OPT-IN channel: it joins the ensemble only when explicitly enabled (it adds no
+/// coverage the cheaper channels do not already carry within a lineage and declines across the v95 break).
+pub(super) fn strand_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let ref_target = strands::strand_set(&images[ref_idx], entry);
+    // Too few observable outputs to identify by data flow: decline rather than match broadly.
+    if ref_target.len() < strands::STRAND_MIN_OUTPUTS {
+        return None;
+    }
+    // The reverse-search universe for the mutual-best test: every reference function entry plus the target
+    // itself (in case it is reached mid-function and is not its own decode-verified entry). Strand sets are
+    // computed once here and reused across every build, so the reference is never re-decoded per build.
+    let ref_model = model::AnalysisModel::build(&images[ref_idx]);
+    let mut ref_rvas: Vec<usize> = ref_model.entries().to_vec();
+    if !ref_rvas.contains(&entry) {
+        ref_rvas.push(entry);
+    }
+    let ref_strands: Vec<_> = ref_rvas
+        .iter()
+        .map(|&r| strands::strand_set(&images[ref_idx], r))
+        .collect();
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<Option<FnIdentity>> = Vec::with_capacity(required.len());
+    let mut diags: Vec<Diag> = Vec::new();
+    let mut min_sim = 1.0f64;
+    let mut reached = 0usize;
+    for &idx in required {
+        let located = if idx == ref_idx {
+            Some(entry)
+        } else {
+            let img = &images[idx];
+            let b_rvas: Vec<usize> = model::AnalysisModel::build(img).entries().to_vec();
+            if b_rvas.is_empty() {
+                None
+            } else {
+                let b_strands: Vec<_> = b_rvas
+                    .iter()
+                    .map(|&r| strands::strand_set(img, r))
+                    .collect();
+                match strands::best_strand_match(&ref_target, &b_rvas, &b_strands) {
+                    Some((bi, sim, runner))
+                        if sim >= STRAND_MIN_SIMILARITY && sim - runner >= STRAND_MIN_MARGIN =>
+                    {
+                        // Mutual-best: the matched function's own best strand match back in the reference
+                        // must be the target, not merely some function that happens to look like it.
+                        match strands::best_strand_match(&b_strands[bi], &ref_rvas, &ref_strands) {
+                            Some((ri, _, _)) if ref_rvas[ri] == entry => {
+                                min_sim = min_sim.min(sim);
+                                Some(b_rvas[bi])
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+        };
+        match located {
+            Some(rva) => {
+                reached += 1;
+                idents.push(Some(fn_identity(&images[idx], rva)));
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: Some(rva as u64),
+                    resolved_target_rva: Some(rva as u64),
+                    target_kind: Some(TargetKind::Code),
+                    fingerprint_similarity: None,
+                    aob: single_build_aob(&images[idx], rva, opts),
+                });
+            }
+            None => {
+                diags.push(Diag::MissingInImage {
+                    label: images[idx].label.clone(),
+                });
+                idents.push(None);
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: None,
+                    resolved_target_rva: None,
+                    target_kind: None,
+                    fingerprint_similarity: None,
+                    aob: None,
+                });
+            }
+        }
+    }
+    // The reference plus at least one other build are needed to claim a cross-version relocation.
+    if reached < 2 {
+        return None;
+    }
+    let ref_ident = required
+        .iter()
+        .position(|&i| i == ref_idx)
+        .and_then(|p| idents[p].clone());
+    for (pv, id) in per_version.iter_mut().zip(&idents) {
+        if let (Some(id), Some(rid)) = (id, &ref_ident) {
+            pv.fingerprint_similarity = Some(rid.similarity(id));
+        }
+    }
+    // Semantic, content-free evidence: the data flow agrees but no byte or string proves the target itself,
+    // so the grade is held at B. Confidence rises with the share of builds a mutual-best match reached and
+    // with the weakest accepted similarity; entropy is zero (no fixed code bytes back the target).
+    let cross_build = ((reached as f64 / required.len() as f64) * 100.0).round() as u32;
+    let final_score = (55.0 + 0.25 * f64::from(cross_build)).round() as u32;
+    let scores = SubScores {
+        uniqueness: 60,
+        stability: 75,
+        entropy: 0,
+        semantic: 72,
+        resolver_confidence: (min_sim * 100.0).round() as u32,
+        cross_build,
+        final_score,
+    };
+    let mut reasons = vec![format!(
+        "relocated to {reached} of {} build(s) by data-flow strand similarity: the matched function computes \
+         the same set of output values (>= {:.0}% strand overlap, mutual-best), with no byte or string anchor \
+         on the target itself",
+        required.len(),
+        min_sim * 100.0
+    )];
+    if reached < required.len() {
+        reasons.push(format!(
+            "{} build(s) could not be reached by a confident, mutual-best strand match and are left unpinned",
+            required.len() - reached
+        ));
+    }
+    // A compact, stable label (not a re-scannable byte pattern): a fold of the reference strand set.
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &s in &ref_target {
+        h ^= s;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let grade = scoring::grade_from(final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob: format!("@strand={}:{:016X}", ref_target.len(), h),
+        suffix: Suffix::None,
+        grade,
+        score: final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        gated: false,
+        packed: false,
+        scores,
+        reasons,
+        per_version,
+        diags,
+        relocation: None,
+    })
+}

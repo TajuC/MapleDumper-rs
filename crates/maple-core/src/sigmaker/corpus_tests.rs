@@ -498,6 +498,104 @@ fn cross_version_relocation_coverage_and_false_positive_sweep() {
         t.elapsed().as_secs_f64()
     );
 
+    // STRAND (Phase 8, opt-in channel): match each v83 function's data-flow strand set against every
+    // decode-verified function entry in a target build under the exact production gate (similarity floor +
+    // uniqueness margin + mutual-best). The channel cannot grade itself, so its false positives are judged
+    // ONLY against the independent string oracle: when the v83 function has an isolating string, the string
+    // names the true target function, and a strand landing in a different enclosing function is a confirmed
+    // wrong address; a function with no string is left inconclusive, as the harness does for any landing with
+    // no independent oracle.
+    const STRAND_CAP: usize = 80;
+    let strand_ref_rvas: Vec<usize> = model::AnalysisModel::build(rf).entries().to_vec();
+    let strand_ref_sets: Vec<_> = strand_ref_rvas
+        .iter()
+        .map(|&r| strands::strand_set(rf, r))
+        .collect();
+    // Resolve a v83 function into a target build by strand, returning the landing only when it clears the
+    // full production gate (forward similarity + margin, then mutual-best back to the origin).
+    let strand_locate = |ent: usize,
+                         ref_set: &std::collections::BTreeSet<u64>,
+                         tg_rvas: &[usize],
+                         tg_sets: &[std::collections::BTreeSet<u64>]|
+     -> Option<usize> {
+        let (bi, sim, runner) = strands::best_strand_match(ref_set, tg_rvas, tg_sets)?;
+        if sim < relocate::STRAND_MIN_SIMILARITY || sim - runner < relocate::STRAND_MIN_MARGIN {
+            return None; // ambiguous or weak: the channel declines, not a wrong address
+        }
+        let (ri, _, _) =
+            strands::best_strand_match(&tg_sets[bi], &strand_ref_rvas, &strand_ref_sets)?;
+        (strand_ref_rvas[ri] == ent).then(|| tg_rvas[bi]) // gate on mutual-best
+    };
+    // Judge the channel against one target build over a population of (v83 entry, optional string anchor for
+    // the independent FP oracle).
+    let strand_judge =
+        |tgi: &ImageInput, pop: &[(usize, Option<crate::domain::StringAnchor>)]| -> Stats {
+            let tg_rvas: Vec<usize> = model::AnalysisModel::build(tgi).entries().to_vec();
+            let tg_sets: Vec<_> = tg_rvas
+                .iter()
+                .map(|&r| strands::strand_set(tgi, r))
+                .collect();
+            let mut s = Stats::default();
+            for (ent, sa) in pop {
+                let ref_set = strands::strand_set(rf, *ent);
+                if ref_set.len() < strands::STRAND_MIN_OUTPUTS {
+                    continue;
+                }
+                s.made += 1;
+                let Some(r) = strand_locate(*ent, &ref_set, &tg_rvas, &tg_sets) else {
+                    continue;
+                };
+                s.resolved += 1;
+                let re = enc(tgi, r);
+                if validate(tgi, r) {
+                    s.validated += 1;
+                }
+                s.note_id(idsim(rf, *ent, tgi, re));
+                let rt = match sa.as_ref().and_then(|sa| resolve_string_anchor(tgi, sa)) {
+                    Some(truth) if enc(tgi, truth) == re => 1,
+                    Some(_) => -1,
+                    None => 0,
+                };
+                s.note_rt(rt);
+            }
+            s
+        };
+    // The headline hop v83 -> v95.1 (the major class refactor) is the table row, measured over the stride
+    // sample with an opportunistic string oracle. To demonstrate the FP floor where the channel actually
+    // FIRES (it declines across the v95 break) and where ground truth EXISTS, a second pass runs the
+    // string-anchored population over the clean within-lineage v83 -> v84 recompile, so every resolution is
+    // judged against the string that names its true function. v84 is chain index 5.
+    let t = std::time::Instant::now();
+    let sample_pop: Vec<(usize, Option<crate::domain::StringAnchor>)> = sample
+        .iter()
+        .take(STRAND_CAP)
+        .map(|&e| {
+            let ent = enc(rf, e);
+            (ent, make_string_anchor(rf, ent))
+        })
+        .collect();
+    let oracle_pop: Vec<(usize, Option<crate::domain::StringAnchor>)> = str_anchors
+        .iter()
+        .take(STRAND_CAP)
+        .map(|(e, sa)| (enc(rf, *e), Some(sa.clone())))
+        .collect();
+    let s_strand = strand_judge(tg, &sample_pop);
+    let s_strand_oracle = strand_judge(&chain[5], &oracle_pop);
+    eprintln!(
+        "strand pass: v83 -> v95.1 {} made / {} resolved (rt {}/{}/{}); v83 -> v84 string-oracle population {} made / {} resolved (rt {}/{}/{}) in {:.0}s",
+        s_strand.made,
+        s_strand.resolved,
+        s_strand.rt_pass,
+        s_strand.rt_fail,
+        s_strand.rt_inc,
+        s_strand_oracle.made,
+        s_strand_oracle.resolved,
+        s_strand_oracle.rt_pass,
+        s_strand_oracle.rt_fail,
+        s_strand_oracle.rt_inc,
+        t.elapsed().as_secs_f64()
+    );
+
     // CALLER over its true population: the non-string callees of the string-bridging functions. This
     // is exactly who caller-relative anchoring serves (a function with no handle of its own, reachable
     // through a caller that has one). Only a callee reached by more than CALLER_MAX_FANIN call sites is
@@ -729,6 +827,7 @@ fn cross_version_relocation_coverage_and_false_positive_sweep() {
     row("import", &s_imp);
     row("constant", &s_const);
     row("caller", &s_cal);
+    row("strand", &s_strand);
     eprintln!(
         "  {:<7} {:>5} {:>9} {:>7}   {:>6}   {:>3}/{:<3}/{:<3} {:>5}   {:>4}",
         "vtable",
@@ -796,6 +895,18 @@ fn cross_version_relocation_coverage_and_false_positive_sweep() {
             "conclusive round-trip false positives must stay a small minority ({fp_fail}/{fp_total})"
         );
     }
+    // The opt-in strand channel must hold the false-positive floor at zero against the independent string
+    // oracle, on both the major break and the within-lineage hop, before it may join the default decision
+    // path; a single confirmed wrong address fails the gate.
+    assert_eq!(
+        s_strand.rt_fail + s_strand_oracle.rt_fail,
+        0,
+        "strand channel produced an independently-confirmed wrong address (v95.1 {} pass / {} fail; v84 string-oracle {} pass / {} fail); it must read FP 0 to join the default path",
+        s_strand.rt_pass,
+        s_strand.rt_fail,
+        s_strand_oracle.rt_pass,
+        s_strand_oracle.rt_fail
+    );
 }
 
 // Grade calibration on the real corpus (run with `--ignored`): generate a cross-version signature

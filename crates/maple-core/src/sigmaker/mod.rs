@@ -235,7 +235,8 @@ use ensemble::{anchor_landing, ensemble_decide};
 pub use identity::*;
 use relocate::{
     caller_relocate, constant_relocate, encoding_relocate, fingerprint_relocate, graph_relocate,
-    import_relocate, relocation_shortlists, string_anchor_candidate, vtable_relocate,
+    import_relocate, relocation_shortlists, strand_relocate, string_anchor_candidate,
+    vtable_relocate,
 };
 // The relocation anchors' tuned constants live in `relocate` now; the corpus harnesses assert against
 // them, so re-export everything there for the test modules (test-only, so nothing is dead in the library).
@@ -756,6 +757,7 @@ enum AnchorKind {
     Vtable,
     Encoding,
     Fingerprint,
+    Strand,
 }
 
 impl AnchorKind {
@@ -769,8 +771,20 @@ impl AnchorKind {
             AnchorKind::Vtable => "vtable",
             AnchorKind::Encoding => "encoding",
             AnchorKind::Fingerprint => "fingerprint",
+            AnchorKind::Strand => "strand",
         }
     }
+}
+
+/// The data-flow strand channel (Phase 8) is opt-in: it adds no coverage the cheaper channels do not already
+/// carry within a lineage and declines across the v95 break, so it stays out of the default decision path and
+/// joins the ensemble only when `MAPLE_STRAND_CHANNEL` is set to `1`, `on`, or `true`. Keeping it behind a
+/// flag preserves the byte-stable golden snapshot and the measured false-positive floor on the default path.
+fn strand_channel_enabled() -> bool {
+    std::env::var_os("MAPLE_STRAND_CHANNEL").is_some_and(|v| {
+        let v = v.to_string_lossy();
+        v == "1" || v.eq_ignore_ascii_case("on") || v.eq_ignore_ascii_case("true")
+    })
 }
 
 /// Relocate the target by every applicable anchor and decide by cross-anchor agreement, instead of taking
@@ -790,7 +804,7 @@ fn ensemble_relocate(
 ) -> Option<SigCandidate> {
     type AnchorFn = fn(&[ImageInput], &[usize], usize, u64, &SigOptions) -> Option<SigCandidate>;
     // Descending channel strength, so a tie in support and grade breaks toward the more precise anchor.
-    let anchors: [(AnchorKind, AnchorFn); 8] = [
+    let mut anchors: Vec<(AnchorKind, AnchorFn)> = vec![
         (AnchorKind::String, string_anchor_candidate),
         (AnchorKind::Import, import_relocate),
         (AnchorKind::Constant, constant_relocate),
@@ -800,6 +814,11 @@ fn ensemble_relocate(
         (AnchorKind::Encoding, encoding_relocate),
         (AnchorKind::Fingerprint, fingerprint_relocate),
     ];
+    // The strand channel is fuzziest (content-free, semantic), so it joins last where a tie breaks away from
+    // it, and only when explicitly opted in.
+    if strand_channel_enabled() {
+        anchors.push((AnchorKind::Strand, strand_relocate));
+    }
     let mut found: Vec<(AnchorKind, SigCandidate)> = Vec::new();
     for (kind, f) in anchors {
         if let Some(c) = f(images, required, ref_idx, ref_rva, opts) {
