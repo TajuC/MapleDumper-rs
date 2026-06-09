@@ -290,6 +290,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 mod callers;
 mod constants;
 mod encoding;
+mod graph;
 mod identity;
 mod imports;
 mod model;
@@ -1006,6 +1007,144 @@ fn caller_relocate(
         suffix: Suffix::None,
         grade,
         score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        gated: false,
+        packed: false,
+        scores,
+        reasons,
+        per_version,
+        diags,
+        relocation: None,
+    })
+}
+
+// Graph-alignment bounds. The relocation is positional (it carries no content of the target itself), so
+// it rests entirely on the consensus discipline inside `graph::align` (>= 2 independent matched neighbours
+// agree, strict-unique maximum, mutual-best). These two bound the per-relocation seeding to the target's
+// call-graph neighbourhood instead of the whole image: depth-2 reaches the neighbours' neighbours so the
+// alignment has room to propagate, and the cap keeps a densely connected hub from blowing up the seed set.
+const GRAPH_DEPTH: usize = 2;
+const GRAPH_CAP: usize = 256;
+
+/// Relocate a function across builds by its POSITION in the matched call graph (Phase 7), for a target no
+/// content anchor pins, typically a method the v95 class refactor moved past the vtable matcher. The
+/// target's call-graph neighbourhood is seeded with the 1:1 string anchors among it (made once in the
+/// reference, re-resolved per build), then [`graph::align`] propagates the correspondence by neighbour
+/// consensus. align commits the target only on >= 2 agreeing neighbours, a strict-unique maximum, and
+/// mutual-best, so a positional match cannot be a coincidence; this driver adds no looser gate. Capped at
+/// grade B: there is no byte or string proof of the target itself, only of its neighbours. x86 / PE32 only.
+fn graph_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    if !matches!(images[ref_idx].arch, Arch::X86) {
+        return None;
+    }
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let ref_model = model::AnalysisModel::build(&images[ref_idx]);
+    let ref_graph = graph::CallGraph::build(&images[ref_idx], &ref_model);
+    let candidates = ref_graph.neighbourhood(entry, GRAPH_DEPTH, GRAPH_CAP);
+    // Make the seed anchors once in the reference; each build re-resolves them. Need at least two, since
+    // a single neighbour cannot reach the consensus floor.
+    let anchors = graph::anchor_candidates(&images[ref_idx], &candidates);
+    if anchors.len() < 2 {
+        return None;
+    }
+
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<Option<FnIdentity>> = Vec::with_capacity(required.len());
+    let mut diags: Vec<Diag> = Vec::new();
+    let mut reached = 0usize;
+    for &idx in required {
+        let located = if idx == ref_idx {
+            Some(entry)
+        } else {
+            let b_model = model::AnalysisModel::build(&images[idx]);
+            let b_graph = graph::CallGraph::build(&images[idx], &b_model);
+            let seeds = graph::resolve_seeds(&images[idx], &anchors);
+            if seeds.len() < 2 {
+                None
+            } else {
+                graph::align(&ref_graph, &b_graph, &seeds)
+                    .get(&entry)
+                    .copied()
+            }
+        };
+        match located {
+            Some(rva) => {
+                reached += 1;
+                idents.push(Some(fn_identity(&images[idx], rva)));
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: Some(rva as u64),
+                    resolved_target_rva: Some(rva as u64),
+                    target_kind: Some(TargetKind::Code),
+                    fingerprint_similarity: None,
+                    aob: single_build_aob(&images[idx], rva, opts),
+                });
+            }
+            None => {
+                diags.push(Diag::MissingInImage {
+                    label: images[idx].label.clone(),
+                });
+                idents.push(None);
+                per_version.push(PerVersion {
+                    label: images[idx].label.clone(),
+                    match_rva: None,
+                    resolved_target_rva: None,
+                    target_kind: None,
+                    fingerprint_similarity: None,
+                    aob: None,
+                });
+            }
+        }
+    }
+    // The reference plus at least one other build are needed to claim a cross-version relocation.
+    if reached < 2 {
+        return None;
+    }
+    let reached_ref = required
+        .iter()
+        .position(|&i| i == ref_idx)
+        .and_then(|p| idents[p].clone());
+    for (pv, id) in per_version.iter_mut().zip(&idents) {
+        if let (Some(id), Some(rid)) = (id, &reached_ref) {
+            pv.fingerprint_similarity = Some(rid.similarity(id));
+        }
+    }
+    // Positional evidence: content-free, so the grade is held at B even though the consensus is strict.
+    // Confidence rises with the share of builds a confident graph path reached; entropy is zero (no fixed
+    // code bytes back the target itself).
+    let cross_build = ((reached as f64 / required.len() as f64) * 100.0).round() as u32;
+    let final_score = (55.0 + 0.25 * f64::from(cross_build)).round() as u32;
+    let scores = SubScores {
+        uniqueness: 60,
+        stability: 80,
+        entropy: 0,
+        semantic: 55,
+        resolver_confidence: 62,
+        cross_build,
+        final_score,
+    };
+    let reasons = vec![format!(
+        "relocated to {reached} of {} build(s) by call-graph consensus: at least two independent \
+         string-anchored neighbours agree on the landing and it is mutual-best, with no content anchor on \
+         the target itself",
+        required.len()
+    )];
+    let grade = scoring::grade_from(final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob: "@graph".to_string(),
+        suffix: Suffix::None,
+        grade,
+        score: final_score,
         bytes_len: 0,
         fixed: 0,
         wildcards: 0,
@@ -1813,6 +1952,7 @@ enum AnchorKind {
     Import,
     Constant,
     Caller,
+    Graph,
     Vtable,
     Encoding,
     Fingerprint,
@@ -1825,6 +1965,7 @@ impl AnchorKind {
             AnchorKind::Import => "import",
             AnchorKind::Constant => "constant",
             AnchorKind::Caller => "caller",
+            AnchorKind::Graph => "graph",
             AnchorKind::Vtable => "vtable",
             AnchorKind::Encoding => "encoding",
             AnchorKind::Fingerprint => "fingerprint",
@@ -1940,11 +2081,12 @@ fn ensemble_relocate(
 ) -> Option<SigCandidate> {
     type AnchorFn = fn(&[ImageInput], &[usize], usize, u64, &SigOptions) -> Option<SigCandidate>;
     // Descending channel strength, so a tie in support and grade breaks toward the more precise anchor.
-    let anchors: [(AnchorKind, AnchorFn); 7] = [
+    let anchors: [(AnchorKind, AnchorFn); 8] = [
         (AnchorKind::String, string_anchor_candidate),
         (AnchorKind::Import, import_relocate),
         (AnchorKind::Constant, constant_relocate),
         (AnchorKind::Caller, caller_relocate),
+        (AnchorKind::Graph, graph_relocate),
         (AnchorKind::Vtable, vtable_relocate),
         (AnchorKind::Encoding, encoding_relocate),
         (AnchorKind::Fingerprint, fingerprint_relocate),
@@ -5129,6 +5271,106 @@ mod tests {
     //
     // Functions legitimately absent in v95.1 (deleted over twelve versions) make the anchors DECLINE, not
     // misfire, so they lower coverage without inflating the false-positive count: declining is correct.
+    // Phase 7: measure the global call-graph alignment on the real lineage. It seeds with the 1:1 string
+    // anchors between two builds and propagates the correspondence by neighbour consensus; a function it
+    // commits BEYOND the seeds is one relocated by graph position alone (the coverage no content anchor
+    // reaches). The honesty check is an INDEPENDENT reverse alignment (seed-and-propagate the other way):
+    // a forward match `a -> b` whose target relocates back to a DIFFERENT function under the reverse
+    // alignment is a confirmed wrong address, and that count must be zero. Measured on a dense
+    // within-lineage hop (v83 -> v84, where seeds are plentiful and propagation should reach widely) and
+    // the hard major break (v83 -> v95.1, where the vtable chain collapses to zero).
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn graph_alignment_propagates_beyond_seeds_and_is_reverse_consistent() {
+        use crate::fileimage::FileImage;
+        use std::collections::BTreeSet;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = [
+            "GMS_v83.1_U_DEVM.exe",
+            "GMS_v84.1_U_DEVM.exe",
+            "GMS_v95.1_U_DEVM.exe",
+        ];
+        if names.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i83 = FileImage::open(&dir.join(names[0])).expect("open v83");
+        let i84 = FileImage::open(&dir.join(names[1])).expect("open v84");
+        let i95 = FileImage::open(&dir.join(names[2])).expect("open v95.1");
+        let v83 = mk("v83", &i83);
+        let v84 = mk("v84", &i84);
+        let v95 = mk("v95.1", &i95);
+
+        let m83 = model::AnalysisModel::build(&v83);
+        let g83 = graph::CallGraph::build(&v83, &m83);
+        // The candidate universe for seeding is v83's call-graph functions; make their string anchors once
+        // (the expensive image-scanning step) and re-resolve per target build.
+        let v83_fns: Vec<usize> = m83.entries().to_vec();
+        let anchors = graph::anchor_candidates(&v83, &v83_fns);
+        eprintln!(
+            "=== Phase 7 graph alignment (v83 anchorable functions: {} of {} entries) ===",
+            anchors.len(),
+            v83_fns.len()
+        );
+
+        let mut total_inconsistent = 0usize;
+        for (label, tgt) in [("v84", &v84), ("v95.1", &v95)] {
+            let mt = model::AnalysisModel::build(tgt);
+            let gt = graph::CallGraph::build(tgt, &mt);
+            let seeds = graph::resolve_seeds(tgt, &anchors);
+            let rev_seeds: Vec<(usize, usize)> = seeds.iter().map(|&(a, b)| (b, a)).collect();
+            let fwd = graph::align(&g83, &gt, &seeds);
+            let rev = graph::align(&gt, &g83, &rev_seeds);
+            let seed_a: BTreeSet<usize> = seeds.iter().map(|&(a, _)| a).collect();
+
+            let (mut propagated, mut consistent, mut inconsistent, mut unverifiable) =
+                (0usize, 0usize, 0usize, 0usize);
+            for (&a, &b) in &fwd {
+                if seed_a.contains(&a) {
+                    continue; // a seed, not a graph-propagated match
+                }
+                propagated += 1;
+                match rev.get(&b) {
+                    Some(&back) if back == a => consistent += 1,
+                    Some(_) => inconsistent += 1,
+                    None => unverifiable += 1,
+                }
+            }
+            total_inconsistent += inconsistent;
+            eprintln!(
+                "v83 -> {label}: seeds {} | propagated beyond seeds {propagated} | reverse-consistent \
+                 {consistent} / INCONSISTENT {inconsistent} / unverifiable {unverifiable}",
+                seeds.len()
+            );
+        }
+
+        // The false-positive gate: the independent reverse alignment must never contradict a forward
+        // propagated match. Inconsistency is a confirmed wrong address; it must be zero on every hop.
+        assert_eq!(
+            total_inconsistent, 0,
+            "graph alignment produced a reverse-inconsistent (confirmed wrong) match"
+        );
+    }
+
     #[test]
     #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
     #[allow(clippy::too_many_lines)]

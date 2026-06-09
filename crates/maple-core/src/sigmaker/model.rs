@@ -89,6 +89,13 @@ impl AnalysisModel {
         &self.entries
     }
 
+    /// Every decode-verified direct call as `(call-site rva, callee-entry rva)`. The graph aligner maps
+    /// each site to its enclosing function to build the function-level call graph; the site order within
+    /// a function (ascending rva) is its call-site rank.
+    pub(super) fn call_sites(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.edges.iter().map(|e| (e.site, e.target))
+    }
+
     /// The enclosing functions of every decode-verified call site that targets `target_rva`, ascending
     /// and de-duplicated (several call sites can sit in one function).
     pub(super) fn callers_of(&self, img: &ImageInput, target_rva: usize) -> Vec<usize> {
