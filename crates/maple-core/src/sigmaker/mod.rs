@@ -292,6 +292,7 @@ mod constants;
 mod encoding;
 mod identity;
 mod imports;
+mod model;
 mod vtable;
 pub use identity::*;
 

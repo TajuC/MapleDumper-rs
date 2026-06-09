@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction, OpKind, Register};
 
 use super::types::ImageInput;
-use super::{bitness, read_at, read_region};
+use super::{bitness, read_at};
 use crate::pattern::Arch;
 
 /// The recompile-stable identity of a function as the set of imported API names it calls directly.
@@ -119,12 +119,6 @@ pub(super) fn import_map(img: &ImageInput) -> HashMap<usize, String> {
     out
 }
 
-fn in_code(img: &ImageInput, abs: usize) -> bool {
-    img.code_regions
-        .iter()
-        .any(|r| (r.base..r.base + r.size).contains(&abs))
-}
-
 /// The set of imported API names a function at `rva` calls directly (`call`/`jmp [IAT slot]`), decoded
 /// to its first `ret` or [`SCAN_INSTRS`].
 pub(super) fn import_set(
@@ -175,25 +169,6 @@ pub(super) fn import_set(
     out
 }
 
-// Every E8 rel32 call target in the image's code: a clean set of real function entries to resolve
-// against (a recompiled function that calls distinctive imports is itself called somewhere).
-fn function_entries(img: &ImageInput) -> Vec<usize> {
-    let mut set = BTreeSet::new();
-    for region in &img.code_regions {
-        let bytes = read_region(img.source, region.base, region.size);
-        for (i, w) in bytes.windows(5).enumerate() {
-            if w[0] == 0xE8 {
-                let rel = i32::from_le_bytes([w[1], w[2], w[3], w[4]]) as i64;
-                let t = (region.base + i + 5) as i64 + rel;
-                if t > 0 && in_code(img, t as usize) {
-                    set.insert(t as usize - img.base);
-                }
-            }
-        }
-    }
-    set.into_iter().collect()
-}
-
 /// Build an import anchor for the function at `rva`: the set of imports it calls directly, if it is
 /// distinctive enough ([`MIN_IMPORTS`]). Uniqueness is validated at resolve time. x86 only.
 #[must_use]
@@ -212,7 +187,7 @@ pub(super) fn resolve_import_anchor(img: &ImageInput, anchor: &ImportAnchor) -> 
     let map = import_map(img);
     let want: BTreeSet<&str> = anchor.names.iter().map(String::as_str).collect();
     let mut found = None;
-    for rva in function_entries(img) {
+    for &rva in super::model::AnalysisModel::build(img).entries() {
         let set = import_set(img, &map, rva);
         if set.len() == want.len() && set.iter().map(String::as_str).eq(want.iter().copied()) {
             if found.is_some() {

@@ -8,15 +8,11 @@
 //! by raw call index) survives the call being reordered across a recompile, and a uniqueness margin
 //! rejects a caller whose callees are too alike to tell apart. x86 / PE32 only.
 
-use std::collections::BTreeSet;
-
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Instruction};
 
-use super::identity::{
-    FnIdentity, enclosing_function, fn_identity, make_string_anchor, resolve_string_anchor,
-};
+use super::identity::{FnIdentity, fn_identity, make_string_anchor, resolve_string_anchor};
 use super::types::ImageInput;
-use super::{bitness, read_at, read_region};
+use super::{bitness, read_at};
 use crate::domain::StringAnchor;
 
 // Instruction cap when scanning a caller for its callees (bounds untrusted input).
@@ -71,24 +67,6 @@ fn callees(img: &ImageInput, rva: usize) -> Vec<usize> {
     out
 }
 
-/// Every function that contains an E8 rel32 call to `target_rva`.
-fn callers_of(img: &ImageInput, target_rva: usize) -> Vec<usize> {
-    let mut out = BTreeSet::new();
-    let target_abs = (img.base + target_rva) as i64;
-    for region in &img.code_regions {
-        let bytes = read_region(img.source, region.base, region.size);
-        for (i, w) in bytes.windows(5).enumerate() {
-            if w[0] == 0xE8 {
-                let rel = i32::from_le_bytes([w[1], w[2], w[3], w[4]]) as i64;
-                if (region.base + i + 5) as i64 + rel == target_abs {
-                    out.insert(enclosing_function(img, region.base + i - img.base));
-                }
-            }
-        }
-    }
-    out.into_iter().collect()
-}
-
 /// The callee of `caller_rva` whose identity best matches `target`, with the runner-up's score, so the
 /// caller can require a uniqueness margin. `None` when the caller calls nothing in code.
 fn best_callee(
@@ -118,7 +96,7 @@ fn best_callee(
 #[must_use]
 pub(super) fn make_caller_anchor(img: &ImageInput, target_rva: usize) -> Option<CallerAnchor> {
     let target = fn_identity(img, target_rva);
-    for caller in callers_of(img, target_rva) {
+    for caller in super::model::AnalysisModel::build(img).callers_of(img, target_rva) {
         let Some(sa) = make_string_anchor(img, caller) else {
             continue;
         };
