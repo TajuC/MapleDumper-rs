@@ -455,6 +455,7 @@ fn string_anchor_candidate(
         reasons,
         per_version,
         diags: Vec::new(),
+        relocation: None,
     })
 }
 
@@ -591,6 +592,7 @@ fn import_relocate(
         reasons,
         per_version,
         diags,
+        relocation: None,
     })
 }
 
@@ -898,6 +900,7 @@ fn vtable_relocate(
         reasons,
         per_version,
         diags,
+        relocation: None,
     })
 }
 
@@ -1012,6 +1015,7 @@ fn caller_relocate(
         reasons,
         per_version,
         diags,
+        relocation: None,
     })
 }
 
@@ -1110,6 +1114,7 @@ fn fingerprint_relocate(
         reasons,
         per_version,
         diags: Vec::new(),
+        relocation: None,
     })
 }
 
@@ -1287,6 +1292,7 @@ fn encoding_relocate(
         reasons,
         per_version,
         diags: Vec::new(),
+        relocation: None,
     })
 }
 
@@ -1510,6 +1516,7 @@ fn finalize(
         reasons,
         per_version,
         diags,
+        relocation: None,
     })
 }
 
@@ -1868,7 +1875,14 @@ fn ensemble_relocate(
         return None;
     }
     if found.len() == 1 {
-        return Some(found.pop().unwrap().1);
+        let (kind, mut cand) = found.pop().unwrap();
+        cand.relocation = Some(RelocationLedger {
+            anchor: kind.label().to_string(),
+            support: 1,
+            corroborators: Vec::new(),
+            conflict: false,
+        });
+        return Some(cand);
     }
     let landings: Vec<_> = found
         .iter()
@@ -1876,17 +1890,23 @@ fn ensemble_relocate(
         .collect();
     let ranks: Vec<u8> = found.iter().map(|(_, c)| c.grade.rank()).collect();
     let v = ensemble_decide(&landings, &ranks);
+    let corroborators: Vec<String> = v
+        .corroborators
+        .iter()
+        .map(|&j| found[j].0.label().to_string())
+        .collect();
     let mut cand = found[v.winner].1.clone();
+    cand.relocation = Some(RelocationLedger {
+        anchor: found[v.winner].0.label().to_string(),
+        support: v.support,
+        corroborators: corroborators.clone(),
+        conflict: v.conflict,
+    });
     if v.support >= 2 {
-        let names: Vec<&str> = v
-            .corroborators
-            .iter()
-            .map(|&j| found[j].0.label())
-            .collect();
         cand.reasons.push(format!(
             "corroborated by {} independent anchor(s): {}",
             v.support - 1,
-            names.join(", ")
+            corroborators.join(", ")
         ));
     }
     if v.conflict && v.support < 2 {
@@ -2311,6 +2331,60 @@ mod tests {
     }
 
     #[test]
+    fn ensemble_attaches_a_ledger_to_a_string_relocation() {
+        // Two x86 builds whose target references one unique string but is recompiled so no cross-build
+        // byte signature survives: the string anchor relocates it and the ensemble must attach a
+        // structured ledger naming the channel (FP-neutral reporting).
+        fn mk(src: &BufferSource, base: usize, hash: u64) -> ImageInput<'_> {
+            ImageInput {
+                label: format!("h{hash}"),
+                source: src,
+                base,
+                size: 0x800,
+                code_regions: vec![Region { base, size: 0x600 }],
+                regions: vec![Region { base, size: 0x800 }],
+                import: None,
+                arch: Arch::X86,
+                code_hash: hash,
+                packed: false,
+                pack_reasons: Vec::new(),
+                reloc: None,
+            }
+        }
+        const B: usize = 0x40_0000;
+        let s = b"EnsembleLedgerUniqueAnchorString\0";
+        let build = |body: &[u8]| -> Vec<u8> {
+            let mut buf = vec![0u8; 0x800];
+            let s_off = 0x600;
+            buf[s_off..s_off + s.len()].copy_from_slice(s);
+            let s_abs = (B + s_off) as u32;
+            let mut f = vec![0x55u8, 0x8B, 0xEC, 0x68];
+            f.extend_from_slice(&s_abs.to_le_bytes());
+            f.extend_from_slice(body);
+            f.extend_from_slice(&[0x5D, 0xC3]);
+            buf[0x100..0x100 + f.len()].copy_from_slice(&f);
+            buf
+        };
+        let a = BufferSource::new(B, build(&[0x33, 0xC0, 0x40]));
+        let bb = BufferSource::new(B, build(&[0x8B, 0x45, 0x08, 0x48, 0x48]));
+        let images = [mk(&a, B, 1), mk(&bb, B, 2)];
+        let report = generate(
+            &images,
+            &TargetSpec::Ref {
+                image: 0,
+                rva: 0x100,
+            },
+            &SigOptions::default(),
+        );
+        let cand = report.chosen.expect("a relocation candidate");
+        let led = cand
+            .relocation
+            .expect("a relocated candidate carries a ledger");
+        assert_eq!(led.anchor, "string");
+        assert!(led.support >= 1);
+    }
+
+    #[test]
     #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
     fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
         // Phase 4: the ensemble must not introduce a confident wrong address. For a sample of v83 functions
@@ -2545,6 +2619,8 @@ mod tests {
         );
         assert!(cand.scores.resolver_confidence >= 90);
         assert!(!cand.reasons.is_empty());
+        // A cross-build byte signature is not a relocation, so it carries no ensemble ledger.
+        assert!(cand.relocation.is_none());
     }
 
     struct ShortSource {

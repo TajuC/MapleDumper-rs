@@ -608,6 +608,7 @@ mod tests {
                     aob: Some("AA BB".to_string()),
                 }],
                 diags: vec![Diag::CalleeMismatch],
+                relocation: None,
             }),
             alternates: vec![],
             rejected: vec![],

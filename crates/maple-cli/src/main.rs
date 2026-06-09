@@ -1646,6 +1646,7 @@ mod tests {
                 aob: Some("AA BB CC".to_string()),
             }],
             diags: vec![Diag::CalleeMismatch],
+            relocation: None,
         };
         let report = SigReport {
             arch: Arch::X64,
@@ -1848,6 +1849,7 @@ mod tests {
                 aob: None,
             }],
             diags: Vec::new(),
+            relocation: None,
         };
         let report = SigReport {
             arch: Arch::X64,

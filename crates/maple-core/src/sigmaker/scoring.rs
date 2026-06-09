@@ -1005,6 +1005,7 @@ mod tests {
             reasons: Vec::new(),
             per_version: Vec::new(),
             diags: Vec::new(),
+            relocation: None,
         }
     }
 

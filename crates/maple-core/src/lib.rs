@@ -44,11 +44,11 @@ pub use resolver::{Kind, ResolveDetail, ResolveFail, ResolveOp, resolve_op};
 pub use scanner::{CompiledPattern, find_all};
 pub use sigmaker::{
     BuildProfile, CrossReport, Diag, DupGroup, FnIdentity, Grade, HoldoutResult, ImageInput,
-    InputInfo, NegativeEvidence, NegativeHit, PerVersion, SigCandidate, SigOptions, SigReport,
-    SigStage, StringAnchor, SubScores, Suffix, TargetKind, TargetSpec, apply_negative_corpus,
-    apply_negatives, best_fingerprint_match, fn_identity, generate, generate_cross,
-    generate_cross_with_progress, generate_with_progress, holdout_validate, make_string_anchor,
-    negative_corpus_hits, resolve_string_anchor, xref_count,
+    InputInfo, NegativeEvidence, NegativeHit, PerVersion, RelocationLedger, SigCandidate,
+    SigOptions, SigReport, SigStage, StringAnchor, SubScores, Suffix, TargetKind, TargetSpec,
+    apply_negative_corpus, apply_negatives, best_fingerprint_match, fn_identity, generate,
+    generate_cross, generate_cross_with_progress, generate_with_progress, holdout_validate,
+    make_string_anchor, negative_corpus_hits, resolve_string_anchor, xref_count,
 };
 pub use stamp::{BuildStamp, parse_stamp, pe_machine};
 

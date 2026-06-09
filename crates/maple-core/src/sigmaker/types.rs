@@ -257,6 +257,24 @@ pub struct PerVersion {
     pub aob: Option<String>,
 }
 
+/// The cross-anchor evidence behind a relocated candidate (audit F3 / 21 §3.5, structured, not a fitted
+/// probability). Present only when the candidate came from the relocation ensemble, so a consumer can see
+/// which channel located it, how many independent channels agreed, and whether any disagreed, rather than
+/// reading it out of the free-text reasons. `None` for a cross-build byte signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelocationLedger {
+    /// The anchor channel that produced the chosen landing (`string`/`import`/`caller`/`vtable`/
+    /// `encoding`/`fingerprint`).
+    pub anchor: String,
+    /// How many independent channels agreed on the landing, counting the chosen one (1 = uncorroborated).
+    pub support: usize,
+    /// The other channels that corroborated the landing, by name.
+    pub corroborators: Vec<String>,
+    /// Whether an independent channel resolved a different address (a disagreement was observed). A
+    /// conflict with no corroboration is why a candidate's grade was capped.
+    pub conflict: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct SigCandidate {
     pub aob: String,
@@ -280,6 +298,8 @@ pub struct SigCandidate {
     pub reasons: Vec<String>,
     pub per_version: Vec<PerVersion>,
     pub diags: Vec<Diag>,
+    /// The cross-anchor evidence when this came from the relocation ensemble; `None` for a byte signature.
+    pub relocation: Option<RelocationLedger>,
 }
 
 #[derive(Clone, Debug)]
