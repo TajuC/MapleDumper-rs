@@ -75,6 +75,19 @@ at two code sizes. Real client `.text` is ~7-12 MiB; cost is linear in code size
 On the real corpus the string pass alone (make_string_anchor over ~49.7k v83 entries, each a whole-image
 scan) took 48s of the 72s sweep: the F1 hot path the shared analysis model (Phase 2) must cut.
 
+## Ensemble result (Phase 4)
+
+`cargo test -p maple-core --release ensemble_relocation_holds_the_fp_floor_on_real_gms -- --ignored`
+
+The first-success fallback chain is replaced by a cross-anchor vote: every applicable anchor runs, channels
+that land on the same function corroborate, and a channel that lands elsewhere without being outvoted caps
+the result to a candidate. Measured over the string-anchorable v83 functions, relocating v83 -> v95.1: **13
+relocated, 3 confident, 2 conflict-capped, and confident round-trip 3 pass / 0 fail**. The two conflict
+caps are the new false-positive guard firing (independent channels disagreed, so the result was demoted to
+a candidate rather than shipped confidently), and the confident results still round-trip with zero wrong
+addresses. The chosen landing is always one an anchor produced, so the ensemble can only decline confidence
+or pick among agreeing results, never invent an address.
+
 ## Gates every later phase must satisfy
 
 1. Conclusive round-trip false positives stay at 0 on import/caller/vtable (the floor above).

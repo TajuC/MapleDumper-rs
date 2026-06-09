@@ -1717,6 +1717,196 @@ fn branch_sites(
     sites
 }
 
+/// The relocation anchor that produced a candidate, for ordering ties by channel strength (string is the
+/// most precise, the mnemonic fingerprint the fuzziest) and for naming corroborators in the report.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnchorKind {
+    String,
+    Import,
+    Caller,
+    Vtable,
+    Encoding,
+    Fingerprint,
+}
+
+impl AnchorKind {
+    fn label(self) -> &'static str {
+        match self {
+            AnchorKind::String => "string",
+            AnchorKind::Import => "import",
+            AnchorKind::Caller => "caller",
+            AnchorKind::Vtable => "vtable",
+            AnchorKind::Encoding => "encoding",
+            AnchorKind::Fingerprint => "fingerprint",
+        }
+    }
+}
+
+/// The function (its enclosing entry) each build's resolved target maps to, keyed by build label. Two
+/// candidates are compared only on the builds they both resolve, so a build one anchor declined is not
+/// counted as a disagreement.
+fn anchor_landing(
+    images: &[ImageInput],
+    cand: &SigCandidate,
+) -> std::collections::HashMap<String, usize> {
+    let mut m = std::collections::HashMap::new();
+    for pv in &cand.per_version {
+        if let Some(rva) = pv.resolved_target_rva
+            && let Some(img) = images.iter().find(|i| i.label == pv.label)
+        {
+            m.insert(
+                pv.label.clone(),
+                identity::enclosing_function(img, rva as usize),
+            );
+        }
+    }
+    m
+}
+
+/// The outcome of the cross-anchor vote: which candidate wins, how many independent channels corroborate
+/// it (including itself), whether any channel conflicts with it, and the indices of its corroborators.
+struct Consensus {
+    winner: usize,
+    support: usize,
+    conflict: bool,
+    corroborators: Vec<usize>,
+}
+
+/// Decide among several anchors' landings purely from their per-build landing maps and grade ranks (a
+/// lower rank is a better grade). The winner is the landing with the most corroboration (other channels
+/// that agree on every shared build), ties broken toward the better grade and then the earlier (stronger)
+/// channel. Two channels with no build in common neither corroborate nor conflict. Kept pure so the vote
+/// is unit-tested without constructing whole images.
+fn ensemble_decide(
+    landings: &[std::collections::HashMap<String, usize>],
+    ranks: &[u8],
+) -> Consensus {
+    let n = landings.len();
+    // Some(true) = agree on every shared build; Some(false) = a shared build lands differently; None = no
+    // build in common.
+    let verdict = |a: &std::collections::HashMap<String, usize>,
+                   b: &std::collections::HashMap<String, usize>|
+     -> Option<bool> {
+        let mut shared = 0usize;
+        let mut conflict = false;
+        for (lbl, fa) in a {
+            if let Some(fb) = b.get(lbl) {
+                shared += 1;
+                if fa != fb {
+                    conflict = true;
+                }
+            }
+        }
+        (shared > 0).then_some(!conflict)
+    };
+    let mut support = vec![1usize; n];
+    let mut conflicted = vec![false; n];
+    let mut corroborators: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            match verdict(&landings[i], &landings[j]) {
+                Some(true) => {
+                    support[i] += 1;
+                    corroborators[i].push(j);
+                }
+                Some(false) => conflicted[i] = true,
+                None => {}
+            }
+        }
+    }
+    let mut winner = 0usize;
+    for i in 1..n {
+        let better = support[i] > support[winner]
+            || (support[i] == support[winner] && ranks[i] < ranks[winner]);
+        if better {
+            winner = i;
+        }
+    }
+    Consensus {
+        winner,
+        support: support[winner],
+        conflict: conflicted[winner],
+        corroborators: std::mem::take(&mut corroborators[winner]),
+    }
+}
+
+/// Relocate the target by every applicable anchor and decide by cross-anchor agreement, instead of taking
+/// the first anchor that fires. Independent channels that land on the same function corroborate the
+/// address; a channel that lands on a different function and is not outvoted caps the result to a
+/// candidate, because a disagreement between independent methods is the strongest wrong-address signal
+/// there is. The chosen landing is always one an anchor actually produced (each of which the corpus sweep
+/// records at zero confirmed false positives), so the ensemble only declines confidence or chooses among
+/// agreeing results; it never invents a new address. Running every applicable anchor costs more than the
+/// old first-success chain, which the shared analysis model offsets in a later phase.
+fn ensemble_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    type AnchorFn = fn(&[ImageInput], &[usize], usize, u64, &SigOptions) -> Option<SigCandidate>;
+    // Descending channel strength, so a tie in support and grade breaks toward the more precise anchor.
+    let anchors: [(AnchorKind, AnchorFn); 6] = [
+        (AnchorKind::String, string_anchor_candidate),
+        (AnchorKind::Import, import_relocate),
+        (AnchorKind::Caller, caller_relocate),
+        (AnchorKind::Vtable, vtable_relocate),
+        (AnchorKind::Encoding, encoding_relocate),
+        (AnchorKind::Fingerprint, fingerprint_relocate),
+    ];
+    let mut found: Vec<(AnchorKind, SigCandidate)> = Vec::new();
+    for (kind, f) in anchors {
+        if let Some(c) = f(images, required, ref_idx, ref_rva, opts) {
+            found.push((kind, c));
+        }
+    }
+    if found.is_empty() {
+        return None;
+    }
+    if found.len() == 1 {
+        return Some(found.pop().unwrap().1);
+    }
+    let landings: Vec<_> = found
+        .iter()
+        .map(|(_, c)| anchor_landing(images, c))
+        .collect();
+    let ranks: Vec<u8> = found.iter().map(|(_, c)| c.grade.rank()).collect();
+    let v = ensemble_decide(&landings, &ranks);
+    let mut cand = found[v.winner].1.clone();
+    if v.support >= 2 {
+        let names: Vec<&str> = v
+            .corroborators
+            .iter()
+            .map(|&j| found[j].0.label())
+            .collect();
+        cand.reasons.push(format!(
+            "corroborated by {} independent anchor(s): {}",
+            v.support - 1,
+            names.join(", ")
+        ));
+    }
+    if v.conflict && v.support < 2 {
+        // A lone channel that another independent channel contradicts: report it as a candidate, never a
+        // confirmed relocation, however high it scored on its own.
+        cand.grade = cand.grade.max_rank(Grade::C);
+        cand.reasons.push(
+            "another independent anchor resolves a different address and nothing corroborates this one, \
+             so it is reported as a candidate, not a confirmed relocation"
+                .to_string(),
+        );
+    } else if v.conflict {
+        cand.reasons.push(
+            "an independent anchor disagreed but was outvoted by the corroborating channels"
+                .to_string(),
+        );
+    }
+    Some(cand)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SigStage {
     Deduplicating,
@@ -1926,32 +2116,16 @@ pub fn generate_with_progress(
 
     progress(SigStage::Scoring);
     if pool.is_empty() {
-        // Fallbacks for when no byte signature could be hardened across the builds, tried in order of
-        // strength: a recompile-stable string anchor first; then an import-set anchor (a distinctive
-        // set of imported APIs is just as recompile-stable as a string); then a string-anchored caller,
-        // re-finding the target as that caller's matching callee; then a C++ vtable-structure match,
-        // which relocates a virtual method by the class it belongs to; then an encoding
-        // fingerprint, which pins the exact template instance the mnemonic fingerprint only ties on;
-        // then the fuzzier mnemonic fingerprint as a last resort. Each relocated build is handed a
-        // freshly minted per-build AOB; none emit a byte/string the resolver can re-scan for as a
-        // cross-build pattern, so all are capped below the byte anchors.
-        if let Some(anchor_cand) =
-            string_anchor_candidate(images, &required, ref_idx, ref_rva, opts)
-        {
-            pool.push(anchor_cand);
-        } else if let Some(imp_cand) = import_relocate(images, &required, ref_idx, ref_rva, opts) {
-            pool.push(imp_cand);
-        } else if let Some(cl_cand) = caller_relocate(images, &required, ref_idx, ref_rva, opts) {
-            pool.push(cl_cand);
-        } else if let Some(vt_cand) = vtable_relocate(images, &required, ref_idx, ref_rva, opts) {
-            pool.push(vt_cand);
-        } else if let Some(enc_cand) = encoding_relocate(images, &required, ref_idx, ref_rva, opts)
-        {
-            pool.push(enc_cand);
-        } else if let Some(fp_cand) =
-            fingerprint_relocate(images, &required, ref_idx, ref_rva, opts)
-        {
-            pool.push(fp_cand);
+        // No byte signature could be hardened across the builds, so relocate the target by its recompile-
+        // stable anchors. Rather than take the first anchor that fires, the ensemble runs every applicable
+        // one (string, import-set, string-anchored caller, C++ vtable structure, encoding fingerprint, and
+        // the fuzzier mnemonic fingerprint) and decides by agreement: independent channels that land on the
+        // same function corroborate it, and a channel that lands elsewhere without being outvoted caps the
+        // result to a candidate. Each relocated build is still handed a freshly minted per-build AOB; none
+        // emit a byte/string the resolver can re-scan for as a cross-build pattern, so all stay capped
+        // below the byte anchors.
+        if let Some(cand) = ensemble_relocate(images, &required, ref_idx, ref_rva, opts) {
+            pool.push(cand);
         }
     }
     // confidence first, then fewest wildcards / shortest / kind / AOB text, so the same inputs
@@ -2099,6 +2273,169 @@ mod tests {
         assert!(string_relocation_confirmed(true, Some(0.18)));
         // A single build carries no cross-build evidence; the separate single-build cap governs it.
         assert!(string_relocation_confirmed(false, None));
+    }
+
+    #[test]
+    fn ensemble_vote_prefers_corroboration_and_flags_conflict() {
+        use std::collections::HashMap;
+        let m = |pairs: &[(&str, usize)]| -> HashMap<String, usize> {
+            pairs.iter().map(|(l, f)| ((*l).to_string(), *f)).collect()
+        };
+        // Two channels land the target at function 0x100 in v95; one lands at 0x200 (a wrong address) and
+        // is graded best (rank 0) to prove corroboration beats a better lone grade.
+        let dissent = m(&[("v83", 0x10), ("v95", 0x200)]);
+        let agree_a = m(&[("v83", 0x10), ("v95", 0x100)]);
+        let agree_b = m(&[("v83", 0x10), ("v95", 0x100)]);
+        let v = ensemble_decide(
+            &[dissent.clone(), agree_a.clone(), agree_b.clone()],
+            &[0, 1, 1],
+        );
+        assert_eq!(
+            v.winner, 1,
+            "the corroborated pair wins over the better-graded loner"
+        );
+        assert_eq!(v.support, 2);
+        assert!(v.conflict, "the dissenter conflicts with the winner on v95");
+
+        // A lone pair that disagrees: support 1 each, conflict, winner by grade (the dissenter, rank 0).
+        let lone = ensemble_decide(&[agree_a.clone(), dissent.clone()], &[1, 0]);
+        assert_eq!(v.support, 2);
+        assert!(lone.conflict);
+        assert_eq!(lone.support, 1);
+        assert_eq!(lone.winner, 1);
+
+        // No build in common: neither corroborates nor conflicts.
+        let none = ensemble_decide(&[m(&[("v83", 0x10)]), m(&[("v95", 0x100)])], &[1, 1]);
+        assert!(!none.conflict);
+        assert_eq!(none.support, 1);
+    }
+
+    #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
+        // Phase 4: the ensemble must not introduce a confident wrong address. For a sample of v83 functions
+        // that take the relocation path, run the ensemble v83 -> v95.1; for every confident (A/B) result,
+        // round-trip the v95.1 landing back through the ensemble to v83 and require it returns to the
+        // origin. A confident result that does not round-trip would be a wrong address; the floor is zero.
+        use crate::fileimage::FileImage;
+        use std::collections::BTreeSet;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = ["GMS_v83.1_U_DEVM.exe", "GMS_v95.1_U_DEVM.exe"];
+        if names.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: label.to_string(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i83 = FileImage::open(&dir.join(names[0])).unwrap();
+        let i95 = FileImage::open(&dir.join(names[1])).unwrap();
+        let chain = [mk("v83", &i83), mk("v95.1", &i95)];
+        let required = [0usize, 1];
+        let opts = SigOptions::default();
+
+        let rf = &chain[0];
+        let mut entries: BTreeSet<usize> = BTreeSet::new();
+        for r in &rf.code_regions {
+            let bytes = read_region(rf.source, r.base, r.size);
+            for (i, w) in bytes.windows(5).enumerate() {
+                if w[0] == 0xE8 {
+                    let rel = i32::from_le_bytes([w[1], w[2], w[3], w[4]]) as i64;
+                    let t = (r.base + i + 5) as i64 + rel - rf.base as i64;
+                    if t > 0x1000 && (t as usize) < rf.size {
+                        entries.insert(t as usize);
+                    }
+                }
+            }
+        }
+        // The relocation path fires only for functions that actually carry a cross-build anchor, a tiny
+        // fraction of all entries (the baseline found ~35 string anchors among ~50k entries). Sample those
+        // string-anchorable functions directly, so the FP floor is measured on real relocatable targets
+        // (the ones that yield confident results) rather than mostly anchorless ones. Vtable/import/caller
+        // round-trip FP is already measured per anchor by the coverage-and-FP sweep; this test exercises
+        // the new cross-anchor consensus on the confident-producing string targets.
+        let entries: Vec<usize> = entries.into_iter().collect();
+        let mut sample: Vec<usize> = Vec::new();
+        for &e in &entries {
+            let f = identity::enclosing_function(rf, e);
+            if make_string_anchor(rf, f).is_some_and(|sa| resolve_string_anchor(rf, &sa) == Some(f))
+            {
+                sample.push(f);
+            }
+        }
+        sample.sort_unstable();
+        sample.dedup();
+        let land = |c: &SigCandidate, lbl: &str| -> Option<u64> {
+            c.per_version
+                .iter()
+                .find(|p| p.label == lbl)
+                .and_then(|p| p.resolved_target_rva)
+        };
+
+        let (mut relocated, mut confident, mut conflict_capped, mut rt_pass, mut rt_fail) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        for &e in &sample {
+            let Some(cand) = ensemble_relocate(&chain, &required, 0, e as u64, &opts) else {
+                continue;
+            };
+            relocated += 1;
+            let conf = matches!(cand.grade, Grade::A | Grade::B);
+            if conf {
+                confident += 1;
+            }
+            if cand
+                .reasons
+                .iter()
+                .any(|r| r.contains("candidate, not a confirmed"))
+            {
+                conflict_capped += 1;
+            }
+            if conf && let Some(tr) = land(&cand, "v95.1") {
+                let origin = identity::enclosing_function(&chain[0], e);
+                match ensemble_relocate(&chain, &required, 1, tr, &opts)
+                    .and_then(|c| land(&c, "v83"))
+                {
+                    Some(r) if identity::enclosing_function(&chain[0], r as usize) == origin => {
+                        rt_pass += 1
+                    }
+                    Some(_) => rt_fail += 1,
+                    None => {}
+                }
+            }
+        }
+        eprintln!(
+            "ensemble v83 -> v95.1: {relocated} relocated of {} sampled, {confident} confident, \
+             {conflict_capped} conflict-capped; confident round-trip {rt_pass} pass / {rt_fail} fail",
+            sample.len()
+        );
+        assert!(
+            relocated >= 3,
+            "the sample must exercise real relocations (got {relocated})"
+        );
+        assert!(
+            confident >= 1,
+            "at least one confident relocation must be round-tripped (got {confident})"
+        );
+        assert_eq!(
+            rt_fail, 0,
+            "a confident ensemble result must round-trip to its origin (zero wrong addresses)"
+        );
     }
 
     #[test]
