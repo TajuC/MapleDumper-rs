@@ -288,6 +288,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
 }
 
 mod callers;
+mod constants;
 mod encoding;
 mod identity;
 mod imports;
@@ -1296,6 +1297,85 @@ fn encoding_relocate(
     })
 }
 
+// A constant-relocated landing whose identity drifted further than this from the reference is a
+// coincidental collision (the same rare value reused by an unrelated function), not the same function;
+// reject it. The floor is low because the whole point is to relocate functions whose bodies churned.
+const CONST_MIN_CONSISTENCY: f64 = 0.30;
+
+/// Relocate the function at `ref_rva` by a rare immediate constant it uses (see [`constants`]): mint the
+/// anchor from a value unique to the function in the reference build, then find the single function in each
+/// other build that uses the same value. Declines on any ambiguity or when the resolved functions look
+/// nothing alike (a coincidental constant collision). Backed by the reference build's bytes but located in
+/// the others by a single value, so capped below the byte/string anchors at B.
+fn constant_relocate(
+    images: &[ImageInput],
+    required: &[usize],
+    ref_idx: usize,
+    ref_rva: u64,
+    opts: &SigOptions,
+) -> Option<SigCandidate> {
+    let entry = identity::enclosing_function(&images[ref_idx], ref_rva as usize);
+    let anchor = constants::make_constant_anchor(&images[ref_idx], entry)?;
+    let mut per_version = Vec::with_capacity(required.len());
+    let mut idents: Vec<FnIdentity> = Vec::new();
+    for &idx in required {
+        let img = &images[idx];
+        let r = constants::resolve_constant_anchor(img, &anchor)?;
+        let re = identity::enclosing_function(img, r);
+        idents.push(fn_identity(img, re));
+        per_version.push(PerVersion {
+            label: img.label.clone(),
+            match_rva: Some(re as u64),
+            resolved_target_rva: Some(re as u64),
+            target_kind: Some(TargetKind::Code),
+            fingerprint_similarity: None,
+            aob: single_build_aob(img, re, opts),
+        });
+    }
+    let mut min_sim = 1.0f64;
+    for k in 1..idents.len() {
+        let sim = idents[0].similarity(&idents[k]);
+        per_version[k].fingerprint_similarity = Some(sim);
+        min_sim = min_sim.min(sim);
+    }
+    if idents.len() >= 2 && min_sim < CONST_MIN_CONSISTENCY {
+        return None;
+    }
+    let ev = scoring::FingerprintEvidence {
+        builds: required.len(),
+        min_similarity: min_sim,
+        mutual_similarity: min_sim,
+        ref_ident: idents.first().cloned(),
+    };
+    let (scores, mut reasons) = scoring::score_fingerprint(&ev);
+    reasons.insert(
+        0,
+        format!(
+            "relocated across builds by a rare constant (0x{:X}) used by exactly one function per build",
+            anchor.value
+        ),
+    );
+    let grade = scoring::grade_from(scores.final_score, false, false).max_rank(Grade::B);
+    Some(SigCandidate {
+        aob: format!("@constant=0x{:X}", anchor.value),
+        suffix: Suffix::None,
+        grade,
+        score: scores.final_score,
+        bytes_len: 0,
+        fixed: 0,
+        wildcards: 0,
+        fixed_ratio: 0.0,
+        reloc_safe: true,
+        gated: false,
+        packed: false,
+        scores,
+        reasons,
+        per_version,
+        diags: Vec::new(),
+        relocation: None,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finalize(
     images: &[ImageInput],
@@ -1730,6 +1810,7 @@ fn branch_sites(
 enum AnchorKind {
     String,
     Import,
+    Constant,
     Caller,
     Vtable,
     Encoding,
@@ -1741,6 +1822,7 @@ impl AnchorKind {
         match self {
             AnchorKind::String => "string",
             AnchorKind::Import => "import",
+            AnchorKind::Constant => "constant",
             AnchorKind::Caller => "caller",
             AnchorKind::Vtable => "vtable",
             AnchorKind::Encoding => "encoding",
@@ -1857,9 +1939,10 @@ fn ensemble_relocate(
 ) -> Option<SigCandidate> {
     type AnchorFn = fn(&[ImageInput], &[usize], usize, u64, &SigOptions) -> Option<SigCandidate>;
     // Descending channel strength, so a tie in support and grade breaks toward the more precise anchor.
-    let anchors: [(AnchorKind, AnchorFn); 6] = [
+    let anchors: [(AnchorKind, AnchorFn); 7] = [
         (AnchorKind::String, string_anchor_candidate),
         (AnchorKind::Import, import_relocate),
+        (AnchorKind::Constant, constant_relocate),
         (AnchorKind::Caller, caller_relocate),
         (AnchorKind::Vtable, vtable_relocate),
         (AnchorKind::Encoding, encoding_relocate),
@@ -3990,17 +4073,25 @@ mod tests {
         // function in both builds and emit a candidate.
         let a = BufferSource::new(0x1000, fp_image(0x40, 0x11, 0x10, false));
         let b = BufferSource::new(0x1000, fp_image(0x120, 0x22, 0x90, true));
-        let report = generate(
-            &[fp_input("a", &a, 1), fp_input("b", &b, 2)],
-            &TargetSpec::Ref {
-                image: 0,
-                rva: 0x40,
-            },
-            &SigOptions::default(),
-        );
-        let cand = report
+        let images = [fp_input("a", &a, 1), fp_input("b", &b, 2)];
+        // This synthetic carries a rare constant, so the end-to-end ensemble relocates it via the more
+        // precise constant anchor; assert that holds, then exercise the fingerprint path (this test's
+        // subject) by calling it directly, since the ensemble would otherwise hide it behind the constant.
+        assert!(
+            generate(
+                &images,
+                &TargetSpec::Ref {
+                    image: 0,
+                    rva: 0x40
+                },
+                &SigOptions::default(),
+            )
             .chosen
-            .expect("a fingerprint-relocation fallback candidate");
+            .is_some(),
+            "the ensemble must relocate the recompiled function"
+        );
+        let cand = fingerprint_relocate(&images, &[0usize, 1], 0, 0x40, &SigOptions::default())
+            .expect("the fingerprint anchor relocates the recompiled function");
         assert!(
             cand.aob.starts_with("@fingerprint="),
             "expected a fingerprint anchor, got {}",
@@ -5199,6 +5290,16 @@ mod tests {
                 None => 0,
             }
         }
+        fn rt_constant(from: &ImageInput, r: usize, back: &ImageInput, want: usize) -> i8 {
+            let Some(a) = constants::make_constant_anchor(from, r) else {
+                return 0;
+            };
+            match constants::resolve_constant_anchor(back, &a) {
+                Some(x) if identity::enclosing_function(back, x) == want => 1,
+                Some(_) => -1,
+                None => 0,
+            }
+        }
         fn rt_caller(from: &ImageInput, r: usize, back: &ImageInput, want: usize) -> i8 {
             let Some(a) = callers::make_caller_anchor(from, r) else {
                 return 0;
@@ -5364,6 +5465,35 @@ mod tests {
             "import pass: {imp_applicable} applicable of {} sampled, {} resolved (cap {IMPORT_RESOLVE_CAP}) in {:.0}s",
             sample.len(),
             s_imp.resolved,
+            t.elapsed().as_secs_f64()
+        );
+
+        // CONSTANT over the sample (capped): a function with a rare immediate that occurs exactly once in
+        // the code. Forward resolve and the reverse round-trip each scan a build's code by byte search.
+        let t = std::time::Instant::now();
+        let mut s_const = Stats::default();
+        const CONST_CAP: usize = 300;
+        for &e in sample.iter().take(CONST_CAP) {
+            let Some(ca) = constants::make_constant_anchor(rf, e) else {
+                continue;
+            };
+            s_const.made += 1;
+            let Some(r) = constants::resolve_constant_anchor(tg, &ca) else {
+                continue;
+            };
+            s_const.resolved += 1;
+            let re = enc(tg, r);
+            if validate(tg, r) {
+                s_const.validated += 1;
+            }
+            s_const.note_id(idsim(rf, enc(rf, e), tg, re));
+            s_const.note_rt(rt_constant(tg, r, rf, enc(rf, e)));
+        }
+        eprintln!(
+            "constant pass: {} made / {} resolved of {} sampled (cap {CONST_CAP}) in {:.0}s",
+            s_const.made,
+            s_const.resolved,
+            sample.len().min(CONST_CAP),
             t.elapsed().as_secs_f64()
         );
 
@@ -5602,6 +5732,7 @@ mod tests {
         );
         row("string", &s_str);
         row("import", &s_imp);
+        row("constant", &s_const);
         row("caller", &s_cal);
         eprintln!(
             "  {:<7} {:>5} {:>9} {:>7}   {:>6}   {:>3}/{:<3}/{:<3} {:>5}   {:>4}",

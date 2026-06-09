@@ -88,6 +88,18 @@ a candidate rather than shipped confidently), and the confident results still ro
 addresses. The chosen landing is always one an anchor produced, so the ensemble can only decline confidence
 or pick among agreeing results, never invent an address.
 
+## Rare-constant channel (Phase 5)
+
+A seventh ensemble channel anchors a function by a rare immediate it uses (a value that occurs exactly
+once in the code, measured by byte-frequency so it stays O(code) fast), Diaphora's strongest non-string
+heuristic. Measured on the v83 sample: with the literal floor at 0x10000 it found **0** anchorable
+functions (the game's distinctive constants, packet opcodes and the like, are smaller); lowering the
+floor to 0x100 (the exactly-once test, not magnitude, enforces distinctiveness) found **1 made / 0
+resolved at v95.1, 0 false positives**. So like the import (8/1) and caller (1/0) channels it is a safe,
+sparse contributor on this corpus, the string and vtable channels carry coverage, while the constant
+channel adds occasional reach and an independent corroboration/conflict vote in the ensemble at zero FP.
+It is correct, fast, and declines on ambiguity; it would matter more on a corpus richer in rare literals.
+
 ## Gates every later phase must satisfy
 
 1. Conclusive round-trip false positives stay at 0 on import/caller/vtable (the floor above).
