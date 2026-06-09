@@ -1795,3 +1795,128 @@ fn caller_relative_bridges_non_string_functions_v91_to_v95() {
         "caller anchoring should build for some non-string callees of a bridging caller"
     );
 }
+
+#[test]
+#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
+    // Phase 4: the ensemble must not introduce a confident wrong address. For a sample of v83 functions
+    // that take the relocation path, run the ensemble v83 -> v95.1; for every confident (A/B) result,
+    // round-trip the v95.1 landing back through the ensemble to v83 and require it returns to the
+    // origin. A confident result that does not round-trip would be a wrong address; the floor is zero.
+    use crate::fileimage::FileImage;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    let dir = Path::new(r"X:\Client_Unpacked");
+    let names = ["GMS_v83.1_U_DEVM.exe", "GMS_v95.1_U_DEVM.exe"];
+    if names.iter().any(|n| !dir.join(n).exists()) {
+        eprintln!("real GMS clients not present; skipping");
+        return;
+    }
+    fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+        let pack = img.pack_report();
+        ImageInput {
+            label: label.to_string(),
+            source: img,
+            base: img.base(),
+            size: img.size(),
+            code_regions: img.code_regions(),
+            regions: img.regions(),
+            import: img.import_range(),
+            arch: img.arch(),
+            code_hash: img.code_hash(),
+            packed: pack.likely_packed,
+            pack_reasons: pack.reasons,
+            reloc: None,
+        }
+    }
+    let i83 = FileImage::open(&dir.join(names[0])).unwrap();
+    let i95 = FileImage::open(&dir.join(names[1])).unwrap();
+    let chain = [mk("v83", &i83), mk("v95.1", &i95)];
+    let required = [0usize, 1];
+    let opts = SigOptions::default();
+
+    let rf = &chain[0];
+    let mut entries: BTreeSet<usize> = BTreeSet::new();
+    for r in &rf.code_regions {
+        let bytes = read_region(rf.source, r.base, r.size);
+        for (i, w) in bytes.windows(5).enumerate() {
+            if w[0] == 0xE8 {
+                let rel = i32::from_le_bytes([w[1], w[2], w[3], w[4]]) as i64;
+                let t = (r.base + i + 5) as i64 + rel - rf.base as i64;
+                if t > 0x1000 && (t as usize) < rf.size {
+                    entries.insert(t as usize);
+                }
+            }
+        }
+    }
+    // The relocation path fires only for functions that actually carry a cross-build anchor, a tiny
+    // fraction of all entries (the baseline found ~35 string anchors among ~50k entries). Sample those
+    // string-anchorable functions directly, so the FP floor is measured on real relocatable targets
+    // (the ones that yield confident results) rather than mostly anchorless ones. Vtable/import/caller
+    // round-trip FP is already measured per anchor by the coverage-and-FP sweep; this test exercises
+    // the new cross-anchor consensus on the confident-producing string targets.
+    let entries: Vec<usize> = entries.into_iter().collect();
+    let mut sample: Vec<usize> = Vec::new();
+    for &e in &entries {
+        let f = identity::enclosing_function(rf, e);
+        if make_string_anchor(rf, f).is_some_and(|sa| resolve_string_anchor(rf, &sa) == Some(f)) {
+            sample.push(f);
+        }
+    }
+    sample.sort_unstable();
+    sample.dedup();
+    let land = |c: &SigCandidate, lbl: &str| -> Option<u64> {
+        c.per_version
+            .iter()
+            .find(|p| p.label == lbl)
+            .and_then(|p| p.resolved_target_rva)
+    };
+
+    let (mut relocated, mut confident, mut conflict_capped, mut rt_pass, mut rt_fail) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
+    for &e in &sample {
+        let Some(cand) = ensemble_relocate(&chain, &required, 0, e as u64, &opts) else {
+            continue;
+        };
+        relocated += 1;
+        let conf = matches!(cand.grade, Grade::A | Grade::B);
+        if conf {
+            confident += 1;
+        }
+        if cand
+            .reasons
+            .iter()
+            .any(|r| r.contains("candidate, not a confirmed"))
+        {
+            conflict_capped += 1;
+        }
+        if conf && let Some(tr) = land(&cand, "v95.1") {
+            let origin = identity::enclosing_function(&chain[0], e);
+            match ensemble_relocate(&chain, &required, 1, tr, &opts).and_then(|c| land(&c, "v83")) {
+                Some(r) if identity::enclosing_function(&chain[0], r as usize) == origin => {
+                    rt_pass += 1
+                }
+                Some(_) => rt_fail += 1,
+                None => {}
+            }
+        }
+    }
+    eprintln!(
+        "ensemble v83 -> v95.1: {relocated} relocated of {} sampled, {confident} confident, \
+             {conflict_capped} conflict-capped; confident round-trip {rt_pass} pass / {rt_fail} fail",
+        sample.len()
+    );
+    assert!(
+        relocated >= 3,
+        "the sample must exercise real relocations (got {relocated})"
+    );
+    assert!(
+        confident >= 1,
+        "at least one confident relocation must be round-tripped (got {confident})"
+    );
+    assert_eq!(
+        rt_fail, 0,
+        "a confident ensemble result must round-trip to its origin (zero wrong addresses)"
+    );
+}
