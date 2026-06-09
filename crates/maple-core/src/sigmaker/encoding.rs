@@ -54,6 +54,11 @@ fn imm_size_class(k: OpKind) -> u8 {
 /// memory addressing form, and the operand/displacement *sizes*, with immediate and displacement
 /// *values* deliberately excluded. Register allocation and operand sizes are kept (they are the
 /// per-instance discriminator the byte AOB relies on); the volatile values are dropped.
+///
+/// FNV-1a folds those fields into one 64-bit token (F9). A hash collision would make two
+/// differently-encoded instructions compare equal in the LCS, a theoretical false-token-match path, but
+/// at 64 bits over a per-function window of tens of tokens the collision probability is negligible, and
+/// the caller's similarity, uniqueness-margin, and mutual-consistency gates would still have to pass.
 fn enc_hash(instr: &Instruction) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut fold = |x: u64| {

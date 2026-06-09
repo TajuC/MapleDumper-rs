@@ -4803,8 +4803,12 @@ mod tests {
             let Some((x, ag, run)) = vtable::resolve_vtable_anchor(back, &a) else {
                 return 0;
             };
-            let grounded = a.installer.is_some() && (ag - 0.9).abs() < 1e-9 && run.abs() < 1e-9;
-            let accepted = grounded || (ag >= 0.72 && ag - run >= 0.10);
+            let grounded = a.installer.is_some()
+                && (ag - vtable::VT_GROUNDED_SCORE).abs() < 1e-9
+                && run.abs() < 1e-9;
+            let accepted = grounded
+                || (ag >= vtable::VT_STRUCT_MIN_AGREEMENT
+                    && ag - run >= vtable::VT_STRUCT_MIN_MARGIN);
             if !accepted {
                 return 0; // below the production gate: the reverse anchor declined, not a wrong address
             }
@@ -5080,10 +5084,14 @@ mod tests {
             };
             // The installer-grounded fallback returns the sentinel (0.9, 0.0); a structural match returns
             // its real weighted agreement and runner-up, gated at >= 0.72 with a >= 0.10 margin.
-            let grounded = has_installer && (a - 0.9).abs() < 1e-9 && runner.abs() < 1e-9;
+            let grounded = has_installer
+                && (a - vtable::VT_GROUNDED_SCORE).abs() < 1e-9
+                && runner.abs() < 1e-9;
             if grounded {
                 vt.grounded += 1;
-            } else if a >= 0.72 && a - runner >= 0.10 {
+            } else if a >= vtable::VT_STRUCT_MIN_AGREEMENT
+                && a - runner >= vtable::VT_STRUCT_MIN_MARGIN
+            {
                 vt.structural += 1;
             } else {
                 vt.declined += 1; // below the gate and not grounded: production would not emit this

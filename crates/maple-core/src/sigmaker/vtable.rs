@@ -51,6 +51,18 @@ const COUNT_TOLERANCE: usize = 8;
 // Instructions decoded when following a dispatch thunk (an adjustor thunk is two instructions).
 const THUNK_INSTRS: usize = 2;
 
+// The structural match is accepted only at this weighted-agreement floor and runner-up margin; below
+// them the class has refactored past the per-slot fingerprint and the constructor-string grounding is
+// tried instead. Measured basis: on the GMS lineage the structural chain holds within v83-v91 and
+// declines to zero at the v95 class refactor (see CROSS_VERSION_BASELINE.md), and the round-trip sweep
+// records zero conclusive wrong addresses under these gates. An installer-grounded match cannot report a
+// real weighted agreement (it is located by string, not by alignment), so it returns the sentinel score
+// below to mark itself grounded rather than structural. These are `pub(super)` so the production gate and
+// the corpus harness that mirrors it share one source and cannot drift apart.
+pub(super) const VT_STRUCT_MIN_AGREEMENT: f64 = 0.72;
+pub(super) const VT_STRUCT_MIN_MARGIN: f64 = 0.10;
+pub(super) const VT_GROUNDED_SCORE: f64 = 0.9;
+
 /// The recompile-stable identity of a virtual method: the per-slot mnemonic fingerprint of the vtable it
 /// is dispatched from, the index of its slot, and whether that slot dispatches through an adjustor thunk.
 pub(super) struct VtableAnchor {
@@ -592,13 +604,13 @@ pub(super) fn resolve_vtable_anchor(
     // applies). When it is weak or ambiguous, the class refactored past the per-slot matcher: ground the
     // table through its constructor's build-stable string instead, which names the exact table.
     if let Some((r, a, runner)) = structural
-        && a >= 0.72
-        && a - runner >= 0.10
+        && a >= VT_STRUCT_MIN_AGREEMENT
+        && a - runner >= VT_STRUCT_MIN_MARGIN
     {
         return Some((r, a, runner));
     }
     if let Some(real) = resolve_via_installer(img, anchor) {
-        return Some((real, 0.9, 0.0));
+        return Some((real, VT_GROUNDED_SCORE, 0.0));
     }
     structural
 }
