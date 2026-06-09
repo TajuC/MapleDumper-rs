@@ -5,6 +5,32 @@ the project aims to follow Semantic Versioning while in its 0.x line.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-09
+
+A cross-version fingerprinting release: the relocation engine moves from a single-anchor fallback chain to
+a globally-informed, ensemble-validated identification engine, and the v95 class refactor that defeated the
+structural matchers is now bridged. Every change is validated on the real GMS unprotected lineage
+(v61.1 to v111.1) with the false-positive floor held at zero and the golden snapshot byte-stable.
+
+### Added
+- Call-graph seed densification that **bridges the v95 break**: the global alignment now seeds with the
+  import-set and rare-constant 1:1 channels in addition to strings, so propagation reaches across the major
+  class refactor that string-only seeding could not. Measured on the real lineage, reverse-consistent at
+  zero confirmed false positives: v83 to v95.1 propagation 0 to 25, v83 to v91 66 to 780.
+- An opt-in static data-flow strand channel (register- and order-invariant computation hashing), enabled
+  with `MAPLE_STRAND_CHANNEL`. It holds the false-positive floor at zero where it fires but adds no coverage
+  the cheaper channels do not already carry, so it ships off the default path.
+- Real-corpus `--ignored` harnesses: a graph seed-densification measurement, a strand-efficacy and
+  false-positive sweep, and a fingerprint-scan equivalence oracle.
+
+### Changed
+- The fingerprint scan decodes each code section **once** instead of re-decoding every overlapping window,
+  cutting relocation-generation time by about 20 percent (criterion: 137.8 to 112.3 ms at 256 KiB, 555 to
+  439 ms at 1 MiB). Proven output-identical to the previous scan at every instruction boundary and field on
+  v61/v83/v95.1/v111, so behaviour, grades, and the false-positive floor are unchanged.
+- `sigmaker/mod.rs` decomposed into a thin orchestrator: the byte-path minting moved to `bytepath.rs`
+  (1234 to 618 lines), completing the module split.
+
 ## [0.4.0] - 2026-06-08
 
 An audit-remediation and hardening release driven by an external code review.
