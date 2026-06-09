@@ -64,16 +64,27 @@ the matched call/vtable graph. The probe is kept so a future, RTTI-rich corpus w
 
 `cargo bench -p maple-core --bench generate`
 
-Single-build byte path vs the two-build relocation path (which fires the whole-code-section anchor scans),
-at two code sizes. Real client `.text` is ~7-12 MiB; cost is linear in code size.
+Single-build byte path vs the two-build relocation path, at two code sizes. Real client `.text` is
+~7-12 MiB; cost is linear in code size. Measured on `main` (773eefd).
 
 | code size | byte path | relocation path |
 |-----------|----------:|----------------:|
-| 256 KiB | 5.7 ms | 10.1 ms |
-| 1 MiB | 22.4 ms | 43.0 ms |
+| 256 KiB | 5.6 ms | 134 ms |
+| 1 MiB | 22.8 ms | 532 ms |
 
-On the real corpus the string pass alone (make_string_anchor over ~49.7k v83 entries, each a whole-image
-scan) took 48s of the 72s sweep: the F1 hot path the shared analysis model (Phase 2) must cut.
+These supersede the original Phase 0 figures (10.1 ms / 43.0 ms for the relocation path). That table was
+measured before the Phase 4 ensemble and never refreshed, so it read the cost of the old first-success
+fallback chain (stop at the first anchor that fires, usually the string). The ensemble now runs **every**
+applicable anchor on every relocation to take the cross-anchor vote, so the relocation path costs several
+times the first-success path; the byte path is unchanged. The increase is the ensemble, not the shared
+analysis model: with the model (773eefd) the relocation path is 134 ms, and a pre-model build (6fbebd1)
+measured 128 ms, well within the noise of these pseudo-random runs.
+
+The synthetic module is seeded pseudo-random decodable filler, a worst case for the per-byte (encoding
+prefilter) and linear-decode (fingerprint boundaries) scans, so this overstates real per-relocation cost
+(real `.text` decodes far more cheaply). On the real corpus the string pass alone (make_string_anchor over
+~49.7k v83 entries, each a whole-image scan) took 48s of the 72s sweep: the hot path a shared analysis
+model queried by every anchor would cut, when generation speed is the priority.
 
 ## Ensemble result (Phase 4)
 
@@ -105,4 +116,8 @@ It is correct, fast, and declines on ambiguity; it would matter more on a corpus
 1. Conclusive round-trip false positives stay at 0 on import/caller/vtable (the floor above).
 2. String/vtable/chain coverage at each build does not regress versus this table.
 3. The golden snapshot stays byte-stable unless a change intentionally alters output.
-4. Generation cost does not increase; Phase 2 onward should show it falling on this bench.
+4. Generation cost: the byte path stays flat and the relocation path stays at or below the ensemble
+   figures above (134 ms / 532 ms), within run-to-run noise. A change must not push it materially higher
+   without a stated reason; re-pointing the anchors to one shared, queried model is the lever that would
+   bring it down. (The original "must fall" target assumed the dead Phase 0 first-success numbers and is
+   not a regression bar against the ensemble.)
