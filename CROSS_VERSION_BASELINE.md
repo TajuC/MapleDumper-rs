@@ -111,6 +111,34 @@ sparse contributor on this corpus, the string and vtable channels carry coverage
 channel adds occasional reach and an independent corroboration/conflict vote in the ensemble at zero FP.
 It is correct, fast, and declines on ambiguity; it would matter more on a corpus richer in rare literals.
 
+## Graph alignment (Phase 7)
+
+`cargo test -p maple-core --release graph_alignment_propagates_beyond_seeds_and_is_reverse_consistent -- --ignored`
+
+The seed-and-propagate call-graph aligner (`sigmaker/graph.rs`) relocates functions no content anchor
+pins, by their position in the matched graph: seed with the 1:1 string anchors between two builds, then
+propagate by neighbour consensus (a function commits only when at least two independent already-matched
+neighbours agree on the same candidate, it is the strict unique maximum, and the match is mutual-best).
+The honesty check is an INDEPENDENT reverse alignment; a forward match `a -> b` whose target relocates
+back to a different function is a confirmed wrong address.
+
+Measured v83 reference to later builds (17 string seeds among v83's call-graph functions):
+
+| hop | seeds | propagated beyond seeds | reverse-consistent | confirmed wrong (FP) |
+|-----|------:|------------------------:|-------------------:|---------------------:|
+| v83 -> v84   | 17 | 1187 | 1187 / 1187 | 0 |
+| v83 -> v88   | 16 |  743 |  743 /  743 | 0 |
+| v83 -> v91   | 16 |   66 |   66 /   66 | 0 |
+| v83 -> v95.1 | 12 |    0 |     n/a     | 0 |
+
+Graph position alone relocates 1187 functions at one recompile, every one reverse-round-trip consistent
+and none contradicted. The reach decays with version distance, the seeds' call relationships drift across
+more recompiles so fewer functions keep a two-neighbour consensus, and collapses at the v95 refactor where
+only 12 string seeds survive, too sparse to form any consensus, so the aligner commits nothing and
+declines. The false-positive floor holds at zero on every hop, including the major break. The v95 reach is
+seed-density-limited, not a mechanism failure; a denser cross-refactor seed source would extend it, but
+none exists on this corpus (import 1, constant 1, vtable 0 resolve across the v95 break).
+
 ## Gates every later phase must satisfy
 
 1. Conclusive round-trip false positives stay at 0 on import/caller/vtable (the floor above).

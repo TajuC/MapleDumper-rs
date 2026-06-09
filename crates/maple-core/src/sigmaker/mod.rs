@@ -5290,6 +5290,8 @@ mod tests {
         let names = [
             "GMS_v83.1_U_DEVM.exe",
             "GMS_v84.1_U_DEVM.exe",
+            "GMS_v88.1_U_DEVM.exe",
+            "GMS_v91.1_U_DEVM.exe",
             "GMS_v95.1_U_DEVM.exe",
         ];
         if names.iter().any(|n| !dir.join(n).exists()) {
@@ -5315,9 +5317,13 @@ mod tests {
         }
         let i83 = FileImage::open(&dir.join(names[0])).expect("open v83");
         let i84 = FileImage::open(&dir.join(names[1])).expect("open v84");
-        let i95 = FileImage::open(&dir.join(names[2])).expect("open v95.1");
+        let i88 = FileImage::open(&dir.join(names[2])).expect("open v88");
+        let i91 = FileImage::open(&dir.join(names[3])).expect("open v91");
+        let i95 = FileImage::open(&dir.join(names[4])).expect("open v95.1");
         let v83 = mk("v83", &i83);
         let v84 = mk("v84", &i84);
+        let v88 = mk("v88", &i88);
+        let v91 = mk("v91", &i91);
         let v95 = mk("v95.1", &i95);
 
         let m83 = model::AnalysisModel::build(&v83);
@@ -5333,7 +5339,7 @@ mod tests {
         );
 
         let mut total_inconsistent = 0usize;
-        for (label, tgt) in [("v84", &v84), ("v95.1", &v95)] {
+        for (label, tgt) in [("v84", &v84), ("v88", &v88), ("v91", &v91), ("v95.1", &v95)] {
             let mt = model::AnalysisModel::build(tgt);
             let gt = graph::CallGraph::build(tgt, &mt);
             let seeds = graph::resolve_seeds(tgt, &anchors);
