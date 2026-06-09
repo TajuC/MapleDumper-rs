@@ -49,6 +49,7 @@ fn main() {
             history_cmd::history_matrix,
             disasm::disassemble,
             sigmaker::inspect_pe,
+            sigmaker::inspect_address,
             fileio::pick_open_files,
             sigmaker::generate_signature,
             fileio::pick_open_file,

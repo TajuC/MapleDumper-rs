@@ -451,12 +451,23 @@
       </div>
     </div>
 
+    <div id="insp-modal" class="modal" hidden>
+      <div class="modal-card insp-card" role="dialog" aria-modal="true" aria-labelledby="insp-modal-title">
+        <div class="insp-modal-head">
+          <h2 id="insp-modal-title" data-i18n="insp.investigate">Investigate</h2>
+          <button id="insp-modal-close" class="icon-btn" title="Close">✕</button>
+        </div>
+        <div id="insp-modal-body" class="insp-modal-body"></div>
+      </div>
+    </div>
+
     <div id="toast" class="toast" hidden></div>
     <div id="ctx-menu" class="ctx-menu" hidden></div>
 
     <script src="i18n.js"></script>
     <script src="icons.js"></script>
     <script src="masking.js"></script>
+    <script src="inspector.js"></script>
     <script src="sigmaker.js"></script>
     <script src="history.js"></script>
     <script src="asmscan.js"></script>

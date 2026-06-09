@@ -92,12 +92,14 @@ mod ensemble;
 mod graph;
 mod identity;
 mod imports;
+mod inspect;
 mod model;
 mod relocate;
 mod strands;
 mod validate;
 mod vtable;
 use aob::collapse_aob_ranges;
+pub use inspect::{DisasmLine, FunctionInsight, VtableInsight, inspect_function};
 // The byte-path minting and AOB machinery; imported back so the relocation anchors, identity, and the test
 // harnesses reach `single_build_aob`/`mem_target` through `use super::*` (as when these lived here), and the
 // generator calls the site builders directly.

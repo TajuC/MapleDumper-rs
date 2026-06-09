@@ -303,6 +303,23 @@ function addrColTag() {
   return mode === "abs" ? " (abs)" : mode === "both" ? " (rva→abs)" : "";
 }
 
+// The on-disk path of a build, matched by its label (the filename), so an address can be sent to the
+// inspector. Returns null when the build is not among the loaded files.
+function sigPathForLabel(label) {
+  const f = (sigState.files || []).find((x) => x.name === label);
+  return f ? f.path : null;
+}
+
+// Render an address as a clickable link that opens the Investigate panel for that function, when the build
+// is a loaded file; otherwise plain text. `display` is the already-formatted (rva/abs) string; the raw RVA
+// is what the inspector is queried with.
+function sigAddrLink(rawRva, label, display) {
+  if (!rawRva) return "-";
+  const path = sigPathForLabel(label);
+  if (!path) return esc(display);
+  return `<button class="sig-addr-link mono" data-path="${escAttr(path)}" data-rva="${escAttr(rawRva)}" data-label="${escAttr(label)}" title="${escAttr(t("insp.investigate"))}">${esc(display)}</button>`;
+}
+
 // The cross-anchor evidence behind a relocated candidate: which channel found it, who agreed, and whether
 // anything disagreed. This is what makes a relocated result auditable instead of a black box.
 function sigLedgerHtml(led) {
@@ -325,7 +342,7 @@ function sigCandCard(c, tag, primary, addr) {
       const aobCell = p.aob
         ? `<button class="icon-btn sig-copy" data-aob="${escAttr(p.aob)}" title="${escAttr(p.aob)}">⧉ ${esc(t("sig.minted"))}</button>`
         : "<span class='muted'>-</span>";
-      return `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(fmt(p.match_rva, p.label))}</td><td class="mono d-addr">${esc(fmt(p.resolved_target_rva, p.label))}</td><td>${esc(p.target_type || "-")}</td><td class="mono">${esc(sigSimPct(p.fingerprint_similarity))}</td><td>${aobCell}</td></tr>`;
+      return `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${sigAddrLink(p.match_rva, p.label, fmt(p.match_rva, p.label))}</td><td class="mono d-addr">${sigAddrLink(p.resolved_target_rva, p.label, fmt(p.resolved_target_rva, p.label))}</td><td>${esc(p.target_type || "-")}</td><td class="mono">${esc(sigSimPct(p.fingerprint_similarity))}</td><td>${aobCell}</td></tr>`;
     })
     .join("");
   const diags = c.diags.length
@@ -364,7 +381,7 @@ function sigShortlistsHtml(r, addr) {
           const aobCell = e.aob
             ? `<button class="icon-btn sig-copy" data-aob="${escAttr(e.aob)}" title="${escAttr(e.aob)}">⧉ ${esc(t("sig.minted"))}</button>`
             : "<span class='muted'>-</span>";
-          return `<tr><td class="mono d-addr">${esc(addr(e.rva, s.label))}</td><td class="mono">${esc(sigSimPct(e.similarity))}</td><td>${aobCell}</td></tr>`;
+          return `<tr><td class="mono d-addr">${sigAddrLink(e.rva, s.label, addr(e.rva, s.label))}</td><td class="mono">${esc(sigSimPct(e.similarity))}</td><td>${aobCell}</td></tr>`;
         })
         .join("");
       return `<div class="sig-family"><div class="sig-family-h mono">${esc(s.label)} <span class="muted">· ${s.candidates.length}</span></div>
@@ -478,6 +495,11 @@ function wireSigButtons(host) {
     }),
   );
   host.querySelectorAll(".sig-save").forEach((b) => b.addEventListener("click", () => sigSaveAsPattern(b.dataset.aob, b.dataset.suffix)));
+  host.querySelectorAll(".sig-addr-link").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (typeof openInspector === "function") openInspector(b.dataset.path, b.dataset.rva, b.dataset.label);
+    }),
+  );
 }
 
 function renderSigResults() {

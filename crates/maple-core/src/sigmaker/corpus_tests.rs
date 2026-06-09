@@ -331,6 +331,65 @@ fn fingerprint_scan_is_byte_equivalent_to_the_naive_decode_on_real_gms() {
     }
 }
 
+// Smoke test for the desktop "Investigate" inspector (run with `--ignored`): inspect the function at the
+// AOB target the user reported (v83 0x4D6D95) and confirm the bundle is populated with real data, so the
+// frontend panel has something to render.
+#[test]
+#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+fn inspect_function_populates_on_real_gms() {
+    use crate::fileimage::FileImage;
+    use std::path::Path;
+    let p = Path::new(r"X:\Client_Unpacked\GMS_v83.1_U_DEVM.exe");
+    if !p.exists() {
+        eprintln!("real GMS client not present; skipping");
+        return;
+    }
+    let fi = FileImage::open(p).expect("open v83");
+    let pack = fi.pack_report();
+    let img = ImageInput {
+        label: "v83".into(),
+        source: &fi,
+        base: fi.base(),
+        size: fi.size(),
+        code_regions: fi.code_regions(),
+        regions: fi.regions(),
+        import: fi.import_range(),
+        arch: fi.arch(),
+        code_hash: fi.code_hash(),
+        packed: pack.likely_packed,
+        pack_reasons: pack.reasons,
+        reloc: None,
+    };
+    let insight = super::inspect_function(&img, 0x4D_6D95);
+    eprintln!(
+        "entry=0x{:X} instrs={} blocks={} calls={} branches={} returns={} xrefs={} callers={} callees={} imports={} strings={} constants={} disasm_lines={} vtable={:?}",
+        insight.entry_rva,
+        insight.instr_count,
+        insight.blocks,
+        insight.calls,
+        insight.branches,
+        insight.returns,
+        insight.xref_count,
+        insight.callers.len(),
+        insight.callees.len(),
+        insight.imports.len(),
+        insight.strings.len(),
+        insight.constants.len(),
+        insight.disasm.len(),
+        insight
+            .vtable
+            .as_ref()
+            .map(|v| (v.slot, v.slot_count, v.class_name.clone())),
+    );
+    for line in insight.disasm.iter().take(6) {
+        eprintln!("  {:#X}  {:<24}  {}", line.rva, line.bytes, line.text);
+    }
+    assert!(
+        !insight.disasm.is_empty(),
+        "the inspector must produce a disassembly listing"
+    );
+}
+
 // Broad cross-version validation sweep (run with `--ignored`): on the real GMS lineage, how many
 // functions each relocation anchor actually carries from v83 to v95.1, and at what false-positive
 // (wrong-address) rate. This turns "validated on a handful of cases" into corpus-wide numbers.

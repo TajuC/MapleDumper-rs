@@ -139,6 +139,63 @@ fn vtables(img: &ImageInput, buf: &[u8]) -> Vec<(usize, Vec<usize>)> {
     out
 }
 
+/// For the desktop inspector: is the function at `rva` a virtual method (a slot in some vtable)? Returns
+/// the table's RVA, the slot index, the table's slot count, and the class name from MSVC RTTI when the
+/// chain is present and navigable. RTTI is sparse and exception/framework-only on this corpus (see the
+/// `rtti_is_sparse...` finding), so the class name is usually `None`; the structural membership always
+/// resolves. x86 / PE32.
+#[must_use]
+pub(super) fn membership(
+    img: &ImageInput,
+    rva: usize,
+) -> Option<(usize, usize, usize, Option<String>)> {
+    let buf = whole_image(img);
+    let psize = ptr_size(img.arch);
+    for (start, slots) in vtables(img, &buf) {
+        if let Some(slot) = slots.iter().position(|&s| s == rva) {
+            return Some((
+                start,
+                slot,
+                slots.len(),
+                rtti_class_name(img, &buf, start, psize),
+            ));
+        }
+    }
+    None
+}
+
+// Best-effort MSVC RTTI class-name read (x86): vtable[-1] -> CompleteObjectLocator; COL+0x0C ->
+// TypeDescriptor; TD+0x08 -> the mangled name (".?AVClassName@@"), de-mangled to "ClassName". These dumps
+// are fixed-base (the locators hold absolute VAs, not image-base-relative offsets). `None` when any link
+// is absent or out of range.
+fn rtti_class_name(img: &ImageInput, buf: &[u8], table_rva: usize, psize: usize) -> Option<String> {
+    if !matches!(img.arch, Arch::X86) {
+        return None;
+    }
+    let base = img.base;
+    let col_va = read_ptr(buf, table_rva.checked_sub(psize)?, psize)?;
+    let col_rva = col_va.checked_sub(base)?;
+    let td_va = read_ptr(buf, col_rva.checked_add(0x0C)?, psize)?;
+    let name_off = td_va.checked_sub(base)?.checked_add(0x08)?;
+    if name_off >= buf.len() {
+        return None;
+    }
+    let rel_end = buf[name_off..].iter().take(160).position(|&b| b == 0)?;
+    let raw = std::str::from_utf8(&buf[name_off..name_off + rel_end]).ok()?;
+    demangle_rtti_name(raw)
+}
+
+// ".?AVCWvsContext@@" -> "CWvsContext"; ".?AUSomeStruct@@" -> "SomeStruct". `None` when it is not a
+// class/struct type-descriptor name.
+fn demangle_rtti_name(raw: &str) -> Option<String> {
+    let s = raw
+        .strip_prefix(".?AV")
+        .or_else(|| raw.strip_prefix(".?AU"))?;
+    let body = s.strip_suffix("@@").unwrap_or(s);
+    let leaf = body.split('@').next().unwrap_or(body);
+    (!leaf.is_empty() && leaf.chars().all(|c| c.is_ascii_graphic())).then(|| leaf.to_string())
+}
+
 /// The first `n` instruction mnemonics of the function at `rva`, the multiset fingerprint of one slot.
 fn slot_mnemonics(img: &ImageInput, rva: usize, n: usize) -> Vec<u16> {
     let bytes = read_at(img.source, img.base, rva, n * 8);

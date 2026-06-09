@@ -5,9 +5,9 @@
 use serde::{Deserialize, Serialize};
 
 use maple_core::{
-    FileImage, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport, SigStage,
-    TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
-    make_string_anchor, negative_corpus_hits, try_signature_from_aob,
+    FileImage, FunctionInsight, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport,
+    SigStage, TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
+    inspect_function, make_string_anchor, negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
 
@@ -424,6 +424,100 @@ pub fn inspect_pe(path: String) -> Result<PeInfoView, String> {
         reasons: report.reasons,
         max_entropy: report.max_code_entropy,
     })
+}
+
+#[derive(Serialize)]
+struct DisasmLineView {
+    rva: String,
+    bytes: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct VtableInsightView {
+    table_rva: String,
+    slot: usize,
+    slot_count: usize,
+    class_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct FunctionInsightView {
+    /// Image base, so the UI can render absolute addresses (base + rva).
+    base: String,
+    query_rva: String,
+    entry_rva: String,
+    instr_count: usize,
+    blocks: usize,
+    calls: usize,
+    branches: usize,
+    returns: usize,
+    xref_count: usize,
+    constants: Vec<String>,
+    strings: Vec<String>,
+    callers: Vec<String>,
+    callees: Vec<String>,
+    imports: Vec<String>,
+    string_anchor: Option<String>,
+    vtable: Option<VtableInsightView>,
+    disasm: Vec<DisasmLineView>,
+}
+
+fn insight_view(i: &FunctionInsight, base: usize) -> FunctionInsightView {
+    let hex = |v: u64| format!("0x{v:X}");
+    FunctionInsightView {
+        base: format!("0x{base:X}"),
+        query_rva: hex(i.query_rva),
+        entry_rva: hex(i.entry_rva),
+        instr_count: i.instr_count,
+        blocks: i.blocks,
+        calls: i.calls,
+        branches: i.branches,
+        returns: i.returns,
+        xref_count: i.xref_count,
+        constants: i.constants.iter().map(|c| format!("0x{c:X}")).collect(),
+        strings: i.strings.clone(),
+        callers: i.callers.iter().copied().map(hex).collect(),
+        callees: i.callees.iter().copied().map(hex).collect(),
+        imports: i.imports.clone(),
+        string_anchor: i.string_anchor.clone(),
+        vtable: i.vtable.as_ref().map(|v| VtableInsightView {
+            table_rva: hex(v.table_rva),
+            slot: v.slot,
+            slot_count: v.slot_count,
+            class_name: v.class_name.clone(),
+        }),
+        disasm: i
+            .disasm
+            .iter()
+            .map(|d| DisasmLineView {
+                rva: hex(d.rva),
+                bytes: d.bytes.clone(),
+                text: d.text.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Deep per-function analysis of one address in a client binary, for the desktop "Investigate" panel:
+/// the function's CFG-lite shape, cross-references, callers/callees, imported APIs, referenced strings and
+/// constants, vtable/RTTI membership, and a disassembly listing.
+#[tauri::command]
+pub fn inspect_address(path: String, rva: String) -> Result<FunctionInsightView, String> {
+    let img = FileImage::open(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    let report = img.pack_report();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    let input = image_input(name, &img, report.likely_packed, report.reasons);
+    let clean = rva.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let rva_n = usize::from_str_radix(clean, 16).map_err(|_| format!("invalid address: {rva}"))?;
+    if rva_n >= img.size() {
+        return Err(format!("address 0x{rva_n:X} is outside the image"));
+    }
+    let insight = inspect_function(&input, rva_n);
+    Ok(insight_view(&insight, img.base()))
 }
 
 #[derive(Clone, Serialize)]
