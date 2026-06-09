@@ -50,13 +50,13 @@ pub(super) fn read_at(src: &dyn MemorySource, base: usize, rva: usize, len: usiz
     buf
 }
 
-struct CodeCache {
+pub(super) struct CodeCache {
     image_base: usize,
     regions: Vec<(usize, Vec<u8>)>,
 }
 
 impl CodeCache {
-    fn build(img: &ImageInput) -> Self {
+    pub(super) fn build(img: &ImageInput) -> Self {
         let regions = img
             .code_regions
             .iter()
@@ -68,7 +68,7 @@ impl CodeCache {
         }
     }
 
-    fn locate(&self, pat: &CompiledPattern) -> (usize, Option<u64>) {
+    pub(super) fn locate(&self, pat: &CompiledPattern) -> (usize, Option<u64>) {
         let mut count = 0;
         let mut first: Option<u64> = None;
         for (base, bytes) in &self.regions {
@@ -287,6 +287,7 @@ fn resolve_anchor(anchor: Anchor, img: &ImageInput, site: usize) -> Option<usize
     }
 }
 
+mod aob;
 mod callers;
 mod chain;
 mod constants;
@@ -297,6 +298,7 @@ mod identity;
 mod imports;
 mod model;
 mod vtable;
+use aob::collapse_aob_ranges;
 use chain::relocate_path;
 use ensemble::{anchor_landing, ensemble_decide};
 pub use identity::*;
@@ -638,64 +640,6 @@ fn vtable_relocate_path(
                 .then_some((rva as u64, agree))
         },
     )
-}
-
-/// Whether `aob` matches build `img` exactly once and that one match is at `rva`. The match-at-RVA
-/// requirement is essential: a pattern that happens to be unique elsewhere is a different function that
-/// coincidentally shares the bytes, and extending a version range onto it would report a wrong address.
-fn aob_unique_at(img: &ImageInput, aob: &str, rva: usize) -> bool {
-    let Ok(sig) = try_signature_from_aob(aob) else {
-        return false;
-    };
-    let Some(pat) = CompiledPattern::new(&sig) else {
-        return false;
-    };
-    let (count, first) = CodeCache::build(img).locate(&pat);
-    count == 1 && first == Some(rva as u64)
-}
-
-/// Collapse a relocation's per-build minted AOBs into contiguous version ranges. Walking builds in
-/// order, the current range's AOB is carried forward as long as it still matches the next build at that
-/// build's relocated address; when it stops (a recompile moved the bytes) or a build was not reached,
-/// the run closes and the next reached build's freshly minted AOB starts a new run. The result is the
-/// "AOB X works v83..v88, AOB Y works v91..v95" story, derived purely from `resolved_target_rva`, so it
-/// works for any anchor type, not just vtables.
-fn collapse_aob_ranges(images: &[ImageInput], per_version: &[PerVersion]) -> Vec<AobRange> {
-    let mut ranges: Vec<AobRange> = Vec::new();
-    let mut cur: Option<(String, String, Vec<String>)> = None; // (aob, minted_in, labels)
-    let close = |cur: Option<(String, String, Vec<String>)>, ranges: &mut Vec<AobRange>| {
-        if let Some((aob, minted_in, labels)) = cur {
-            ranges.push(AobRange {
-                aob,
-                minted_in,
-                first_label: labels.first().cloned().unwrap_or_default(),
-                last_label: labels.last().cloned().unwrap_or_default(),
-                labels,
-            });
-        }
-    };
-    for pv in per_version {
-        let (Some(rva), Some(aob)) = (pv.resolved_target_rva, pv.aob.as_ref()) else {
-            close(cur.take(), &mut ranges);
-            continue;
-        };
-        let Some(im) = images.iter().find(|i| i.label == pv.label) else {
-            // An unresolvable label breaks contiguity rather than silently bridging the two sides.
-            close(cur.take(), &mut ranges);
-            continue;
-        };
-        let extend = cur
-            .as_ref()
-            .is_some_and(|(a, _, _)| aob_unique_at(im, a, rva as usize));
-        if extend {
-            cur.as_mut().unwrap().2.push(pv.label.clone());
-        } else {
-            close(cur.take(), &mut ranges);
-            cur = Some((aob.clone(), pv.label.clone(), vec![pv.label.clone()]));
-        }
-    }
-    close(cur.take(), &mut ranges);
-    ranges
 }
 
 /// Cross-version relocation by C++ vtable structure, for a virtual method with no distinctive string or
@@ -4928,7 +4872,7 @@ mod tests {
             let Some(aob) = single_build_aob(&v951, v95rva, &opts) else {
                 continue;
             };
-            if aob_unique_at(&v951, &aob, v95rva) {
+            if aob::aob_unique_at(&v951, &aob, v95rva) {
                 ok += 1;
                 if shown < 6 {
                     shown += 1;
@@ -5060,7 +5004,7 @@ mod tests {
                 let Some(aob) = single_build_aob(&v951, v95rva, &opts) else {
                     continue;
                 };
-                if aob_unique_at(&v951, &aob, v95rva) {
+                if aob::aob_unique_at(&v951, &aob, v95rva) {
                     ok += 1;
                     if shown < 6 {
                         shown += 1;
@@ -5292,7 +5236,7 @@ mod tests {
 
         let enc = |img: &ImageInput, rva: usize| identity::enclosing_function(img, rva);
         let validate = |img: &ImageInput, r: usize| {
-            single_build_aob(img, r, &opts).is_some_and(|aob| aob_unique_at(img, &aob, r))
+            single_build_aob(img, r, &opts).is_some_and(|aob| aob::aob_unique_at(img, &aob, r))
         };
 
         // The population: distinct v83 function entries (every E8 rel32 call target landing in code), and
