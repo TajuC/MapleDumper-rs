@@ -23,7 +23,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::constants::{ConstantAnchor, make_constant_anchor, resolve_constant_anchor};
 use super::identity::{enclosing_function, make_string_anchor, resolve_string_anchor};
+use super::imports::{ImportAnchor, make_import_anchor, resolve_import_anchor};
 use super::model::AnalysisModel;
 use super::types::ImageInput;
 use crate::domain::StringAnchor;
@@ -245,10 +247,10 @@ pub(super) fn align(
 }
 
 /// Make the certain-seed string anchors among `candidates` (function entries in build `a`): a candidate
-/// whose own string anchor pins exactly it in `a` is kept with its anchor. Done once in the reference;
-/// each build then re-resolves these via [`resolve_seeds`], so the image-scanning anchor construction is
-/// not repeated per build. The string anchor is the project's most precise, build-stable channel, so a
-/// resolved seed is ~1.0 confidence.
+/// whose own string anchor pins exactly it in `a` is kept with its anchor. The string-only baseline kept for
+/// the corpus harnesses to measure against the densified seeding ([`densified_anchors`]) the production path
+/// now uses; not on the production path itself, so it is test-only.
+#[cfg(test)]
 #[must_use]
 pub(super) fn anchor_candidates(
     a: &ImageInput,
@@ -263,9 +265,11 @@ pub(super) fn anchor_candidates(
         .collect()
 }
 
-/// Resolve the reference's seed anchors in build `b`, yielding the 1:1 correspondence `(ref_fn, b_fn)` for
-/// every anchor that pins exactly one function in `b`. An anchor that is absent or ambiguous in `b` simply
-/// drops out of the seed set for that build.
+/// Resolve the string-only seed anchors in build `b`, yielding the 1:1 correspondence `(ref_fn, b_fn)` for
+/// every anchor that pins exactly one function in `b`. The baseline counterpart of [`anchor_candidates`],
+/// kept for the corpus harnesses; the production path resolves the densified seeds via
+/// [`resolve_seed_anchors`], so this is test-only.
+#[cfg(test)]
 #[must_use]
 pub(super) fn resolve_seeds(
     b: &ImageInput,
@@ -275,6 +279,89 @@ pub(super) fn resolve_seeds(
         .iter()
         .filter_map(|(fa, sa)| resolve_string_anchor(b, sa).map(|fb| (*fa, fb)))
         .collect()
+}
+
+/// A seed anchor: a build-stable handle that resolves a function 1:1 across builds. The string anchor is the
+/// most precise; the import set and a rare constant are the additional certain channels that DENSIFY the seed
+/// set where a major refactor leaves too few surviving strings to propagate (the measured v95 limit: only ~12
+/// string seeds survive, so string-only alignment commits nothing past the break, while the densified set
+/// bridges it reverse-consistently). See the `--ignored` `graph_seed_densification_across_v95` harness.
+pub(super) enum SeedAnchor {
+    String(StringAnchor),
+    Import(ImportAnchor),
+    Constant(ConstantAnchor),
+}
+
+impl SeedAnchor {
+    /// The single function this anchor pins in build `b`, or `None` if it is absent or ambiguous there. Each
+    /// channel resolves the way its own relocation driver does, so a densified seed is exactly as trustworthy
+    /// as that channel's 1:1 resolution.
+    fn resolve(&self, b: &ImageInput) -> Option<usize> {
+        match self {
+            SeedAnchor::String(a) => resolve_string_anchor(b, a),
+            SeedAnchor::Import(a) => resolve_import_anchor(b, a),
+            SeedAnchor::Constant(a) => {
+                resolve_constant_anchor(b, a).map(|r| enclosing_function(b, r))
+            }
+        }
+    }
+}
+
+/// Make the densified seed anchors among `candidates` in build `a`: each candidate's string, import, and
+/// constant anchor that pins exactly it in `a`. Kept in priority order (every string first, then imports,
+/// then constants) so the per-build combine in [`resolve_seed_anchors`] keeps the most precise seed when two
+/// channels would disagree. Made once in the reference, re-resolved per build, exactly like [`anchor_candidates`].
+#[must_use]
+pub(super) fn densified_anchors(a: &ImageInput, candidates: &[usize]) -> Vec<(usize, SeedAnchor)> {
+    let mut out: Vec<(usize, SeedAnchor)> = Vec::new();
+    for &fa in candidates {
+        if let Some(sa) = make_string_anchor(a, fa)
+            && resolve_string_anchor(a, &sa) == Some(fa)
+        {
+            out.push((fa, SeedAnchor::String(sa)));
+        }
+    }
+    for &fa in candidates {
+        if let Some(ia) = make_import_anchor(a, fa)
+            && resolve_import_anchor(a, &ia) == Some(fa)
+        {
+            out.push((fa, SeedAnchor::Import(ia)));
+        }
+    }
+    for &fa in candidates {
+        if let Some(ca) = make_constant_anchor(a, fa)
+            && resolve_constant_anchor(a, &ca).map(|r| enclosing_function(a, r)) == Some(fa)
+        {
+            out.push((fa, SeedAnchor::Constant(ca)));
+        }
+    }
+    out
+}
+
+/// Resolve the densified seed anchors in build `b` into a 1:1 seed correspondence. Anchors are taken in their
+/// priority order (string, then import, then constant); a source function already seeded by a higher-priority
+/// channel, or a target function already claimed, is skipped, so a coincidental import or constant collision
+/// can never overwrite a string seed or double-bind a target. This is the per-build combine the densification
+/// harness validated as reverse-consistent.
+#[must_use]
+pub(super) fn resolve_seed_anchors(
+    b: &ImageInput,
+    anchors: &[(usize, SeedAnchor)],
+) -> Vec<(usize, usize)> {
+    let mut map: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut used: BTreeSet<usize> = BTreeSet::new();
+    for (fa, sa) in anchors {
+        if map.contains_key(fa) {
+            continue;
+        }
+        if let Some(fb) = sa.resolve(b)
+            && !used.contains(&fb)
+        {
+            map.insert(*fa, fb);
+            used.insert(fb);
+        }
+    }
+    map.into_iter().collect()
 }
 
 #[cfg(test)]

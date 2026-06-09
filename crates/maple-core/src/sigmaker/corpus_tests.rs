@@ -110,6 +110,175 @@ fn graph_alignment_propagates_beyond_seeds_and_is_reverse_consistent() {
     );
 }
 
+// Phase 7 follow-up (run with `--ignored`): the v95 reach is seed-density-limited (only ~12 string anchors
+// survive the class refactor), so this measures whether DENSIFYING the seed set with the other build-stable
+// 1:1 channels (import set and rare constant, both of which resolve a function uniquely when they resolve at
+// all) lets propagation bridge the v95 break that string-only seeding cannot. For each hop it aligns twice,
+// once from string-only seeds (the baseline) and once from string + import + constant seeds, and reports the
+// propagated-beyond-seeds count and the INDEPENDENT reverse-consistency for each. The honesty gate is the
+// same as the graph harness: a forward propagated match whose target relocates back to a different function
+// under an independent reverse alignment is a confirmed wrong address, and the densified path must hold that
+// at zero. A positive result (densified propagates reverse-consistently past v95 where the baseline does not)
+// would justify wiring these seed channels into `graph_relocate`; a null result is the honest finding that
+// the break is seed-quality-limited, not merely seed-count-limited.
+#[test]
+#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[allow(clippy::too_many_lines)]
+fn graph_seed_densification_across_v95_is_measured_and_reverse_consistent() {
+    use crate::fileimage::FileImage;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    let dir = Path::new(r"X:\Client_Unpacked");
+    let names = [
+        "GMS_v83.1_U_DEVM.exe",
+        "GMS_v84.1_U_DEVM.exe",
+        "GMS_v88.1_U_DEVM.exe",
+        "GMS_v91.1_U_DEVM.exe",
+        "GMS_v95.1_U_DEVM.exe",
+    ];
+    if names.iter().any(|n| !dir.join(n).exists()) {
+        eprintln!("real GMS clients not present; skipping");
+        return;
+    }
+    fn mk<'a>(label: &str, img: &'a FileImage) -> ImageInput<'a> {
+        let pack = img.pack_report();
+        ImageInput {
+            label: label.to_string(),
+            source: img,
+            base: img.base(),
+            size: img.size(),
+            code_regions: img.code_regions(),
+            regions: img.regions(),
+            import: img.import_range(),
+            arch: img.arch(),
+            code_hash: img.code_hash(),
+            packed: pack.likely_packed,
+            pack_reasons: pack.reasons,
+            reloc: None,
+        }
+    }
+    let imgs: Vec<FileImage> = names
+        .iter()
+        .map(|n| FileImage::open(&dir.join(n)).unwrap())
+        .collect();
+    let labels = ["v83", "v84", "v88", "v91", "v95.1"];
+    let chain: Vec<ImageInput> = labels.iter().zip(&imgs).map(|(l, i)| mk(l, i)).collect();
+    let v83 = &chain[0];
+
+    let m83 = model::AnalysisModel::build(v83);
+    let g83 = graph::CallGraph::build(v83, &m83);
+    let v83_fns: Vec<usize> = m83.entries().to_vec();
+
+    // Build each channel's seed anchors ONCE in the reference, keeping only those that pin exactly their own
+    // function in v83 (the same self-check `anchor_candidates` applies to strings). Import and constant
+    // anchors resolve a function uniquely or not at all, so a resolved anchor is a 1:1 seed.
+    let str_anchors = graph::anchor_candidates(v83, &v83_fns);
+    let imp_anchors: Vec<(usize, _)> = v83_fns
+        .iter()
+        .filter_map(|&fa| {
+            let a = imports::make_import_anchor(v83, fa)?;
+            (imports::resolve_import_anchor(v83, &a) == Some(fa)).then_some((fa, a))
+        })
+        .collect();
+    let const_anchors: Vec<(usize, _)> = v83_fns
+        .iter()
+        .filter_map(|&fa| {
+            let a = constants::make_constant_anchor(v83, fa)?;
+            let r = constants::resolve_constant_anchor(v83, &a)?;
+            (identity::enclosing_function(v83, r) == fa).then_some((fa, a))
+        })
+        .collect();
+    eprintln!(
+        "=== Phase 7 seed densification (v83 anchors: {} string, {} import, {} constant of {} entries) ===",
+        str_anchors.len(),
+        imp_anchors.len(),
+        const_anchors.len(),
+        v83_fns.len()
+    );
+
+    // Combine seeds 1:1 with string priority: a function already seeded by a stronger channel keeps that
+    // seed, and a target function already claimed is not seeded again, so a coincidental import/constant
+    // collision cannot overwrite a string seed or double-bind a target.
+    let combine = |sets: &[&[(usize, usize)]]| -> Vec<(usize, usize)> {
+        let mut map: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut used: BTreeSet<usize> = BTreeSet::new();
+        for set in sets {
+            for &(a, b) in *set {
+                if map.contains_key(&a) || used.contains(&b) {
+                    continue;
+                }
+                map.insert(a, b);
+                used.insert(b);
+            }
+        }
+        map.into_iter().collect()
+    };
+
+    // Reverse-consistency of one alignment: propagate the inverse correspondence independently and count how
+    // many forward propagated (non-seed) matches relocate back to a different function. That count is the
+    // confirmed-wrong-address total and must be zero.
+    let measure = |seeds: &[(usize, usize)], gt: &graph::CallGraph| -> (usize, usize) {
+        let rev_seeds: Vec<(usize, usize)> = seeds.iter().map(|&(a, b)| (b, a)).collect();
+        let fwd = graph::align(&g83, gt, seeds);
+        let rev = graph::align(gt, &g83, &rev_seeds);
+        let seed_a: BTreeSet<usize> = seeds.iter().map(|&(a, _)| a).collect();
+        let (mut propagated, mut inconsistent) = (0usize, 0usize);
+        for (&a, &b) in &fwd {
+            if seed_a.contains(&a) {
+                continue;
+            }
+            propagated += 1;
+            if matches!(rev.get(&b), Some(&back) if back != a) {
+                inconsistent += 1;
+            }
+        }
+        (propagated, inconsistent)
+    };
+
+    let mut total_inconsistent = 0usize;
+    for (label, tgt) in [
+        ("v84", &chain[1]),
+        ("v88", &chain[2]),
+        ("v91", &chain[3]),
+        ("v95.1", &chain[4]),
+    ] {
+        let mt = model::AnalysisModel::build(tgt);
+        let gt = graph::CallGraph::build(tgt, &mt);
+        let s_str = graph::resolve_seeds(tgt, &str_anchors);
+        let s_imp: Vec<(usize, usize)> = imp_anchors
+            .iter()
+            .filter_map(|(fa, a)| imports::resolve_import_anchor(tgt, a).map(|fb| (*fa, fb)))
+            .collect();
+        let s_const: Vec<(usize, usize)> = const_anchors
+            .iter()
+            .filter_map(|(fa, a)| {
+                constants::resolve_constant_anchor(tgt, a)
+                    .map(|r| (*fa, identity::enclosing_function(tgt, r)))
+            })
+            .collect();
+        let baseline = combine(&[&s_str]);
+        let densified = combine(&[&s_str, &s_imp, &s_const]);
+        let (b_prop, b_inc) = measure(&baseline, &gt);
+        let (d_prop, d_inc) = measure(&densified, &gt);
+        total_inconsistent += d_inc + b_inc;
+        eprintln!(
+            "v83 -> {label}: seeds string {} (+import {} +const {} -> densified {}) | propagated beyond seeds: baseline {b_prop} (inc {b_inc}) -> densified {d_prop} (inc {d_inc})",
+            s_str.len(),
+            s_imp.len(),
+            s_const.len(),
+            densified.len()
+        );
+    }
+
+    // The densified seeding must not introduce a single reverse-inconsistent (confirmed wrong) match on any
+    // hop; coverage is allowed to stay flat (the honest null result), but never at the cost of a false bind.
+    assert_eq!(
+        total_inconsistent, 0,
+        "seed densification produced a reverse-inconsistent (confirmed wrong) match"
+    );
+}
+
 // Broad cross-version validation sweep (run with `--ignored`): on the real GMS lineage, how many
 // functions each relocation anchor actually carries from v83 to v95.1, and at what false-positive
 // (wrong-address) rate. This turns "validated on a handful of cases" into corpus-wide numbers.

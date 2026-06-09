@@ -565,10 +565,18 @@ pub(super) fn graph_relocate(
     let ref_model = model::AnalysisModel::build(&images[ref_idx]);
     let ref_graph = graph::CallGraph::build(&images[ref_idx], &ref_model);
     let candidates = ref_graph.neighbourhood(entry, GRAPH_DEPTH, GRAPH_CAP);
-    // Make the seed anchors once in the reference; each build re-resolves them. Need at least two, since
-    // a single neighbour cannot reach the consensus floor.
-    let anchors = graph::anchor_candidates(&images[ref_idx], &candidates);
-    if anchors.len() < 2 {
+    // Make the densified seed anchors once in the reference (string, import, and constant 1:1 channels); each
+    // build re-resolves and combines them. Densifying past string-only seeding is what bridges the v95 break,
+    // where too few strings survive to propagate; the measured gain is reverse-consistent at FP 0 (see the
+    // `graph_seed_densification_across_v95` harness). Need at least two distinct seed functions, since a
+    // single matched neighbour cannot reach the consensus floor.
+    let anchors = graph::densified_anchors(&images[ref_idx], &candidates);
+    let distinct_seeds = anchors
+        .iter()
+        .map(|(fa, _)| *fa)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if distinct_seeds < 2 {
         return None;
     }
 
@@ -582,7 +590,7 @@ pub(super) fn graph_relocate(
         } else {
             let b_model = model::AnalysisModel::build(&images[idx]);
             let b_graph = graph::CallGraph::build(&images[idx], &b_model);
-            let seeds = graph::resolve_seeds(&images[idx], &anchors);
+            let seeds = graph::resolve_seed_anchors(&images[idx], &anchors);
             if seeds.len() < 2 {
                 None
             } else {
