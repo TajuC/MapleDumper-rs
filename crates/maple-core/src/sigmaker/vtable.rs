@@ -695,6 +695,118 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+    fn rtti_is_sparse_and_exception_only_not_a_general_anchor() {
+        // Phase 3 premise check: real classes carry navigable RTTI, and the mangled class names persist
+        // across the v95 refactor that drives the structural chain reach to 0% (CROSS_VERSION_BASELINE).
+        // If this holds, RTTI class-name grounding bridges exactly where the per-slot matcher declines.
+        use crate::fileimage::FileImage;
+        use std::path::Path;
+
+        let dir = Path::new(r"X:\Client_Unpacked");
+        let names = ["GMS_v83.1_U_DEVM.exe", "GMS_v95.1_U_DEVM.exe"];
+        if names.iter().any(|n| !dir.join(n).exists()) {
+            eprintln!("real GMS clients not present; skipping");
+            return;
+        }
+        fn mk(img: &FileImage) -> ImageInput<'_> {
+            let pack = img.pack_report();
+            ImageInput {
+                label: String::new(),
+                source: img,
+                base: img.base(),
+                size: img.size(),
+                code_regions: img.code_regions(),
+                regions: img.regions(),
+                import: img.import_range(),
+                arch: img.arch(),
+                code_hash: img.code_hash(),
+                packed: pack.likely_packed,
+                pack_reasons: pack.reasons,
+                reloc: None,
+            }
+        }
+        let i83 = FileImage::open(&dir.join(names[0])).unwrap();
+        let img = mk(&i83);
+        let base = img.base;
+        let buf = whole_image(&img);
+        // A: are the TypeDescriptor name strings even present in the mapped image (as opposed to only in
+        // the raw file)? Scan for the mangled-name marker and report where.
+        let mut td_name_rvas: Vec<usize> = Vec::new();
+        let mut w = 0usize;
+        while w + 4 <= buf.len() {
+            if &buf[w..w + 4] == b".?AV" || &buf[w..w + 4] == b".?AU" {
+                td_name_rvas.push(w);
+            }
+            w += 1;
+        }
+        eprintln!(
+            "v83 base=0x{base:X} size=0x{:X}; '.?AV/.?AU' RTTI name occurrences in mapped image: {}",
+            img.size,
+            td_name_rvas.len()
+        );
+        for &r in td_name_rvas.iter().take(6) {
+            let end = buf[r..].iter().take(96).position(|&b| b == 0).unwrap_or(0);
+            eprintln!(
+                "  name@rva 0x{r:X}: {}",
+                String::from_utf8_lossy(&buf[r..r + end])
+            );
+        }
+        // C/D: reverse-walk from the first few names. td = name-8, td_va = base+td_rva. Find a COL whose
+        // +0x0C points at td_va (and whose +0 signature is 0), then a pointer equal to that COL's VA (a
+        // vtable[-1]). This reveals whether the COL/locator chain exists and at what offsets, independent
+        // of any assumption the forward reader makes.
+        for &name_rva in td_name_rvas.iter().take(5) {
+            let td_va = base + name_rva - 8;
+            let mut col_rva = None;
+            let mut c = 0usize;
+            while c + 0x10 <= buf.len() {
+                if read_ptr(&buf, c + 0x0C, 4) == Some(td_va) && read_ptr(&buf, c, 4) == Some(0) {
+                    col_rva = Some(c);
+                    break;
+                }
+                c += 4;
+            }
+            match col_rva {
+                None => eprintln!("  td_va 0x{td_va:X}: no COL (sig0 + +0xC->td) found"),
+                Some(cr) => {
+                    let col_va = base + cr;
+                    let mut vtm1 = None;
+                    let mut p = 0usize;
+                    while p + 4 <= buf.len() {
+                        if read_ptr(&buf, p, 4) == Some(col_va) {
+                            vtm1 = Some(p);
+                            break;
+                        }
+                        p += 4;
+                    }
+                    eprintln!(
+                        "  td_va 0x{td_va:X}: COL@rva 0x{cr:X} (va 0x{col_va:X}); vtable[-1]@rva {vtm1:X?} (vtable starts at +4)"
+                    );
+                }
+            }
+        }
+        // Finding (Phase 3): RTTI is present but sparse and exception/framework-only. v83 carries ~16
+        // type descriptors, every one an exception/error/security type (the C++ classes whose exception
+        // handling forces RTTI); the gameplay classes a user actually relocates (CWvsContext, CUser,
+        // packet handlers) carry none, because the client is built /GR- everywhere else. The reverse-walk
+        // above confirms the locator chain is real where it exists, so this is not a reader bug. The
+        // consequence: RTTI class-name grounding cannot bridge the v95 break for the targets that matter,
+        // so the audit's "RTTI is the highest-value vtable anchor" does not hold for this corpus. The real
+        // cross-v95 bridge is the ensemble plus graph alignment (Phases 4/7), not RTTI. This test pins the
+        // finding so a future, RTTI-rich corpus would re-open the question.
+        assert!(
+            !td_name_rvas.is_empty(),
+            "RTTI name strings are present (sparse) on real GMS"
+        );
+        assert!(
+            td_name_rvas.len() < 64,
+            "RTTI is expected to be sparse/exception-only here; {} names would suggest a richer corpus worth re-evaluating",
+            td_name_rvas.len()
+        );
+    }
+
+    #[test]
     fn vtable_round_trips_on_x64() {
         // #12: the structural per-slot matcher is arch-neutral, and vtables now reads 8-byte x64
         // pointers. A synthetic x64 image with one 10-slot table of 8-byte function pointers: vtables

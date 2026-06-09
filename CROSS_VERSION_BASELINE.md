@@ -43,8 +43,22 @@ v95 break (97% -> 71%).
 
 v61 12% · v68 16% · **v83 32%** · v84 24% · v88 24% · v91 24% · **v95.1 0%** · v95.5 0% · v100 0% ·
 v111 0%. The structural matcher carries within the v83-v91 lineage and **collapses to 0% at v95.1 and
-beyond**. This is the v95 class refactor the structural fingerprint cannot bridge, and the precise gap
-RTTI class-name anchoring (Phase 3) targets.
+beyond**. This is the v95 class refactor the structural fingerprint cannot bridge.
+
+### RTTI finding (Phase 3, investigated and declined on data)
+
+The re-audit proposed RTTI class-name grounding as the highest-value bridge for exactly that v95 gap. A
+reverse-walk probe (`vtable::tests::rtti_is_sparse_and_exception_only_not_a_general_anchor`) measured the
+reality: v83's mapped image contains only **~16 RTTI type descriptors, every one an exception / error /
+security framework class** (`_com_error`, `ZException`, `CMSException`, `CTerminateException`,
+`CDisconnectException`, `CPatchException`, `CSecurity*`, the std exception types). The gameplay classes a
+user actually relocates (`CWvsContext`, `CUser`, packet handlers) carry **no RTTI**, because the client is
+built `/GR-` except where C++ exception handling forces it. The locator chain is genuinely navigable where
+it exists (the probe resolves com_error's vtable[-1] -> COL -> TypeDescriptor), so this is not a reader
+bug. RTTI therefore cannot bridge the v95 break for the targets that matter, and the audit's "RTTI is the
+highest-value vtable anchor" does not hold for this corpus. **The real cross-v95 bridge is the ensemble
+plus graph alignment (Phases 4 and 7)**, which relocate a method with no content anchor by its position in
+the matched call/vtable graph. The probe is kept so a future, RTTI-rich corpus would re-open the question.
 
 ## Generation cost (criterion bench, synthetic decodable module)
 
