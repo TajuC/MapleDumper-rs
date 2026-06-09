@@ -7,6 +7,20 @@ already control and makes no network requests. The most relevant security
 concerns are memory safety while parsing untrusted binaries and the integrity of
 the desktop app's local data.
 
+## Trust boundaries and accepted risks
+
+The desktop backend commands that open a binary (for example `inspect_pe` and
+`generate_signature`) take filesystem paths the user selected through the app's
+own file dialog, and pass them to a read-only, fuzz-tested PE parser. They are
+not validated or canonicalised before use. This is an accepted risk, not an
+oversight: the commands only ever read a file the operator already chose on a
+machine they already control, they return derived metadata (architecture,
+sections, a signature) rather than file contents, and the app's Content Security
+Policy and window-only capabilities leave no channel to exfiltrate what is read.
+Routing these through a shared path validator would add defence in depth but
+crosses no new trust boundary, so it is tracked as a hardening nicety rather than
+a fix.
+
 ## Supported versions
 
 Security fixes target the latest commit on the default branch.
