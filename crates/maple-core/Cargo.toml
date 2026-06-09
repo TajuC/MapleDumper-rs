@@ -20,6 +20,10 @@ proptest = "1"
 name = "scan"
 harness = false
 
+[[bench]]
+name = "generate"
+harness = false
+
 [lints]
 workspace = true
 

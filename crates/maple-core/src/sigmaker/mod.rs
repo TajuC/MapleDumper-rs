@@ -4633,12 +4633,24 @@ mod tests {
         use std::path::Path;
 
         let dir = Path::new(r"X:\Client_Unpacked");
+        // The full GMS unprotected lineage (v61.1 -> v111.1), spanning several real major refactors, not
+        // just the single v95 structural break. Themida/VMProtect builds (v116/v117/v126/v131) are
+        // statically unanalyzable and excluded. The reference is v83 and the headline round-trip target is
+        // v95.1 (the known class refactor), so the per-anchor FP figures stay comparable to earlier runs
+        // while the reach tables now chart coverage decay across the whole lineage on both sides of v83.
         let chain_names = [
+            "GMS_v61.1_U_DEVM.exe",
+            "GMS_v62.1_U_DEVM.exe",
+            "GMS_v68.1_U_DEVM.exe",
+            "GMS_v72.1_U_DEVM.exe",
             "GMS_v83.1_U_DEVM.exe",
             "GMS_v84.1_U_DEVM.exe",
             "GMS_v88.1_U_DEVM.exe",
             "GMS_v91.1_U_DEVM.exe",
             "GMS_v95.1_U_DEVM.exe",
+            "GMS_v95.5_U_DEVM.exe",
+            "GMS_v100.1_U_DEVM.exe",
+            "GMS_v111.1_U_DEVM.exe",
         ];
         if chain_names.iter().any(|n| !dir.join(n).exists()) {
             eprintln!("real GMS clients not present; skipping");
@@ -4665,10 +4677,14 @@ mod tests {
             .iter()
             .map(|n| FileImage::open(&dir.join(n)).unwrap())
             .collect();
-        let labels = ["v83", "v84", "v88", "v91", "v95.1"];
+        let labels = [
+            "v61", "v62", "v68", "v72", "v83", "v84", "v88", "v91", "v95.1", "v95.5", "v100",
+            "v111",
+        ];
         let chain: Vec<ImageInput> = labels.iter().zip(&imgs).map(|(l, i)| mk(l, i)).collect();
         let opts = SigOptions::default();
-        let (refi, tgti) = (0usize, 4usize);
+        // v83 is the reference (index 4), v95.1 the headline round-trip target (index 8).
+        let (refi, tgti) = (4usize, 8usize);
         let rf = &chain[refi];
         let tg = &chain[tgti];
 
@@ -5109,7 +5125,7 @@ mod tests {
         let cstep = (vt_sample.len() / N_CHAIN).max(1);
         let required: Vec<usize> = (0..chain.len()).collect();
         let mut chain_attempt = 0usize;
-        let mut chain_reach = [0usize; 5];
+        let mut chain_reach = vec![0usize; chain.len()];
         for &m in vt_sample.iter().step_by(cstep).take(N_CHAIN) {
             chain_attempt += 1;
             let Some(cand) = vtable_relocate(&chain, &required, refi, m as u64, &opts) else {
