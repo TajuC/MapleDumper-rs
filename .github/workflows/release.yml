@@ -1,8 +1,8 @@
 name: Release
 
 # Cut a release by pushing an annotated tag like v0.4.0. The job builds the CLI with an embedded
-# dependency list (cargo auditable), generates a CycloneDX SBOM, computes SHA-256 checksums, and
-# publishes a GitHub release with all three attached.
+# dependency list (cargo auditable) and the Tauri desktop app installer (NSIS), generates a CycloneDX
+# SBOM, computes SHA-256 checksums, and publishes a GitHub release with everything attached.
 on:
   push:
     tags: ["v*"]
@@ -16,12 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - name: Install SBOM tooling
+      - name: Install build and SBOM tooling
         run: |
           cargo install cargo-auditable --version 0.7.4 --locked
           cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo install tauri-cli --version "^2.0" --locked
       - name: Build the CLI with an embedded dependency list
         run: cargo auditable build --release -p maple-cli
+      - name: Build the desktop app installer (Tauri NSIS)
+        working-directory: crates/maple-app
+        run: cargo tauri build --bundles nsis
       - name: Generate a CycloneDX SBOM
         run: cargo cyclonedx --format json
       - name: Assemble artifacts and checksums
@@ -29,6 +33,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/mapledumper.exe dist/mapledumper.exe
+          # The Tauri NSIS installer (MapleDumper_<version>_x64-setup.exe).
+          $setup = Get-ChildItem target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
+          if ($setup) { Copy-Item $setup.FullName -Destination (Join-Path 'dist' $setup.Name) }
+          else { throw 'desktop installer not found under target/release/bundle/nsis' }
           $sboms = @(Get-ChildItem -Recurse -Filter *.cdx.json | Where-Object FullName -NotLike '*\dist\*')
           foreach ($f in $sboms) { Copy-Item $f.FullName -Destination (Join-Path 'dist' $f.Name) }
           $sums = Get-FileHash dist/* -Algorithm SHA256 |
@@ -42,4 +50,4 @@ jobs:
           $assets = Get-ChildItem dist -File | ForEach-Object { $_.FullName }
           gh release create $env:GITHUB_REF_NAME @assets `
             --title $env:GITHUB_REF_NAME `
-            --notes "Automated release. The CLI binary is built with cargo auditable (embedded dependency list); a CycloneDX SBOM and SHA-256 checksums are attached. Verify the dependency list with: cargo audit bin mapledumper.exe. The desktop app installer is not yet bundled here (tracked separately)."
+            --notes "Automated release. ``mapledumper.exe`` is the CLI (built with cargo auditable; verify with: cargo audit bin mapledumper.exe). ``MapleDumper_<version>_x64-setup.exe`` is the desktop app installer (Tauri/NSIS; bundles the WebView2 bootstrapper). A CycloneDX SBOM per crate and SHA-256 checksums are attached."
