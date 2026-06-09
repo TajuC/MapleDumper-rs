@@ -368,6 +368,20 @@
                 </div>
                 <div class="settings-card">
                   <div class="settings-card-head">
+                    <span class="ico" data-icon="target"></span>
+                    <div>
+                      <h3 data-i18n="set.addrModeTitle">Address display</h3>
+                      <p data-i18n="set.addrModeDesc">How addresses are shown across the signature maker and inspector: the section-relative RVA, the absolute virtual address (image base + RVA), or both side by side.</p>
+                    </div>
+                    <select id="addr-mode-select" class="select">
+                      <option value="rva" data-i18n="set.addrRva">RVA</option>
+                      <option value="abs" data-i18n="set.addrAbs">Absolute</option>
+                      <option value="both" data-i18n="set.addrBoth">Both</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="settings-card">
+                  <div class="settings-card-head">
                     <span class="ico" data-icon="eye"></span>
                     <div>
                       <h3 data-i18n="set.maskTitle">Privacy mask</h3>

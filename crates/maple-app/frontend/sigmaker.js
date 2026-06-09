@@ -271,17 +271,67 @@ function sigReasonsHtml(reasons) {
   return `<div class="sig-section-h">${esc(t("sig.reasons"))}</div><ul class="sig-reasons">${reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
 }
 
-function sigCandCard(c, tag, primary) {
+// Build an address formatter for one report, honoring the global address-display setting (state.addrMode).
+// "rva" shows the section-relative RVA as-is; "abs" shows the absolute VA (image base + RVA); "both" shows
+// "rva -> abs". The per-build base comes from r.bases; if a build's base is unknown we degrade to the RVA.
+function makeAddrFmt(r) {
+  const bases = {};
+  (r.bases || []).forEach((b) => {
+    bases[b.label] = b.base;
+  });
+  const mode = (typeof state !== "undefined" && state.addrMode) || "rva";
+  return function (rvaHex, label) {
+    if (!rvaHex) return "-";
+    if (mode === "rva") return rvaHex;
+    const baseHex = bases[label];
+    let abs = null;
+    if (baseHex) {
+      try {
+        abs = "0x" + (BigInt(baseHex) + BigInt(rvaHex)).toString(16).toUpperCase();
+      } catch {
+        abs = null;
+      }
+    }
+    if (!abs) return rvaHex;
+    return mode === "abs" ? abs : `${rvaHex} → ${abs}`;
+  };
+}
+
+// A short suffix for the address column headers so "Match" reads correctly whichever mode is active.
+function addrColTag() {
+  const mode = (typeof state !== "undefined" && state.addrMode) || "rva";
+  return mode === "abs" ? " (abs)" : mode === "both" ? " (rva→abs)" : "";
+}
+
+// The cross-anchor evidence behind a relocated candidate: which channel found it, who agreed, and whether
+// anything disagreed. This is what makes a relocated result auditable instead of a black box.
+function sigLedgerHtml(led) {
+  if (!led) return "";
+  const parts = [t("sig.ledgerVia", { anchor: led.anchor })];
+  if (led.support > 1 && led.corroborators && led.corroborators.length) {
+    parts.push(t("sig.ledgerCorrob", { n: led.support - 1, names: led.corroborators.join(", ") }));
+  } else {
+    parts.push(t("sig.ledgerSolo"));
+  }
+  if (led.conflict) parts.push(`<span class="sig-conflict">⚠ ${esc(t("sig.ledgerConflict"))}</span>`);
+  return `<div class="sig-ledger"><span class="ico" data-icon="link"></span> ${parts.join(" · ")}</div>`;
+}
+
+function sigCandCard(c, tag, primary, addr) {
   const grade = c.grade.toLowerCase();
+  const fmt = addr || ((v) => v || "-");
   const rows = c.per_version
-    .map(
-      (p) =>
-        `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(p.match_rva || "-")}</td><td class="mono d-addr">${esc(p.resolved_target_rva || "-")}</td><td>${esc(p.target_type || "-")}</td><td class="mono">${esc(sigSimPct(p.fingerprint_similarity))}</td></tr>`,
-    )
+    .map((p) => {
+      const aobCell = p.aob
+        ? `<button class="icon-btn sig-copy" data-aob="${escAttr(p.aob)}" title="${escAttr(p.aob)}">⧉ ${esc(t("sig.minted"))}</button>`
+        : "<span class='muted'>-</span>";
+      return `<tr><td class="d-name">${esc(p.label)}</td><td class="mono d-addr">${esc(fmt(p.match_rva, p.label))}</td><td class="mono d-addr">${esc(fmt(p.resolved_target_rva, p.label))}</td><td>${esc(p.target_type || "-")}</td><td class="mono">${esc(sigSimPct(p.fingerprint_similarity))}</td><td>${aobCell}</td></tr>`;
+    })
     .join("");
   const diags = c.diags.length
     ? `<ul class="sig-diags">${c.diags.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>`
     : "";
+  const tag2 = addrColTag();
   return `<div class="sig-cand${primary ? " primary" : ""}">
     <div class="sig-cand-head">
       <span class="sig-grade g-${grade}" title="${escAttr(gradeDesc(c.grade))}">${esc(c.grade)}</span>
@@ -293,14 +343,39 @@ function sigCandCard(c, tag, primary) {
       </span>
     </div>
     <div class="sig-stats muted">${t("sig.bytesFixed", { bytes: c.bytes, fixed: c.fixed, wild: c.wildcards, ratio: c.fixed_ratio.toFixed(2) })}${c.reloc_safe ? "" : " · ⚠ reloc"}</div>
+    ${sigLedgerHtml(c.relocation)}
     ${sigScoresHtml(c.scores)}
     ${sigReasonsHtml(c.reasons)}
-    <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colVersion"))}</th><th>${esc(t("sig.colMatch"))}</th><th>${esc(t("sig.colTarget"))}</th><th>${esc(t("col.type"))}</th><th>${esc(t("sig.colSim"))}</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colVersion"))}</th><th>${esc(t("sig.colMatch"))}${esc(tag2)}</th><th>${esc(t("sig.colTarget"))}${esc(tag2)}</th><th>${esc(t("col.type"))}</th><th>${esc(t("sig.colSim"))}</th><th>${esc(t("sig.colMinted"))}</th></tr></thead><tbody>${rows}</tbody></table>
     ${diags}
   </div>`;
 }
 
+// The structural-family fallback: when no anchor uniquely pins the target, surface the near-equal candidate
+// functions per build (with similarity and a minted AOB) so a declined result is still investigable.
+function sigShortlistsHtml(r, addr) {
+  if (!r.shortlists || !r.shortlists.length) return "";
+  const tag2 = addrColTag();
+  let html = `<div class="sig-section-h">${esc(t("sig.family"))}</div><div class="insp-hint">${esc(t("sig.familyHint"))}</div>`;
+  html += r.shortlists
+    .map((s) => {
+      const rows = s.candidates
+        .map((e) => {
+          const aobCell = e.aob
+            ? `<button class="icon-btn sig-copy" data-aob="${escAttr(e.aob)}" title="${escAttr(e.aob)}">⧉ ${esc(t("sig.minted"))}</button>`
+            : "<span class='muted'>-</span>";
+          return `<tr><td class="mono d-addr">${esc(addr(e.rva, s.label))}</td><td class="mono">${esc(sigSimPct(e.similarity))}</td><td>${aobCell}</td></tr>`;
+        })
+        .join("");
+      return `<div class="sig-family"><div class="sig-family-h mono">${esc(s.label)} <span class="muted">· ${s.candidates.length}</span></div>
+        <table class="grid-table sig-pv"><thead><tr><th>${esc(t("sig.colMatch"))}${esc(tag2)}</th><th>${esc(t("sig.colSim"))}</th><th>${esc(t("sig.colMinted"))}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    })
+    .join("");
+  return html;
+}
+
 function reportInnerHtml(r) {
+  const addr = makeAddrFmt(r);
   const anyPacked = r.inputs.some((i) => i.packed);
   let html = `<div class="sig-summary">${esc(t("sig.summary", { arch: r.arch, files: r.inputs.length, builds: r.unique_builds }))}${anyPacked ? ` · ⚠ ${esc(t("sig.packed"))}` : ""}</div>`;
   const dups = r.duplicate_groups.filter((g) => g[1].length > 1);
@@ -313,7 +388,23 @@ function reportInnerHtml(r) {
       )
       .join("");
   }
-  html += r.chosen ? sigCandCard(r.chosen, t("sig.chosen"), true) : `<div class="insp-hint">${t("sig.none")}</div>`;
+  if (r.chosen) {
+    html += sigCandCard(r.chosen, t("sig.chosen"), true, addr);
+  } else {
+    // Declined: explain it honestly instead of a bare "none". Surface what WAS found (partial byte matches
+    // from FoundInBuild diagnostics) and the structural family below, so the result stays investigable.
+    const found = (r.diagnostics || []).filter((d) => /found in/i.test(d) && !/not found/i.test(d));
+    const fam = r.shortlists && r.shortlists.length;
+    let why = t("sig.none");
+    if (fam) why = t("sig.noneFamily");
+    else if (found.length) why = t("sig.nonePartial");
+    html += `<div class="sig-declined"><div class="sig-declined-h">${esc(t("sig.declinedTitle"))}</div><div class="insp-hint">${esc(why)}</div>`;
+    if (found.length) {
+      html += `<ul class="sig-diags">${found.map((d) => `<li class="sig-holdout ok">${esc(d)}</li>`).join("")}</ul>`;
+    }
+    html += `</div>`;
+  }
+  html += sigShortlistsHtml(r, addr);
   if (r.aob_ranges && r.aob_ranges.length) {
     html += `<div class="sig-section-h">${t("sig.aobRanges")}</div>`;
     html += r.aob_ranges
@@ -325,10 +416,10 @@ function reportInnerHtml(r) {
     html += `<div class="insp-hint">${esc(t("sig.aobRangesHint"))}</div>`;
   }
   if (r.alternates.length) {
-    html += `<div class="sig-section-h">${t("sig.alternates")}</div>` + r.alternates.map((c) => sigCandCard(c, "", false)).join("");
+    html += `<div class="sig-section-h">${t("sig.alternates")}</div>` + r.alternates.map((c) => sigCandCard(c, "", false, addr)).join("");
   }
   if (r.rejected.length) {
-    html += `<div class="sig-section-h">${t("sig.rejected")}</div>` + r.rejected.map((c) => sigCandCard(c, "", false)).join("");
+    html += `<div class="sig-section-h">${t("sig.rejected")}</div>` + r.rejected.map((c) => sigCandCard(c, "", false, addr)).join("");
   }
   if (r.diagnostics.length) {
     html += `<div class="sig-section-h">${t("sig.diagnostics")}</div><ul class="sig-diags">` + r.diagnostics.map((d) => `<li>${esc(d)}</li>`).join("") + "</ul>";
@@ -422,6 +513,7 @@ function renderSigResults() {
   });
   html += gradeLegendHtml();
   host.innerHTML = html;
+  if (typeof injectIcons === "function") injectIcons(host);
   wireSigButtons(host);
 }
 

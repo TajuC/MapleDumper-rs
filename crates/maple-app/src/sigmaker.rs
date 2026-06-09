@@ -52,6 +52,43 @@ struct PerVerView {
     resolved_target_rva: Option<String>,
     target_type: Option<String>,
     fingerprint_similarity: Option<f64>,
+    /// A freshly minted byte signature unique to THIS build, when the original AOB no longer matches
+    /// because the build was recompiled. Lets the user actually scan for the relocated function.
+    aob: Option<String>,
+}
+
+/// The cross-anchor evidence behind a relocated candidate: which channel located it, how many independent
+/// channels agreed, which ones, and whether any disagreed. Surfacing this is what turns an opaque
+/// "relocated" result into an auditable one.
+#[derive(Serialize)]
+struct RelocLedgerView {
+    anchor: String,
+    support: usize,
+    corroborators: Vec<String>,
+    conflict: bool,
+}
+
+/// One candidate function in a build that could not be uniquely relocated (a member of a structural
+/// family). The user disambiguates manually; each carries its own minted AOB where one could be made.
+#[derive(Serialize)]
+struct ShortlistEntryView {
+    rva: String,
+    similarity: f64,
+    aob: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ShortlistView {
+    label: String,
+    candidates: Vec<ShortlistEntryView>,
+}
+
+/// The image base of one build, so the frontend can render absolute addresses (base + rva) in addition
+/// to RVAs without re-reading the PE.
+#[derive(Serialize)]
+struct BuildBaseView {
+    label: String,
+    base: String,
 }
 
 #[derive(Serialize)]
@@ -80,6 +117,9 @@ struct SigCandView {
     reloc_safe: bool,
     per_version: Vec<PerVerView>,
     diags: Vec<String>,
+    /// Present only for relocated candidates: the cross-anchor evidence ledger. `None` for a plain
+    /// cross-build byte signature (its bytes already match every build, no relocation reasoning involved).
+    relocation: Option<RelocLedgerView>,
 }
 
 #[derive(Serialize)]
@@ -128,12 +168,19 @@ struct SigReportView {
     chosen: Option<SigCandView>,
     alternates: Vec<SigCandView>,
     rejected: Vec<SigCandView>,
+    /// The structural family for a target that could not be uniquely pinned: per build, the near-equal
+    /// candidate functions with their similarity and a minted AOB. The honest fallback so a declined
+    /// result is still actionable instead of an empty "no signature".
+    shortlists: Vec<ShortlistView>,
     aob_ranges: Vec<AobRangeView>,
     diagnostics: Vec<String>,
     holdout: Vec<SigHoldoutView>,
     string_anchor: Option<String>,
     negative_hits: Vec<NegHitView>,
     negative_summary: Option<NegSummaryView>,
+    /// Per-build image bases, so the UI can show absolute addresses (base + rva) when the user prefers
+    /// them over RVAs.
+    bases: Vec<BuildBaseView>,
 }
 
 #[derive(Serialize)]
@@ -186,9 +233,16 @@ fn sig_cand_view(c: &SigCandidate) -> SigCandView {
                 resolved_target_rva: p.resolved_target_rva.map(|v| format!("0x{v:X}")),
                 target_type: p.target_kind.map(|k| k.wire_str().to_string()),
                 fingerprint_similarity: p.fingerprint_similarity,
+                aob: p.aob.clone(),
             })
             .collect(),
         diags: c.diags.iter().map(|d| d.to_string()).collect(),
+        relocation: c.relocation.as_ref().map(|l| RelocLedgerView {
+            anchor: l.anchor.clone(),
+            support: l.support,
+            corroborators: l.corroborators.clone(),
+            conflict: l.conflict,
+        }),
     }
 }
 
@@ -213,6 +267,22 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         chosen: r.chosen.as_ref().map(sig_cand_view),
         alternates: r.alternates.iter().map(sig_cand_view).collect(),
         rejected: r.rejected.iter().map(sig_cand_view).collect(),
+        shortlists: r
+            .shortlists
+            .iter()
+            .map(|s| ShortlistView {
+                label: s.label.clone(),
+                candidates: s
+                    .entries
+                    .iter()
+                    .map(|e| ShortlistEntryView {
+                        rva: format!("0x{:X}", e.rva),
+                        similarity: e.similarity,
+                        aob: e.aob.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
         aob_ranges: r
             .aob_ranges
             .iter()
@@ -229,6 +299,7 @@ fn sig_report_view(r: &SigReport) -> SigReportView {
         string_anchor: None,
         negative_hits: Vec::new(),
         negative_summary: None,
+        bases: Vec::new(),
     }
 }
 
@@ -290,6 +361,14 @@ fn enrich_report(
     let mut view = sig_report_view(&adjusted);
     view.holdout = holdout_views(inputs, spec, opts);
     view.string_anchor = string_anchor_line(&adjusted, inputs);
+    // Per-build image bases, so the UI can render absolute addresses (base + rva) on demand.
+    view.bases = inputs
+        .iter()
+        .map(|i| BuildBaseView {
+            label: i.label.clone(),
+            base: format!("0x{:X}", i.base),
+        })
+        .collect();
     if let Some(summary) = summary {
         view.negative_hits = hits
             .into_iter()
@@ -646,17 +725,18 @@ mod tests {
         assert_eq!(dg[0], "00000000DEADBEEF");
         assert_eq!(dg[1][0], "v83");
 
-        // Addresses are hex strings; per_version carries no minted aob in the desktop view.
+        // Addresses are hex strings; per_version now carries the minted per-build AOB so the user can
+        // actually scan for a relocated function in a build the original bytes no longer match.
         let pv = &v["chosen"]["per_version"][0];
         assert_eq!(pv["match_rva"], "0x401000");
         assert_eq!(pv["target_type"], "code");
-        assert!(pv.get("aob").is_none(), "desktop per_version omits aob");
+        assert_eq!(pv["aob"], "AA BB", "per_version surfaces the minted aob");
 
-        // The desktop report drops shortlists, and an empty negative summary is null (not an object).
-        assert!(
-            v.get("shortlists").is_none(),
-            "desktop report omits shortlists"
-        );
+        // The structural-family shortlist is surfaced (the honest fallback for an un-pinnable target),
+        // and an empty negative summary is null (not an object).
+        let sl = &v["shortlists"][0];
+        assert_eq!(sl["label"], "v95");
+        assert_eq!(sl["candidates"][0]["rva"], "0x4010F0");
         assert!(v["negative_summary"].is_null());
     }
 }

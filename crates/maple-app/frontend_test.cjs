@@ -97,6 +97,22 @@ const driver = `
   ] };
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
+  // A declined 3-target run (template-clone target): no chosen signature, but a structural family and
+  // partial byte matches are surfaced, and absolute addressing (base + rva) is exercised via "both" mode.
+  state.addrMode = "both";
+  const declined = {
+    arch: "x86", unique_builds: 3,
+    inputs: [ { label: "v83", packed: false, reasons: [] }, { label: "v84", packed: false, reasons: [] }, { label: "v88", packed: false, reasons: [] } ],
+    duplicate_groups: [], chosen: null, alternates: [], rejected: [],
+    shortlists: [ { label: "v84", candidates: [ { rva: "0x31799C", similarity: 0.974, aob: "89 45 ?? E8 ?? ?? ?? ??" }, { rva: "0x448A6E", similarity: 0.974, aob: null } ] } ],
+    diagnostics: ["found in v83 at 0x4D6D95", "found in v84 at 0x4DE0BA", "not found in v88"],
+    holdout: [], string_anchor: null, negative_hits: [], negative_summary: null,
+    bases: [ { label: "v83", base: "0x400000" }, { label: "v84", base: "0x400000" }, { label: "v88", base: "0x400000" } ],
+  };
+  sigState.response = { jobs: [ { label: "B3 ?? 83 EC", report: declined, cross: null, error: null } ] };
+  renderSigResults();
+  globalThis.__declinedHtml = document.getElementById("sig-results").innerHTML;
+  state.addrMode = "rva";
   globalThis.__diagHtml = diagnosticsHtml({ confidence: "50", trace: "memory pointer resolved to 0x10", candidates: "0x10,0x20" });
   globalThis.__diagStructured = diagnosticsHtml({ resolverTrace: JSON.stringify({ resolver: "nested call", mnemonic: "call", operand_kind: "nearbranch64", target_rva: 0x24190, target_section: "code", checks: ["range", "section"], failure: null }) });
   globalThis.__confHi = confChip(95);
@@ -175,6 +191,14 @@ check(rep.includes("sig-job-n") && rep.includes("#1") && rep.includes("#2"), "pe
 check(rep.includes("sig-cross-verdict ok") && rep.includes("Resolves to 0x24190 as expected"), "cross verdict missing");
 check(rep.includes("sig-job-err") && rep.includes("bad hex byte"), "job error card missing");
 check(rep.includes("Grade legend"), "grade legend missing");
+// Declined run: the structural family, partial coverage, and absolute addressing must all surface.
+const dec = sandbox.__declinedHtml || "";
+check(dec.includes("Structural family"), "structural family section missing on declined run");
+check(dec.includes("0x31799C"), "shortlist candidate rva missing");
+check(dec.includes("89 45 ?? E8"), "shortlist minted AOB missing");
+check(dec.includes("No unique cross-build signature"), "declined explanation title missing");
+check(dec.includes("found in v83 at 0x4D6D95"), "partial-coverage (found-in-build) diagnostics missing");
+check(dec.includes("0x71799C"), "absolute address (base + rva) missing in 'both' mode");
 const diag = sandbox.__diagHtml || "";
 check(diag.includes("Resolver trace") && diag.includes("memory pointer resolved to 0x10"), "diagnostics trace missing");
 check(diag.includes("Candidates") && diag.includes("0x10") && diag.includes("0x20"), "diagnostics candidates missing");

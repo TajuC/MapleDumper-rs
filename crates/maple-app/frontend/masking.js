@@ -25,6 +25,21 @@ function saveMaskMode() {
   } catch {
   }
 }
+// Address display mode: "rva" (section-relative, default), "abs" (image base + RVA), or "both".
+function loadAddrMode() {
+  try {
+    const v = localStorage.getItem("addrMode");
+    return v === "abs" || v === "both" ? v : "rva";
+  } catch {
+    return "rva";
+  }
+}
+function saveAddrMode(v) {
+  try {
+    localStorage.setItem("addrMode", v);
+  } catch {
+  }
+}
 
 let masked = false;
 

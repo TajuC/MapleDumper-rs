@@ -53,6 +53,7 @@ const state = {
   patternText: SEED,
   mask: loadMaskSettings(),
   maskMode: loadMaskMode(),
+  addrMode: loadAddrMode(),
   patterns: [],
   editingIndex: -1,
   arch: "x64",
@@ -230,6 +231,18 @@ if (modeCb) {
     state.maskMode = modeCb.checked ? "randomize" : "blur";
     saveMaskMode();
     applyMask();
+  });
+}
+
+const addrSel = $("addr-mode-select");
+if (addrSel) {
+  addrSel.value = state.addrMode;
+  addrSel.addEventListener("change", () => {
+    state.addrMode = addrSel.value;
+    saveAddrMode(state.addrMode);
+    // Live re-render so existing results pick up the new format without re-generating.
+    if (typeof renderSigResults === "function") renderSigResults();
+    if (typeof refreshInspectorAddr === "function") refreshInspectorAddr();
   });
 }
 

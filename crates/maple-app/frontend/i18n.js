@@ -620,6 +620,30 @@ const SIG_I18N = {
 };
 Object.keys(SIG_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_I18N[lang]));
 
+// Additions for the richer signature-maker view and the address-display setting. English-only; t() falls
+// back to English for languages that don't yet translate these keys.
+const SIGX_I18N = {
+  en: {
+    "sig.minted": "AOB",
+    "sig.colMinted": "Minted AOB",
+    "sig.ledgerVia": "Located via {anchor} anchor",
+    "sig.ledgerCorrob": "corroborated by {n} other ({names})",
+    "sig.ledgerSolo": "single channel, uncorroborated",
+    "sig.ledgerConflict": "another channel resolved a different address",
+    "sig.family": "Structural family",
+    "sig.familyHint": "No single anchor uniquely pinned the target, so it could not be confidently relocated. These are the near-identical candidate functions per build — the honest starting point to disambiguate by hand or at runtime.",
+    "sig.declinedTitle": "No unique cross-build signature",
+    "sig.noneFamily": "The target belongs to a family of near-identical functions (template clones), so no anchor could uniquely pin it across every build. The candidate family is listed below with a minted AOB for each.",
+    "sig.nonePartial": "The pattern was found in some builds but its bytes were rewritten by a recompile in the others, and no recompile-stable anchor (string, import, vtable, call-graph) uniquely isolates this function — so it could not be hardened into one cross-build signature.",
+    "set.addrModeTitle": "Address display",
+    "set.addrModeDesc": "How addresses are shown across the signature maker and inspector: the section-relative RVA, the absolute virtual address (image base + RVA), or both side by side.",
+    "set.addrRva": "RVA",
+    "set.addrAbs": "Absolute",
+    "set.addrBoth": "Both (RVA → absolute)",
+  },
+};
+Object.keys(SIGX_I18N).forEach((lang) => Object.assign(I18N[lang], SIGX_I18N[lang]));
+
 const ABOUT_I18N = {
   en: {
     "nav.about": "About", "about.title": "About", "about.sub": "Version, license, and project information",
