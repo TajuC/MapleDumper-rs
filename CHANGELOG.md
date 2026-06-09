@@ -5,6 +5,29 @@ the project aims to follow Semantic Versioning while in its 0.x line.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-10
+
+A desktop-app release: ship the GUI, surface the engine's full analysis, and add a deep per-function
+inspector so an advanced user can investigate what the engine did and why.
+
+### Added
+- The **desktop app installer** is now built and published with every release (Tauri/NSIS,
+  `MapleDumper_<version>_x64-setup.exe`, bundling the WebView2 bootstrapper), alongside the CLI.
+- A deep **Investigate** inspector for any address: the enclosing function's CFG-lite shape, inbound
+  cross-reference count, callers and callees from the decode-verified call graph (clickable to navigate),
+  the imported APIs it calls, its referenced strings and distinctive constants, a re-scannable string
+  anchor, vtable membership (slot / table / count) with a best-effort MSVC RTTI class name, and a NASM
+  disassembly listing. Backed by a new public `inspect_function` engine API.
+- An **address-display setting** (RVA / Absolute / Both); absolute = image base + RVA, applied across the
+  signature maker and the inspector.
+
+### Changed
+- The signature maker now **surfaces the full analysis** instead of discarding it: a declined cross-build
+  result explains itself (template-clone family vs. partial byte coverage), lists the structural family per
+  build with a minted AOB to copy, shows the relocation evidence ledger (which anchor located it, who
+  corroborated, any conflict), and adds the per-build minted AOB. Result addresses are clickable into the
+  inspector.
+
 ## [0.5.0] - 2026-06-09
 
 A cross-version fingerprinting release: the relocation engine moves from a single-anchor fallback chain to
