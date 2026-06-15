@@ -229,6 +229,31 @@ fn parse_signature(aob: &str) -> Signature {
     Signature { bytes, mask }
 }
 
+// Like `parse_signature` but records each invalid token it skips, so a lenient parse can tell the
+// user what it discarded instead of just yielding a shorter signature.
+fn parse_signature_lenient(aob: &str, line: usize, issues: &mut Vec<ParseIssue>) -> Signature {
+    let mut bytes = Vec::new();
+    let mut mask = Vec::new();
+    for tok in aob.split_whitespace() {
+        match parse_token(tok) {
+            Some(Token::Byte(value)) => {
+                bytes.push(value);
+                mask.push(true);
+            }
+            Some(Token::Wild) => {
+                bytes.push(0);
+                mask.push(false);
+            }
+            None => issues.push(ParseIssue {
+                line,
+                severity: ParseSeverity::Warning,
+                message: format!("dropped invalid AOB token '{tok}'"),
+            }),
+        }
+    }
+    Signature { bytes, mask }
+}
+
 fn strip_quotes(s: &str) -> &str {
     let b = s.as_bytes();
     if b.len() >= 2 && b[0] == b'"' && b[b.len() - 1] == b'"' {
@@ -358,11 +383,21 @@ fn partition_anchor_directives(
 /// ```
 #[must_use]
 pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
+    parse_patterns_lenient(text, arch).patterns
+}
+
+/// Parse a pattern list best-effort like [`parse_patterns`], but collect what was dropped (invalid
+/// AOB tokens, bad `@directives`, and lines that yielded no usable signature) as warnings. Lets a
+/// lenient caller show the user what it discarded instead of silently producing a weaker pattern set.
+#[must_use]
+pub fn parse_patterns_lenient(text: &str, arch: Arch) -> ParsedPatterns {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out = Vec::new();
+    let mut warnings = Vec::new();
     let mut section: Option<Arch> = None;
     let mut category: Option<String> = None;
-    for raw_line in text.lines() {
+    for (i, raw_line) in text.lines().enumerate() {
+        let line_no = i + 1;
         let line = raw_line.trim();
         if line.is_empty() {
             continue;
@@ -390,8 +425,18 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
         if let Some((name, aob, note)) = split_name_aob(line) {
             let (aob, directives) = split_directives(&aob);
             let (string_anchor, directives) = partition_anchor_directives(directives);
-            let resolve = build_resolve_plan(&name, &directives).ok().flatten();
-            let signature = parse_signature(&aob);
+            let resolve = match build_resolve_plan(&name, &directives) {
+                Ok(plan) => plan,
+                Err(e) => {
+                    warnings.push(ParseIssue {
+                        line: line_no,
+                        severity: ParseSeverity::Warning,
+                        message: format!("{name}: {e}"),
+                    });
+                    None
+                }
+            };
+            let signature = parse_signature_lenient(&aob, line_no, &mut warnings);
             if !signature.is_empty() || string_anchor.is_some() {
                 out.push(Pattern::finalize(
                     name,
@@ -401,16 +446,30 @@ pub fn parse_patterns(text: &str, arch: Arch) -> Vec<Pattern> {
                     resolve,
                     string_anchor,
                 ));
+            } else {
+                warnings.push(ParseIssue {
+                    line: line_no,
+                    severity: ParseSeverity::Warning,
+                    message: format!("dropped \"{name}\": no valid signature bytes"),
+                });
             }
         }
     }
-    out
+    ParsedPatterns {
+        patterns: out,
+        warnings,
+    }
 }
 
 pub fn parse_patterns_file(path: &Path, arch: Arch) -> std::io::Result<Vec<Pattern>> {
+    Ok(parse_patterns_file_lenient(path, arch)?.patterns)
+}
+
+/// Best-effort file parse like [`parse_patterns_file`], returning the dropped-input warnings too.
+pub fn parse_patterns_file_lenient(path: &Path, arch: Arch) -> std::io::Result<ParsedPatterns> {
     let raw = std::fs::read(path)?;
     let text = String::from_utf8_lossy(&raw);
-    Ok(parse_patterns(&text, arch))
+    Ok(parse_patterns_lenient(&text, arch))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -834,6 +893,31 @@ mod tests {
             err.iter()
                 .any(|i| i.severity == ParseSeverity::Error && i.message.contains("ZZ"))
         );
+    }
+
+    #[test]
+    fn lenient_reports_what_it_drops_where_strict_rejects() {
+        // "ZZ" is not hex and "@kind=typo" is an unknown resolver kind. Lenient salvages the rest but
+        // must now say what it discarded, instead of silently producing a shorter, weaker pattern.
+        let parsed = parse_patterns_lenient("A = AA ZZ BB @kind=typo", Arch::X64);
+        assert_eq!(parsed.patterns.len(), 1, "the salvageable pattern is kept");
+        assert_eq!(
+            parsed.patterns[0].signature.bytes.len(),
+            2,
+            "ZZ was dropped"
+        );
+        assert!(
+            parsed.warnings.iter().any(|w| w.message.contains("ZZ")),
+            "the dropped token must be reported, got {:?}",
+            parsed.warnings
+        );
+        assert!(
+            parsed.warnings.iter().any(|w| w.message.contains("typo")),
+            "the bad directive must be reported, got {:?}",
+            parsed.warnings
+        );
+        // The same input is a hard error under strict parsing.
+        assert!(parse_patterns_strict("A = AA ZZ BB @kind=typo", Arch::X64).is_err());
     }
 
     #[test]

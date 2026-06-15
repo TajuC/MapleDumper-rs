@@ -39,6 +39,22 @@ fn grouped(findings: &[Finding]) -> BTreeMap<&str, Vec<&Finding>> {
     map
 }
 
+/// Names carried by more than one finding. The code generators collapse these (a C++ constant cannot
+/// be declared twice) and the differ keys by name, so exposing them lets a caller warn instead of
+/// silently dropping a row from the generated output.
+#[must_use]
+pub fn duplicate_names(findings: &[Finding]) -> Vec<String> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for f in findings {
+        *counts.entry(f.name.as_str()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
 #[must_use]
 pub fn offsets_header(findings: &[Finding], module_name: &str, module_base: u64) -> String {
     let mut out = String::new();

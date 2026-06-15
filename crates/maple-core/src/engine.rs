@@ -8,6 +8,7 @@ use crate::resolver::{self, Kind, ResolveDetail, ResolveFail, ResolveOp, Resolve
 use crate::scanner::{self, CompiledPattern, ScannerIndex};
 use rayon::prelude::*;
 use std::hint::black_box;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 pub struct PatternRow {
@@ -77,6 +78,21 @@ impl ScanResult {
             .map(|g| (g.requested - g.got) as u64)
             .sum()
     }
+}
+
+/// The standard advisory for region windows that read short, shared so the byte scan, the assembly
+/// scan, and both front-ends word a partial-read warning identically. `None` when there were no gaps.
+#[must_use]
+pub fn read_gap_warning(read_gaps: &[ReadGap]) -> Option<String> {
+    if read_gaps.is_empty() {
+        return None;
+    }
+    let unread: usize = read_gaps.iter().map(|g| g.requested - g.got).sum();
+    Some(format!(
+        "partial reads: {} region window(s) returned short, {unread} byte(s) unreadable; a \
+         \"not found\" result may be in unread memory",
+        read_gaps.len()
+    ))
 }
 
 // One resolved value plus the section signal. `is_code` is the coarse section verdict for an address
@@ -322,6 +338,7 @@ where
         &[],
         patterns,
         arch,
+        None,
     )
 }
 
@@ -331,6 +348,7 @@ where
 /// target elsewhere in the module as non-code. A pattern with `@section=code` whose target lands
 /// outside `code_regions` is reported `Failed(OutOfExpectedSection)` rather than as a clean find.
 /// Passing an empty `code_regions` disables the check, matching [`scan`].
+#[allow(clippy::too_many_arguments)]
 pub fn scan_in<S>(
     source: &S,
     module_base: usize,
@@ -339,6 +357,7 @@ pub fn scan_in<S>(
     code_regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
+    cancel: Option<&AtomicBool>,
 ) -> ScanResult
 where
     S: MemorySource + Sync,
@@ -351,6 +370,7 @@ where
         code_regions,
         patterns,
         arch,
+        cancel,
         SCAN_CHUNK,
     )
 }
@@ -364,6 +384,7 @@ fn scan_chunked<S>(
     code_regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
+    cancel: Option<&AtomicBool>,
     chunk: usize,
 ) -> ScanResult
 where
@@ -420,6 +441,12 @@ where
             scope.spawn(move || {
                 let mut i = w;
                 while i < units.len() {
+                    // Stop issuing reads the moment a cancel lands: the reads dominate a live scan's
+                    // wall time, so dropping out here is what makes the Stop button actually halt work
+                    // rather than just relabel the UI.
+                    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                        return;
+                    }
                     let (base, accept, read_len) = units[i];
                     let buf = read_range(source, base, read_len);
                     if buf.len() < read_len
@@ -666,13 +693,8 @@ where
         }
     }
 
-    if !read_gaps.is_empty() {
-        let unread: usize = read_gaps.iter().map(|g| g.requested - g.got).sum();
-        warnings.push(format!(
-            "partial reads: {} region window(s) returned short, {unread} byte(s) unreadable; a \
-             \"not found\" result may be in unread memory",
-            read_gaps.len()
-        ));
+    if let Some(w) = read_gap_warning(&read_gaps) {
+        warnings.push(w);
     }
 
     ScanResult {
@@ -843,6 +865,7 @@ fn time_scan<S: MemorySource + Sync>(
         &[],
         patterns,
         arch,
+        None,
         chunk,
     ));
     t.elapsed().as_millis()
@@ -1075,7 +1098,16 @@ mod tests {
         let (base, data, regions, code) = section_image(0x100, 0x800);
         let source = BufferSource::new(base, data);
         let patterns = parse_patterns("P_PTR = 48 8D 0D ?? ?? ?? ?? @section=code", Arch::X64);
-        let result = scan_in(&source, base, 0x2000, &regions, &code, &patterns, Arch::X64);
+        let result = scan_in(
+            &source,
+            base,
+            0x2000,
+            &regions,
+            &code,
+            &patterns,
+            Arch::X64,
+            None,
+        );
         assert_eq!(result.rows[0].status, FindingStatus::FoundUnique);
         assert_eq!(result.findings.len(), 1);
         assert!(result.rows[0].trace.as_deref().unwrap().contains("in code"));
@@ -1087,7 +1119,16 @@ mod tests {
         let (base, data, regions, code) = section_image(0x100, 0x1800);
         let source = BufferSource::new(base, data);
         let patterns = parse_patterns("P_PTR = 48 8D 0D ?? ?? ?? ?? @section=code", Arch::X64);
-        let result = scan_in(&source, base, 0x2000, &regions, &code, &patterns, Arch::X64);
+        let result = scan_in(
+            &source,
+            base,
+            0x2000,
+            &regions,
+            &code,
+            &patterns,
+            Arch::X64,
+            None,
+        );
         assert_eq!(
             result.rows[0].status,
             FindingStatus::Failed(FailureReason::OutOfExpectedSection)
@@ -1108,7 +1149,16 @@ mod tests {
         let (base, data, regions, code) = section_image(0x100, 0x800);
         let source = BufferSource::new(base, data);
         let patterns = parse_patterns("P_PTR = 48 8D 0D ?? ?? ?? ?? @section=data", Arch::X64);
-        let result = scan_in(&source, base, 0x2000, &regions, &code, &patterns, Arch::X64);
+        let result = scan_in(
+            &source,
+            base,
+            0x2000,
+            &regions,
+            &code,
+            &patterns,
+            Arch::X64,
+            None,
+        );
         assert_eq!(
             result.rows[0].status,
             FindingStatus::Failed(FailureReason::OutOfExpectedSection)
@@ -1142,7 +1192,17 @@ mod tests {
         let patterns = parse_patterns("Foo = DE AD BE EF 11", Arch::X64);
 
         // a deliberately tiny chunk forces many boundaries; each match must appear exactly once
-        let result = scan_chunked(&source, base, 200, &regions, &[], &patterns, Arch::X64, 16);
+        let result = scan_chunked(
+            &source,
+            base,
+            200,
+            &regions,
+            &[],
+            &patterns,
+            Arch::X64,
+            None,
+            16,
+        );
         assert_eq!(result.total_matches, starts.len());
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].matches, starts.len());
@@ -1326,7 +1386,16 @@ mod tests {
         let (base, data, regions, code) = section_image(0x100, 0x1800);
         let source = BufferSource::new(base, data);
         let patterns = parse_patterns("P_PTR = 48 8D 0D ?? ?? ?? ?? @section=code", Arch::X64);
-        let result = scan_in(&source, base, 0x2000, &regions, &code, &patterns, Arch::X64);
+        let result = scan_in(
+            &source,
+            base,
+            0x2000,
+            &regions,
+            &code,
+            &patterns,
+            Arch::X64,
+            None,
+        );
         let trace = result.rows[0].trace_detail.as_ref().unwrap();
         assert_eq!(trace.failure.as_deref(), Some("out of expected section"));
     }

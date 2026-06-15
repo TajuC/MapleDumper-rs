@@ -42,6 +42,9 @@ async function runAsmScan() {
     const report = await invoke("assembly_scan", { req });
     asmState.report = report;
     renderAsmResults(report);
+    if (Array.isArray(report.warnings)) {
+      for (const w of report.warnings) toast(w, true);
+    }
   } catch (err) {
     asmState.report = null;
     $("asm-count").textContent = "";

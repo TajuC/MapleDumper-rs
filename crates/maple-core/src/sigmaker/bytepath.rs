@@ -218,7 +218,13 @@ fn finalize(
     let len = ref_bytes.len();
     let mut bytes = ref_bytes.to_vec();
     let mut fixed = base_fixed.to_vec();
-    let cache_of = |idx: usize| &caches.iter().find(|(i, _)| *i == idx).unwrap().1;
+    let cache_of = |idx: usize| {
+        &caches
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .expect("a required image index always has a built code cache")
+            .1
+    };
 
     for &(idx, rva) in &located.anchors {
         if idx == located.ref_idx {
@@ -467,7 +473,13 @@ pub(super) fn candidate_at(
     opts: &SigOptions,
 ) -> (Option<SigCandidate>, Vec<SigCandidate>) {
     let arch = images[ref_idx].arch;
-    let cache_of = |idx: usize| &caches.iter().find(|(i, _)| *i == idx).unwrap().1;
+    let cache_of = |idx: usize| {
+        &caches
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .expect("a required image index always has a built code cache")
+            .1
+    };
     let max_instrs = opts.max_len / 2 + 8;
     let ref_img = &images[ref_idx];
     let window = read_at(

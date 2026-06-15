@@ -43,6 +43,8 @@ pub struct AsmScanReport {
     scan_ms: u128,
     bytes_scanned: u64,
     regions: usize,
+    /// Non-fatal advisories, such as region windows that read short during the scan.
+    warnings: Vec<String>,
 }
 
 #[cfg(windows)]
@@ -69,6 +71,11 @@ fn run_asm_scan(cancel: &AtomicBool, req: AsmScanRequest) -> Result<AsmScanRepor
     let started = Instant::now();
     let target = Target::attach(&locator, &req.module, &opts, cancel).map_err(|e| e.to_string())?;
     let attach_ms = started.elapsed().as_millis();
+    // Fail clearly on a definite architecture mismatch instead of scanning the wrong bitness and
+    // reporting nothing found, matching the workspace scan and the CLI assembly path.
+    if let Some(msg) = maple_core::arch_mismatch(arch, target.module_arch(), req.module.trim()) {
+        return Err(msg);
+    }
     let module_base = target.module.base as u64;
 
     let base_regions = if req.code_only {
@@ -81,7 +88,7 @@ fn run_asm_scan(cancel: &AtomicBool, req: AsmScanRequest) -> Result<AsmScanRepor
     let region_count = regions.len();
 
     let scan_started = Instant::now();
-    let hits = maple_core::assembly_scan(
+    let scan = maple_core::assembly_scan(
         &target,
         target.module.base,
         &regions,
@@ -95,6 +102,12 @@ fn run_asm_scan(cancel: &AtomicBool, req: AsmScanRequest) -> Result<AsmScanRepor
     if cancel.load(Ordering::SeqCst) {
         return Err("scan cancelled".to_string());
     }
+    // Partial reads used to vanish silently here; surface them so a "no match" over unreadable code
+    // is shown as inconclusive, the same way the pattern scan does.
+    let warnings: Vec<String> = maple_core::read_gap_warning(&scan.read_gaps)
+        .into_iter()
+        .collect();
+    let hits = scan.hits;
 
     let module_name = {
         let m = req.module.trim();
@@ -135,6 +148,7 @@ fn run_asm_scan(cancel: &AtomicBool, req: AsmScanRequest) -> Result<AsmScanRepor
         scan_ms,
         bytes_scanned,
         regions: region_count,
+        warnings,
     })
 }
 

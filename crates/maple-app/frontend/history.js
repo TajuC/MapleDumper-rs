@@ -301,7 +301,9 @@ async function diffTabHtml(tab) {
 }
 async function diffFilesTabHtml(tab) {
   const view = await invoke("diff_dumps", { old: tab.old, new: tab.new });
-  return diffViewHtml(view, 64);
+  // Pasted dumps carry no architecture. MapleStory clients are 32-bit PE32, so decode the byte
+  // context as 32-bit rather than assuming 64.
+  return diffViewHtml(view, 32);
 }
 function diffViewHtml(view, bits) {
   const label = { moved: t("diff.moved"), new: t("diff.new"), removed: t("diff.removed") };
@@ -318,7 +320,11 @@ function diffViewHtml(view, bits) {
         )
         .join("") + moreRow(capped.hidden, 5)
     : `<tr class="empty"><td colspan="5">${t("diff.noChanges")}</td></tr>`;
-  return `<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const warn =
+    Array.isArray(view.warnings) && view.warnings.length
+      ? `<div class="diff-warn">${view.warnings.map((w) => esc(w)).join("<br>")}</div>`
+      : "";
+  return `${warn}<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 async function matrixTabHtml(tab) {
   const view = await invoke("history_matrix", { ids: tab.ids });
