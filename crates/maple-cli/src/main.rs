@@ -7,7 +7,9 @@ use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
 use maple_core::output::{export, offsets_header};
-use maple_core::pattern::{Arch, ParseSeverity, parse_patterns_file, parse_patterns_file_strict};
+use maple_core::pattern::{
+    Arch, ParseSeverity, parse_patterns_file_lenient, parse_patterns_file_strict,
+};
 use maple_core::{
     AttachOptions, BuildStamp, DiffReport, FindingStatus, Locator, Pattern, ProfileReport,
     ResolveTrace, ScanResult, Target, arch_mismatch, assembly_scan, diff, lint, parse_asm_patterns,
@@ -438,8 +440,14 @@ fn locator(at: &ResolvedAttach) -> Result<Locator, String> {
 
 fn load_patterns(path: &Path, arch: Arch, strict: bool) -> Result<Vec<Pattern>, String> {
     if !strict {
-        return parse_patterns_file(path, arch)
-            .map_err(|e| format!("failed to read {}: {e}", path.display()));
+        let parsed = parse_patterns_file_lenient(path, arch)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        // Lenient mode keeps going past malformed input; say what it dropped so a typo does not
+        // silently weaken a signature with no trace.
+        for w in &parsed.warnings {
+            eprintln!("[!] pattern line {}: {}", w.line, w.message);
+        }
+        return Ok(parsed.patterns);
     }
     let parsed = parse_patterns_file_strict(path, arch)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;

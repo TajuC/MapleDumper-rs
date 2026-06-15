@@ -109,11 +109,21 @@ fn pattern_set_hash(patterns: &[maple_core::pattern::Pattern]) -> String {
     history::content_hash(parts.join("\u{2}").as_bytes())
 }
 
+#[derive(Serialize)]
+pub struct PatternParseView {
+    patterns: Vec<PatternView>,
+    /// Lines the lenient preview parse dropped or salvaged (a bad token, an unknown directive). Shown
+    /// so the preview explains a lower-than-expected pattern count instead of hiding it.
+    warnings: Vec<String>,
+}
+
 #[tauri::command]
-pub fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
+pub fn parse_patterns_text(text: String, arch: String) -> PatternParseView {
     // A display-only parse preview, not a scan, so an unparseable arch falls back rather than erroring.
     let a = arch_of(&arch).unwrap_or(maple_core::Arch::X64);
-    maple_core::pattern::parse_patterns(&text, a)
+    let parsed = maple_core::pattern::parse_patterns_lenient(&text, a);
+    let patterns = parsed
+        .patterns
         .iter()
         .map(|p| {
             let kind = Kind::classify(&p.name).0;
@@ -136,7 +146,13 @@ pub fn parse_patterns_text(text: String, arch: String) -> Vec<PatternView> {
                 note: p.note.clone().unwrap_or_default(),
             }
         })
-        .collect()
+        .collect();
+    let warnings = parsed
+        .warnings
+        .iter()
+        .map(|w| format!("line {}: {}", w.line, w.message))
+        .collect();
+    PatternParseView { patterns, warnings }
 }
 
 #[cfg(windows)]
