@@ -2,7 +2,7 @@
 //! its memory, persist the run to history, and cache it for export.
 
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -214,8 +214,14 @@ fn run_scan(
         &code_regions,
         &patterns,
         arch,
+        Some(cancel),
     );
     let scan_ms = scan_started.elapsed().as_millis();
+    // The cancel token now reaches the engine, so a Stop mid-scan genuinely halts the reads. Report
+    // it as cancelled rather than persisting and returning a half-finished run that looks complete.
+    if cancel.load(Ordering::Relaxed) {
+        return Err("scan cancelled".to_string());
+    }
     let elapsed_ms = started.elapsed().as_millis();
 
     let module_name = {

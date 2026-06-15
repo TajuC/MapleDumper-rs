@@ -708,6 +708,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
         &code_regions,
         &patterns,
         arch,
+        None,
     );
 
     let mut stamp = BuildStamp::capture(&target, target.module.base, &code_regions);
@@ -871,7 +872,11 @@ fn cmd_asm(a: AsmArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     let to = parse_hex_opt(&a.to)?;
     let regions = maple_core::memory::clip_regions(&target.code_regions(), from, to);
     println!("[+] assembly scan over {} regions", regions.len());
-    let hits = assembly_scan(&target, target.module.base, &regions, arch, &pat, &cancel);
+    let scan = assembly_scan(&target, target.module.base, &regions, arch, &pat, &cancel);
+    if let Some(w) = maple_core::read_gap_warning(&scan.read_gaps) {
+        eprintln!("[warn] {w}");
+    }
+    let hits = scan.hits;
     println!("[+] {} matches", hits.len());
     for h in &hits {
         let bytes = h
