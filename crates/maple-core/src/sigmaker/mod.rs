@@ -531,7 +531,7 @@ pub fn generate_with_progress(
                 }]
             }
         }
-        Some(c) => collapse_aob_ranges(images, &c.per_version),
+        Some(c) => collapse_aob_ranges(images, &c.per_version, &caches),
         None => Vec::new(),
     };
     let alternates = pool;

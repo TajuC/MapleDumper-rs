@@ -323,7 +323,7 @@ fn collapse_aob_ranges_groups_builds_until_the_bytes_break() {
         pv("B", 0x20, "DE AD BE EF"),
         pv("C", 0x30, "CA FE BA BE"),
     ];
-    let ranges = collapse_aob_ranges(&images, &per_version);
+    let ranges = collapse_aob_ranges(&images, &per_version, &[]);
     assert_eq!(ranges.len(), 2, "two ranges: A..B then C");
     assert_eq!(ranges[0].labels, ["A", "B"]);
     assert_eq!(ranges[0].aob, "DE AD BE EF");
@@ -357,7 +357,7 @@ fn collapse_aob_ranges_breaks_on_an_unreached_build() {
             aob: None,
         },
     ];
-    let ranges = collapse_aob_ranges(&images, &per_version);
+    let ranges = collapse_aob_ranges(&images, &per_version, &[]);
     assert_eq!(ranges.len(), 1, "only the reached build forms a range");
     assert_eq!(ranges[0].labels, ["A"]);
 }

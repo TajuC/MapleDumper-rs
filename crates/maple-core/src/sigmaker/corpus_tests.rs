@@ -477,7 +477,7 @@ fn cross_version_relocation_coverage_and_false_positive_sweep() {
 
     let enc = |img: &ImageInput, rva: usize| identity::enclosing_function(img, rva);
     let validate = |img: &ImageInput, r: usize| {
-        single_build_aob(img, r, &opts).is_some_and(|aob| aob::aob_unique_at(img, &aob, r))
+        single_build_aob(img, r, &opts).is_some_and(|aob| aob::aob_unique_at(img, None, &aob, r))
     };
 
     // The population: distinct v83 function entries (every E8 rel32 call target landing in code), and
@@ -1837,7 +1837,7 @@ fn vtable_relocation_reports_version_ranges_on_real_gms() {
         "expected at least v83/v84/v88 pinned, got {pinned}"
     );
 
-    let ranges = collapse_aob_ranges(&inputs, &cand.per_version);
+    let ranges = collapse_aob_ranges(&inputs, &cand.per_version, &[]);
     eprintln!("version coverage:");
     for r in &ranges {
         eprintln!(
@@ -2033,7 +2033,7 @@ fn automated_v91_to_v95_aobs_via_string_anchor() {
         let Some(aob) = single_build_aob(&v951, v95rva, &opts) else {
             continue;
         };
-        if aob::aob_unique_at(&v951, &aob, v95rva) {
+        if aob::aob_unique_at(&v951, None, &aob, v95rva) {
             ok += 1;
             if shown < 6 {
                 shown += 1;
@@ -2163,7 +2163,7 @@ fn caller_relative_bridges_non_string_functions_v91_to_v95() {
             let Some(aob) = single_build_aob(&v951, v95rva, &opts) else {
                 continue;
             };
-            if aob::aob_unique_at(&v951, &aob, v95rva) {
+            if aob::aob_unique_at(&v951, None, &aob, v95rva) {
                 ok += 1;
                 if shown < 6 {
                     shown += 1;

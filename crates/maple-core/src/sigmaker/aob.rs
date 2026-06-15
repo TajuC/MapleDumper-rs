@@ -12,14 +12,26 @@ use crate::scanner::CompiledPattern;
 /// Whether `aob` matches build `img` exactly once and that one match is at `rva`. The match-at-RVA
 /// requirement is essential: a pattern that happens to be unique elsewhere is a different function that
 /// coincidentally shares the bytes, and extending a version range onto it would report a wrong address.
-pub(super) fn aob_unique_at(img: &ImageInput, aob: &str, rva: usize) -> bool {
+///
+/// `cache` is the build's already-built [`CodeCache`] when the caller has one (the generator builds
+/// one per unique build up front); passing it avoids re-reading the whole code section on every check.
+/// `None` falls back to building one, so behaviour is identical either way.
+pub(super) fn aob_unique_at(
+    img: &ImageInput,
+    cache: Option<&CodeCache>,
+    aob: &str,
+    rva: usize,
+) -> bool {
     let Ok(sig) = try_signature_from_aob(aob) else {
         return false;
     };
     let Some(pat) = CompiledPattern::new(&sig) else {
         return false;
     };
-    let (count, first) = CodeCache::build(img).locate(&pat);
+    let (count, first) = match cache {
+        Some(c) => c.locate(&pat),
+        None => CodeCache::build(img).locate(&pat),
+    };
     count == 1 && first == Some(rva as u64)
 }
 
@@ -32,6 +44,7 @@ pub(super) fn aob_unique_at(img: &ImageInput, aob: &str, rva: usize) -> bool {
 pub(super) fn collapse_aob_ranges(
     images: &[ImageInput],
     per_version: &[PerVersion],
+    caches: &[(usize, CodeCache)],
 ) -> Vec<AobRange> {
     let mut ranges: Vec<AobRange> = Vec::new();
     let mut cur: Option<(String, String, Vec<String>)> = None; // (aob, minted_in, labels)
@@ -51,14 +64,16 @@ pub(super) fn collapse_aob_ranges(
             close(cur.take(), &mut ranges);
             continue;
         };
-        let Some(im) = images.iter().find(|i| i.label == pv.label) else {
+        let Some(idx) = images.iter().position(|i| i.label == pv.label) else {
             // An unresolvable label breaks contiguity rather than silently bridging the two sides.
             close(cur.take(), &mut ranges);
             continue;
         };
+        let im = &images[idx];
+        let cache = caches.iter().find(|(i, _)| *i == idx).map(|(_, c)| c);
         let extend = cur
             .as_ref()
-            .is_some_and(|(a, _, _)| aob_unique_at(im, a, rva as usize));
+            .is_some_and(|(a, _, _)| aob_unique_at(im, cache, a, rva as usize));
         if extend {
             cur.as_mut().unwrap().2.push(pv.label.clone());
         } else {
