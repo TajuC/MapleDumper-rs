@@ -1,6 +1,11 @@
 async function reparse() {
-  state.patterns = await invoke("parse_patterns_text", { text: state.patternText, arch: state.arch });
+  const res = await invoke("parse_patterns_text", { text: state.patternText, arch: state.arch });
+  // The command returns { patterns, warnings }; tolerate a bare array too so an older shape or a stub
+  // does not break the view.
+  state.patterns = Array.isArray(res) ? res : (res && res.patterns) || [];
   $("s-loaded").textContent = state.patterns.length;
+  const warnings = (res && res.warnings) || [];
+  for (const w of warnings) toast(w, true);
 }
 
 function refreshPatterns() {

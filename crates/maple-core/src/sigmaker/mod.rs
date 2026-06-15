@@ -349,7 +349,13 @@ pub fn generate_with_progress(
         });
         caches.push((i, CodeCache::build(&images[i])));
     }
-    let cache_of = |idx: usize| &caches.iter().find(|(i, _)| *i == idx).unwrap().1;
+    let cache_of = |idx: usize| {
+        &caches
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .expect("a required image index always has a built code cache")
+            .1
+    };
 
     progress(SigStage::LocatingTarget);
     let mut aob_found: Vec<(usize, u64)> = Vec::new();

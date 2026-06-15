@@ -2,6 +2,8 @@
 //! cross-version byte signatures (AOB / ref-RVA / cross) over a set of client
 //! binaries, with per-job progress events and holdout validation.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::{Deserialize, Serialize};
 
 use maple_core::{
@@ -10,6 +12,8 @@ use maple_core::{
     inspect_function, make_string_anchor, negative_corpus_hits, try_signature_from_aob,
 };
 use tauri::Emitter;
+
+use crate::state::AppState;
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -544,6 +548,7 @@ fn stage_phase(stage: SigStage) -> (&'static str, u32, u32) {
 
 fn run_generate_signature(
     app: &tauri::AppHandle,
+    cancel: &AtomicBool,
     req: SigGenRequest,
 ) -> Result<SigGenResponse, String> {
     if req.clients.is_empty() {
@@ -577,6 +582,9 @@ fn run_generate_signature(
     let total = req.clients.len() as u32;
     let mut images: Vec<FileImage> = Vec::with_capacity(req.clients.len());
     for (k, p) in req.clients.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("signature generation cancelled".to_string());
+        }
         emit("load", label_of(p), k as u32 + 1, total, 0);
         images
             .push(FileImage::open(std::path::Path::new(p)).map_err(|e| format!("open {p}: {e}"))?);
@@ -624,6 +632,11 @@ fn run_generate_signature(
     let opts = SigOptions::default();
     let mut results: Vec<SigJobResultView> = Vec::with_capacity(req.jobs.len());
     for (ji, job) in req.jobs.iter().enumerate() {
+        // Cancellation lands between jobs (and between client loads above): the Stop button flips this
+        // job's token, so a long multi-client or multi-target run halts instead of being uninterruptible.
+        if cancel.load(Ordering::Relaxed) {
+            return Err("signature generation cancelled".to_string());
+        }
         let job_n = ji as u32 + 1;
         let mut on_stage = |stage: SigStage| {
             let (phase, index, total) = stage_phase(stage);
@@ -721,9 +734,18 @@ fn job_error(label: String, error: String) -> SigJobResultView {
 #[tauri::command]
 pub async fn generate_signature(
     app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     req: SigGenRequest,
 ) -> Result<SigGenResponse, String> {
-    match tauri::async_runtime::spawn_blocking(move || run_generate_signature(&app, req)).await {
+    // Register the run as a job so the same Stop button that cancels a scan also reaches this work;
+    // without a token here the command was uninterruptible no matter how long it ran.
+    let (id, token) = state.jobs.start();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        run_generate_signature(&app, token.flag(), req)
+    })
+    .await;
+    state.jobs.finish(id);
+    match result {
         Ok(result) => result,
         Err(e) => Err(e.to_string()),
     }

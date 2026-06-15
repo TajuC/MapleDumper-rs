@@ -16,14 +16,38 @@ pub struct DiffReport {
     pub removed: Vec<Finding>,
     pub moved: Vec<Moved>,
     pub unchanged: usize,
+    /// Advisories about the inputs, currently duplicate symbol names that the name-keyed diff cannot
+    /// represent. Surfaced so a collapsed duplicate is visible instead of silently deciding it.
+    pub warnings: Vec<String>,
+}
+
+// Index findings by name, recording a warning once per name that appears more than once. A duplicate
+// name has no well-defined diff (which value is "the" one?), so the last is kept and the ambiguity is
+// reported rather than silently resolved.
+fn index_by_name<'a>(
+    items: &'a [Finding],
+    side: &str,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<&'a str, &'a Finding> {
+    let mut map = BTreeMap::new();
+    let mut warned = std::collections::BTreeSet::new();
+    for f in items {
+        if map.insert(f.name.as_str(), f).is_some() && warned.insert(f.name.as_str()) {
+            warnings.push(format!(
+                "duplicate symbol \"{}\" in the {side} dump; only the last value is compared",
+                f.name
+            ));
+        }
+    }
+    map
 }
 
 #[must_use]
 pub fn diff(old: &[Finding], new: &[Finding]) -> DiffReport {
-    let old_by_name: BTreeMap<&str, &Finding> = old.iter().map(|f| (f.name.as_str(), f)).collect();
-    let new_by_name: BTreeMap<&str, &Finding> = new.iter().map(|f| (f.name.as_str(), f)).collect();
-
     let mut report = DiffReport::default();
+    let old_by_name = index_by_name(old, "old", &mut report.warnings);
+    let new_by_name = index_by_name(new, "new", &mut report.warnings);
+
     for (name, found) in &new_by_name {
         match old_by_name.get(name) {
             None => report.added.push((*found).clone()),
@@ -126,5 +150,22 @@ mod tests {
                 .iter()
                 .any(|f| f.name == "Hp" && f.value == 0x40 && f.is_offset)
         );
+    }
+
+    #[test]
+    fn duplicate_names_are_flagged_not_silently_collapsed() {
+        let old = vec![f("A", 1), f("A", 2), f("B", 5)];
+        let new = vec![f("A", 2), f("B", 5)];
+        let report = diff(&old, &new);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("duplicate symbol \"A\"") && w.contains("old")),
+            "a duplicate name must be surfaced, got {:?}",
+            report.warnings
+        );
+        // The last A (value 2) is what gets compared, so A reads as unchanged against the new A=2.
+        assert_eq!(report.unchanged, 2);
     }
 }

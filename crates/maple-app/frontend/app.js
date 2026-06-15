@@ -347,10 +347,18 @@ async function runScan() {
       for (const w of report.warnings) toast(w, true);
     }
   } catch (err) {
-    setConn("error", "err");
-    setRing("done", 0);
-    setFoot("foot.failed", null, null, String(err));
-    toast(String(err), true);
+    if (String(err) === "scan cancelled") {
+      // The user hit Stop and the backend now genuinely aborts the scan. The stop handler already set
+      // the cancelled state, so keep it rather than overwriting it with a failure.
+      setConn("cancelled", "");
+      setRing("done", 0);
+      setFoot("foot.cancelled", "foot.cancelledSub");
+    } else {
+      setConn("error", "err");
+      setRing("done", 0);
+      setFoot("foot.failed", null, null, String(err));
+      toast(String(err), true);
+    }
   } finally {
     $("w-scan").disabled = false;
     $("w-stop").disabled = true;
@@ -376,6 +384,7 @@ $("asm-search").addEventListener("input", () => {
 $("sig-pick").addEventListener("click", sigPickFiles);
 $("sig-pick-neg").addEventListener("click", sigPickNegatives);
 $("sig-gen").addEventListener("click", runSigGen);
+$("sig-stop").addEventListener("click", () => invoke("cancel_scan"));
 $("sig-json").addEventListener("click", () => {
   sigState.showJson = !sigState.showJson;
   renderSigResults();
@@ -427,13 +436,13 @@ sigUpdateValidity();
 
 $("w-search").addEventListener("input", renderResults);
 $("w-source-btn").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
     syncEditor();
     await reparse();
-    state.sourceFile = path.split(/[\\/]/).pop();
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     toast(t("toast.loadedN", { n: state.patterns.length }));
   } catch (err) {
@@ -466,16 +475,15 @@ document.querySelectorAll("#export-menu button").forEach((b) =>
   })
 );
 
-$("out-copy").addEventListener("click", async () => {
-  await navigator.clipboard.writeText($("output-text").textContent);
-  toast(t("toast.copied"));
-});
+$("out-copy").addEventListener("click", () => copyText($("output-text").textContent));
 $("out-save").addEventListener("click", async () => {
-  const path = await invoke("pick_save_file", { defaultName: $("output-text").dataset.suggest || "output.txt" });
-  if (!path) return;
   try {
-    await invoke("write_text_file", { path, contents: $("output-text").textContent });
-    toast(t("toast.saved", { path }));
+    const saved = await invoke("save_report_file", {
+      defaultName: $("output-text").dataset.suggest || "output.txt",
+      contents: $("output-text").textContent,
+    });
+    if (!saved) return;
+    toast(t("toast.saved", { path: saved }));
   } catch (err) {
     toast(String(err), true);
   }
@@ -486,11 +494,11 @@ $("pattern-search").addEventListener("input", renderPatterns);
 $("pattern-cat").addEventListener("change", renderPatterns);
 $("pat-add").addEventListener("click", () => openModal(-1));
 $("pat-load").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
-    state.sourceFile = path.split(/[\\/]/).pop();
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     syncEditor();
     await reparse();
@@ -557,11 +565,11 @@ window.MonacoEnvironment = {
 
 
 $("ed-load").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
-    state.sourceFile = path.split(/[\\/]/).pop();
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     syncEditor();
     toast(t("toast.loaded"));
@@ -684,4 +692,10 @@ onLangChange = relocalize;
   await reparse();
   renderResults();
   renderPatterns();
+  try {
+    const warnings = await invoke("startup_warnings");
+    if (Array.isArray(warnings)) for (const w of warnings) toast(w, true);
+  } catch {
+    /* an older backend without this command simply shows no startup advisory */
+  }
 })();

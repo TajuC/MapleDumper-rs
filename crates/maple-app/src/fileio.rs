@@ -9,6 +9,17 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use serde::Serialize;
+
+/// A file opened through a guarded dialog command: its display name and its validated contents. The
+/// name lets the frontend show which file was loaded without the read path ever round-tripping
+/// through it.
+#[derive(Serialize)]
+pub struct OpenedFile {
+    name: String,
+    content: String,
+}
+
 /// What a path is allowed to be, which decides its permitted extensions.
 #[derive(Clone, Copy)]
 pub(crate) enum FileKind {
@@ -120,20 +131,6 @@ fn write_checked(path: &str, kind: FileKind, contents: &str) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub async fn pick_open_file() -> Option<String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        rfd::FileDialog::new()
-            .add_filter("Pattern lists", &["json", "txt", "ini", "cfg"])
-            .add_filter("All files", &["*"])
-            .pick_file()
-            .map(|p| p.to_string_lossy().into_owned())
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-#[tauri::command]
 pub async fn pick_save_file(default_name: String) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
         rfd::FileDialog::new()
@@ -165,11 +162,6 @@ pub async fn pick_open_files() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn read_text_file(path: String) -> Result<String, String> {
-    read_checked(&path, FileKind::Any)
-}
-
-#[tauri::command]
 pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
     write_checked(&path, FileKind::Any, &contents)
 }
@@ -177,7 +169,7 @@ pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
 /// Open a pattern file via the OS dialog and return its contents, so the path is chosen by the user
 /// in the backend and never supplied by the (untrusted) frontend.
 #[tauri::command]
-pub async fn open_pattern_file() -> Result<Option<String>, String> {
+pub async fn open_pattern_file() -> Result<Option<OpenedFile>, String> {
     let picked = tauri::async_runtime::spawn_blocking(|| {
         rfd::FileDialog::new()
             .add_filter("Pattern lists", &["txt", "json", "ini", "cfg", "inc"])
@@ -187,7 +179,14 @@ pub async fn open_pattern_file() -> Result<Option<String>, String> {
     .await
     .map_err(|e| e.to_string())?;
     match picked {
-        Some(path) => read_checked(&path, FileKind::Pattern).map(Some),
+        Some(path) => {
+            let content = read_checked(&path, FileKind::Pattern)?;
+            let name = Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(path);
+            Ok(Some(OpenedFile { name, content }))
+        }
         None => Ok(None),
     }
 }
