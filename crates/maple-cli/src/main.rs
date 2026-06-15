@@ -55,6 +55,7 @@ impl ExitKind {
 }
 
 /// A command failure carrying both a message and the exit code it should map to.
+#[derive(Debug)]
 struct CliError {
     kind: ExitKind,
     msg: String,
@@ -616,7 +617,23 @@ struct ScanJson {
     findings: Vec<ScanFindingJson>,
 }
 
-fn scan_json(result: &ScanResult, module: &str, base: u64, stamp: &BuildStamp) -> String {
+/// Serialize a value as pretty JSON, turning the (practically unreachable) serialization failure into
+/// a non-zero exit instead of the empty document it used to print with a success code.
+fn to_json_pretty<T: serde::Serialize>(value: &T) -> Result<String, CliError> {
+    serde_json::to_string_pretty(value).map_err(|e| {
+        CliError::new(
+            ExitKind::Internal,
+            format!("could not serialize JSON output: {e}"),
+        )
+    })
+}
+
+fn scan_json(
+    result: &ScanResult,
+    module: &str,
+    base: u64,
+    stamp: &BuildStamp,
+) -> Result<String, CliError> {
     let ambiguous = result
         .rows
         .iter()
@@ -654,7 +671,7 @@ fn scan_json(result: &ScanResult, module: &str, base: u64, stamp: &BuildStamp) -
         warnings: result.warnings.clone(),
         findings,
     };
-    serde_json::to_string_pretty(&report).unwrap_or_default()
+    to_json_pretty(&report)
 }
 
 fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
@@ -700,7 +717,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
         // stdout is the JSON document only; everything else this command logged went to stderr.
         println!(
             "{}",
-            scan_json(&result, &at.module, target.module.base as u64, &stamp)
+            scan_json(&result, &at.module, target.module.base as u64, &stamp)?
         );
     } else {
         println!();
@@ -741,6 +758,16 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
         println!("[+] build {} ({} bytes)", stamp.short(), stamp.bytes);
     }
 
+    // Duplicate symbol names collapse to one entry in the generated header (a C++ constant cannot be
+    // declared twice). Surface that on stderr so a dropped row is not silent.
+    let dups = maple_core::output::duplicate_names(&result.findings);
+    if !dups.is_empty() {
+        eprintln!(
+            "[!] duplicate symbol name(s) collapsed in generated output: {}",
+            dups.join(", ")
+        );
+    }
+
     write_outputs(
         &out,
         a.ce,
@@ -776,10 +803,7 @@ fn cmd_lint(a: LintArgs, cfg: &Config) -> Result<ExitKind, CliError> {
             })
             .collect();
         let flagged = report.iter().filter(|r| !r.lints.is_empty()).count();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).unwrap_or_default()
-        );
+        println!("{}", to_json_pretty(&report)?);
         flagged
     } else {
         print_lints(&patterns)
@@ -796,11 +820,37 @@ fn cmd_diff(a: DiffArgs) -> Result<ExitKind, CliError> {
         std::fs::read_to_string(&a.old).map_err(|e| format!("read {}: {e}", a.old.display()))?;
     let new_text =
         std::fs::read_to_string(&a.new).map_err(|e| format!("read {}: {e}", a.new.display()))?;
+    let old = parse_dump(&old_text);
+    let new = parse_dump(&new_text);
+    // A file with content but no parseable lines is almost always the wrong file or format; fail
+    // clearly instead of printing an empty diff and exiting success.
+    if old.is_empty() && old_text.split_whitespace().next().is_some() {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            format!(
+                "{} has content but no parseable dump lines (expected `[category] name = 0x...`)",
+                a.old.display()
+            ),
+        ));
+    }
+    if new.is_empty() && new_text.split_whitespace().next().is_some() {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            format!(
+                "{} has content but no parseable dump lines (expected `[category] name = 0x...`)",
+                a.new.display()
+            ),
+        ));
+    }
     print_build_compare(
         parse_stamp(&old_text).as_ref(),
         parse_stamp(&new_text).as_ref(),
     );
-    print_diff(&diff(&parse_dump(&old_text), &parse_dump(&new_text)));
+    let report = diff(&old, &new);
+    for w in &report.warnings {
+        eprintln!("[!] {w}");
+    }
+    print_diff(&report);
     Ok(ExitKind::Success)
 }
 
@@ -1211,7 +1261,7 @@ fn json_report(
     negatives_scanned: usize,
     holdout: &[HoldoutResult],
     string_anchor: Option<&str>,
-) -> String {
+) -> Result<String, CliError> {
     let neg_counts: Vec<usize> = negatives.iter().map(|h| h.count).collect();
     let neg_summary = NegativeEvidence::from_hits(negatives_scanned, &neg_counts);
     let report = JReport {
@@ -1288,7 +1338,7 @@ fn json_report(
             .collect(),
         diagnostics: r.diagnostics.iter().map(|d| d.to_string()).collect(),
     };
-    serde_json::to_string_pretty(&report).unwrap_or_default()
+    to_json_pretty(&report)
 }
 
 fn print_candidate(tag: &str, c: &SigCandidate) {
@@ -1505,7 +1555,7 @@ fn cmd_mksig(m: MksigArgs) -> Result<ExitKind, CliError> {
             neg_paths.len(),
             &holdout,
             anchor_line.as_deref(),
-        );
+        )?;
         if let Some(path) = &m.json_out {
             std::fs::write(path, &json).map_err(|e| format!("write {}: {e}", path.display()))?;
             eprintln!("[+] wrote {}", path.display());
@@ -1709,7 +1759,7 @@ mod tests {
             matched_holdout: true,
         }];
 
-        let json = json_report(&report, &negatives, 5, &holdout, Some("@anchor"));
+        let json = json_report(&report, &negatives, 5, &holdout, Some("@anchor")).unwrap();
         let v: Value = serde_json::from_str(&json).expect("--json output must be valid JSON");
 
         // Addresses serialize as hex strings, never integers. This is the load-bearing part of the
@@ -1826,7 +1876,7 @@ mod tests {
             timestamp: 0,
             version: Some("1.0".to_string()),
         };
-        let json = scan_json(&result, "MapleStory.exe", 0x1_4000_0000, &stamp);
+        let json = scan_json(&result, "MapleStory.exe", 0x1_4000_0000, &stamp).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).expect("scan_json emits valid JSON");
         assert_eq!(v["module"], "MapleStory.exe");
         assert_eq!(v["ambiguous"], 1);
@@ -1887,7 +1937,7 @@ mod tests {
             aob_ranges: Vec::new(),
             diagnostics: Vec::new(),
         };
-        let json = json_report(&report, &[], 0, &[], None);
+        let json = json_report(&report, &[], 0, &[], None).unwrap();
         assert_eq!(
             json.matches("\"resolved_target_rva\": \"0x1000\"").count(),
             3
@@ -1930,7 +1980,7 @@ mod tests {
                 count: 1,
             },
         ];
-        let json = json_report(&report, &hits, 5, &[], None);
+        let json = json_report(&report, &hits, 5, &[], None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(v["negative_summary"]["modules_scanned"], 5);
         assert_eq!(v["negative_summary"]["modules_hit"], 2);

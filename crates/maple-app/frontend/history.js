@@ -318,7 +318,11 @@ function diffViewHtml(view, bits) {
         )
         .join("") + moreRow(capped.hidden, 5)
     : `<tr class="empty"><td colspan="5">${t("diff.noChanges")}</td></tr>`;
-  return `<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const warn =
+    Array.isArray(view.warnings) && view.warnings.length
+      ? `<div class="diff-warn">${view.warnings.map((w) => esc(w)).join("<br>")}</div>`
+      : "";
+  return `${warn}<div class="diff-builds">${esc(head)}</div><div class="diff-summary">${summary}</div><div class="hist-toolbar"><input id="hist-search" class="hist-search" type="text" placeholder="${t("hist.search")}" spellcheck="false" /></div><div class="table-scroll"><table class="grid-table"><thead><tr><th>${t("col.name")}</th><th>${t("diff.colChange")}</th><th>${t("diff.colOld")}</th><th>${t("diff.colNew")}</th><th>${t("col.category")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 async function matrixTabHtml(tab) {
   const view = await invoke("history_matrix", { ids: tab.ids });
