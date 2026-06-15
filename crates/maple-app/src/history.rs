@@ -240,7 +240,11 @@ pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
 #[must_use]
 pub fn open_memory() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory database");
-    let _ = migrate(&conn);
+    if let Err(e) = migrate(&conn) {
+        // The in-memory store is the last-resort fallback; if even its schema cannot be created, say
+        // so loudly instead of returning a tableless connection that fails every later query opaquely.
+        eprintln!("[warn] in-memory history schema could not be created: {e}");
+    }
     conn
 }
 

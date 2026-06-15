@@ -40,19 +40,29 @@ pub struct MatrixView {
 }
 
 fn to_findings(rows: &[history::FindingRow]) -> Vec<Finding> {
-    rows.iter()
-        .filter_map(|r| {
-            let raw = r.value.as_ref()?;
-            let hex = raw.trim_start_matches("0x").trim_start_matches("0X");
-            let value = u64::from_str_radix(hex, 16).ok()?;
-            Some(Finding {
+    let mut out = Vec::new();
+    let mut corrupt = 0usize;
+    for r in rows {
+        // A row with no stored value is a not-found finding, expected and skipped. A stored value that
+        // will not parse as hex is corruption: count it and warn rather than dropping it silently.
+        let Some(raw) = r.value.as_ref() else {
+            continue;
+        };
+        let hex = raw.trim_start_matches("0x").trim_start_matches("0X");
+        match u64::from_str_radix(hex, 16) {
+            Ok(value) => out.push(Finding {
                 name: r.name.clone(),
                 category: r.category.clone(),
                 value,
                 is_offset: r.is_offset,
-            })
-        })
-        .collect()
+            }),
+            Err(_) => corrupt += 1,
+        }
+    }
+    if corrupt > 0 {
+        eprintln!("[warn] history: skipped {corrupt} finding(s) with an unparseable stored value");
+    }
+    out
 }
 
 fn meta_label(meta: &history::ScanRow) -> String {
@@ -199,4 +209,39 @@ pub fn history_matrix(
         .collect();
     rows.sort_by(|a, b| a.category.cmp(&b.category).then(a.name.cmp(&b.name)));
     Ok(MatrixView { columns, rows })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(name: &str, value: Option<&str>) -> history::FindingRow {
+        history::FindingRow {
+            name: name.to_string(),
+            category: "globals".to_string(),
+            value: value.map(str::to_string),
+            is_offset: false,
+            status: String::new(),
+            matches: 1,
+            note: String::new(),
+            bytes: None,
+            confidence: None,
+            trace: None,
+            candidates: None,
+            resolver_trace: None,
+        }
+    }
+
+    #[test]
+    fn to_findings_keeps_valid_skips_none_and_drops_corrupt() {
+        let rows = vec![
+            row("Good", Some("0x1000")),
+            row("NotFound", None),
+            row("Corrupt", Some("0xZZZZ")),
+        ];
+        let findings = to_findings(&rows);
+        assert_eq!(findings.len(), 1, "only the parseable, valued row survives");
+        assert_eq!(findings[0].name, "Good");
+        assert_eq!(findings[0].value, 0x1000);
+    }
 }
