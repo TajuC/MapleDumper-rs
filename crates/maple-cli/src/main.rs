@@ -1017,8 +1017,14 @@ fn collect_clients(
     let mut clients = clients.to_vec();
     if let Some(dir) = client_dir {
         let rd = std::fs::read_dir(dir).map_err(|e| format!("read dir {}: {e}", dir.display()))?;
-        for entry in rd.flatten() {
-            let p = entry.path();
+        for entry in rd {
+            let p = match entry {
+                Ok(e) => e.path(),
+                Err(e) => {
+                    eprintln!("[warn] skipping unreadable entry in {}: {e}", dir.display());
+                    continue;
+                }
+            };
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
                 clients.push(p);
             }
@@ -1039,8 +1045,14 @@ fn gather_negatives(files: &[PathBuf], dir: Option<&Path>) -> Result<Vec<PathBuf
     let mut out = files.to_vec();
     if let Some(d) = dir {
         let rd = std::fs::read_dir(d).map_err(|e| format!("read dir {}: {e}", d.display()))?;
-        for entry in rd.flatten() {
-            let p = entry.path();
+        for entry in rd {
+            let p = match entry {
+                Ok(e) => e.path(),
+                Err(e) => {
+                    eprintln!("[warn] skipping unreadable entry in {}: {e}", d.display());
+                    continue;
+                }
+            };
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
                 out.push(p);
             }

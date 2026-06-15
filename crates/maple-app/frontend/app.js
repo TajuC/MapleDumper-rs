@@ -466,10 +466,7 @@ document.querySelectorAll("#export-menu button").forEach((b) =>
   })
 );
 
-$("out-copy").addEventListener("click", async () => {
-  await navigator.clipboard.writeText($("output-text").textContent);
-  toast(t("toast.copied"));
-});
+$("out-copy").addEventListener("click", () => copyText($("output-text").textContent));
 $("out-save").addEventListener("click", async () => {
   const path = await invoke("pick_save_file", { defaultName: $("output-text").dataset.suggest || "output.txt" });
   if (!path) return;
