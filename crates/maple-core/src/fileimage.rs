@@ -840,7 +840,10 @@ mod tests {
             if let Ok(img) = FileImage::parse(d) {
                 let mut buf = [0u8; 0x80];
                 let _ = img.read_into(img.base(), &mut buf);
-                let _ = img.read_into(img.base() + img.size().saturating_sub(0x10), &mut buf);
+                // A corrupted PE can parse to a base+size that overflows a 32-bit usize; saturate so the
+                // test exercises a near-end read without the harness itself panicking on the add.
+                let near_end = img.base().saturating_add(img.size().saturating_sub(0x10));
+                let _ = img.read_into(near_end, &mut buf);
                 let _ = img.regions();
                 let _ = img.pack_report();
             }

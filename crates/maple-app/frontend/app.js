@@ -347,10 +347,18 @@ async function runScan() {
       for (const w of report.warnings) toast(w, true);
     }
   } catch (err) {
-    setConn("error", "err");
-    setRing("done", 0);
-    setFoot("foot.failed", null, null, String(err));
-    toast(String(err), true);
+    if (String(err) === "scan cancelled") {
+      // The user hit Stop and the backend now genuinely aborts the scan. The stop handler already set
+      // the cancelled state, so keep it rather than overwriting it with a failure.
+      setConn("cancelled", "");
+      setRing("done", 0);
+      setFoot("foot.cancelled", "foot.cancelledSub");
+    } else {
+      setConn("error", "err");
+      setRing("done", 0);
+      setFoot("foot.failed", null, null, String(err));
+      toast(String(err), true);
+    }
   } finally {
     $("w-scan").disabled = false;
     $("w-stop").disabled = true;
@@ -376,6 +384,7 @@ $("asm-search").addEventListener("input", () => {
 $("sig-pick").addEventListener("click", sigPickFiles);
 $("sig-pick-neg").addEventListener("click", sigPickNegatives);
 $("sig-gen").addEventListener("click", runSigGen);
+$("sig-stop").addEventListener("click", () => invoke("cancel_scan"));
 $("sig-json").addEventListener("click", () => {
   sigState.showJson = !sigState.showJson;
   renderSigResults();
@@ -686,4 +695,10 @@ onLangChange = relocalize;
   await reparse();
   renderResults();
   renderPatterns();
+  try {
+    const warnings = await invoke("startup_warnings");
+    if (Array.isArray(warnings)) for (const w of warnings) toast(w, true);
+  } catch {
+    /* an older backend without this command simply shows no startup advisory */
+  }
 })();

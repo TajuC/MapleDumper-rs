@@ -23,14 +23,17 @@ use crate::jobs::JobManager;
 use crate::state::{AppState, open_history_db};
 
 fn main() {
+    let (db, db_warning) = open_history_db();
     tauri::Builder::default()
         .manage(AppState {
             jobs: JobManager::default(),
             last: Arc::new(Mutex::new(None)),
-            db: Arc::new(Mutex::new(open_history_db())),
+            db: Arc::new(Mutex::new(db)),
+            db_warning,
         })
         .invoke_handler(tauri::generate_handler![
             scan::engine_version,
+            state::startup_warnings,
             scan::parse_patterns_text,
             scan::attach_and_scan,
             asmscan::assembly_scan,

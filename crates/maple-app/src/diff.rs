@@ -29,6 +29,9 @@ pub struct DiffView {
     old_build: Option<String>,
     new_build: Option<String>,
     rows: Vec<DiffRowView>,
+    /// Advisories about the inputs, currently duplicate symbol names a name-keyed diff cannot
+    /// represent. Shown above the diff so a collapsed duplicate is visible instead of silent.
+    warnings: Vec<String>,
 }
 
 impl DiffView {
@@ -105,6 +108,7 @@ pub(crate) fn build_diff_view(
         old_build,
         new_build,
         rows,
+        warnings: report.warnings,
     }
 }
 
