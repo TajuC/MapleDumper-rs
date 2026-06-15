@@ -17,6 +17,16 @@ pub struct AppState {
     pub(crate) jobs: JobManager,
     pub(crate) last: Arc<Mutex<Option<LastScan>>>,
     pub(crate) db: Arc<Mutex<Connection>>,
+    /// A startup advisory the UI should show once, set when the history database fell back to memory
+    /// so the user knows this session will not persist instead of only seeing it on stderr.
+    pub(crate) db_warning: Option<String>,
+}
+
+/// Advisories to show the user once at startup (currently a history database that could not be
+/// opened and fell back to memory). Empty when everything came up cleanly.
+#[tauri::command]
+pub fn startup_warnings(state: tauri::State<'_, AppState>) -> Vec<String> {
+    state.db_warning.iter().cloned().collect()
 }
 
 /// Lock the history connection, recovering a poisoned mutex instead of propagating the poison. A
@@ -37,16 +47,17 @@ pub(crate) struct LastScan {
 
 /// Open the on-disk history database, falling back to an in-memory store if the
 /// real file cannot be opened so a session still works without persistence.
-pub(crate) fn open_history_db() -> Connection {
+pub(crate) fn open_history_db() -> (Connection, Option<String>) {
     let path = history::default_db_path();
     match history::open(&path) {
-        Ok(conn) => conn,
+        Ok(conn) => (conn, None),
         Err(e) => {
-            eprintln!(
-                "[warn] could not open history database at {}: {e}; history will not be saved this session",
+            let msg = format!(
+                "could not open the history database at {}: {e}. This session's scans will not be saved.",
                 path.display()
             );
-            history::open_memory()
+            eprintln!("[warn] {msg}");
+            (history::open_memory(), Some(msg))
         }
     }
 }

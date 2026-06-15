@@ -684,4 +684,10 @@ onLangChange = relocalize;
   await reparse();
   renderResults();
   renderPatterns();
+  try {
+    const warnings = await invoke("startup_warnings");
+    if (Array.isArray(warnings)) for (const w of warnings) toast(w, true);
+  } catch {
+    /* an older backend without this command simply shows no startup advisory */
+  }
 })();

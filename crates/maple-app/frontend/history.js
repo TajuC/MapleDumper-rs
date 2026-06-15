@@ -301,7 +301,9 @@ async function diffTabHtml(tab) {
 }
 async function diffFilesTabHtml(tab) {
   const view = await invoke("diff_dumps", { old: tab.old, new: tab.new });
-  return diffViewHtml(view, 64);
+  // Pasted dumps carry no architecture. MapleStory clients are 32-bit PE32, so decode the byte
+  // context as 32-bit rather than assuming 64.
+  return diffViewHtml(view, 32);
 }
 function diffViewHtml(view, bits) {
   const label = { moved: t("diff.moved"), new: t("diff.new"), removed: t("diff.removed") };

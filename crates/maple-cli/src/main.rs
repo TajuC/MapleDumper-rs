@@ -1432,6 +1432,14 @@ fn cmd_mksig(m: MksigArgs) -> Result<ExitKind, CliError> {
 
     let mut opts = SigOptions::default();
     if let Some(r) = m.min_fixed_ratio {
+        // Out of [0,1] this gate silently misbehaves: a negative value disables it, above 1 rejects
+        // every candidate. Reject it up front with a clear message instead.
+        if !(0.0..=1.0).contains(&r) {
+            return Err(CliError::new(
+                ExitKind::InvalidInput,
+                format!("--min-fixed-ratio must be between 0.0 and 1.0, got {r}"),
+            ));
+        }
         opts.min_fixed_ratio = r;
     }
 
