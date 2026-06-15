@@ -691,6 +691,7 @@ fn cmd_scan(a: ScanArgs, cfg: &Config) -> Result<ExitKind, CliError> {
         &code_regions,
         &patterns,
         arch,
+        None,
     );
 
     let mut stamp = BuildStamp::capture(&target, target.module.base, &code_regions);
