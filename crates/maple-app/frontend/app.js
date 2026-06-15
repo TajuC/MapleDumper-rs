@@ -427,13 +427,13 @@ sigUpdateValidity();
 
 $("w-search").addEventListener("input", renderResults);
 $("w-source-btn").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
     syncEditor();
     await reparse();
-    state.sourceFile = path.split(/[\\/]/).pop();
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     toast(t("toast.loadedN", { n: state.patterns.length }));
   } catch (err) {
@@ -471,11 +471,13 @@ $("out-copy").addEventListener("click", async () => {
   toast(t("toast.copied"));
 });
 $("out-save").addEventListener("click", async () => {
-  const path = await invoke("pick_save_file", { defaultName: $("output-text").dataset.suggest || "output.txt" });
-  if (!path) return;
   try {
-    await invoke("write_text_file", { path, contents: $("output-text").textContent });
-    toast(t("toast.saved", { path }));
+    const saved = await invoke("save_report_file", {
+      defaultName: $("output-text").dataset.suggest || "output.txt",
+      contents: $("output-text").textContent,
+    });
+    if (!saved) return;
+    toast(t("toast.saved", { path: saved }));
   } catch (err) {
     toast(String(err), true);
   }
@@ -486,11 +488,11 @@ $("pattern-search").addEventListener("input", renderPatterns);
 $("pattern-cat").addEventListener("change", renderPatterns);
 $("pat-add").addEventListener("click", () => openModal(-1));
 $("pat-load").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
-    state.sourceFile = path.split(/[\\/]/).pop();
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     syncEditor();
     await reparse();
@@ -557,11 +559,11 @@ window.MonacoEnvironment = {
 
 
 $("ed-load").addEventListener("click", async () => {
-  const path = await invoke("pick_open_file");
-  if (!path) return;
   try {
-    state.patternText = await invoke("read_text_file", { path });
-    state.sourceFile = path.split(/[\\/]/).pop();
+    const file = await invoke("open_pattern_file");
+    if (!file) return;
+    state.patternText = file.content;
+    state.sourceFile = file.name;
     $("w-source").value = state.sourceFile;
     syncEditor();
     toast(t("toast.loaded"));
