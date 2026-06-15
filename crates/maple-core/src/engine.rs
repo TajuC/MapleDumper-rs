@@ -79,6 +79,21 @@ impl ScanResult {
     }
 }
 
+/// The standard advisory for region windows that read short, shared so the byte scan, the assembly
+/// scan, and both front-ends word a partial-read warning identically. `None` when there were no gaps.
+#[must_use]
+pub fn read_gap_warning(read_gaps: &[ReadGap]) -> Option<String> {
+    if read_gaps.is_empty() {
+        return None;
+    }
+    let unread: usize = read_gaps.iter().map(|g| g.requested - g.got).sum();
+    Some(format!(
+        "partial reads: {} region window(s) returned short, {unread} byte(s) unreadable; a \
+         \"not found\" result may be in unread memory",
+        read_gaps.len()
+    ))
+}
+
 // One resolved value plus the section signal. `is_code` is the coarse section verdict for an address
 // target (Some(true) in an executable region, Some(false) elsewhere in the module, None when no
 // section info was supplied or the value is an offset/immediate, not an address). `target_address`
@@ -666,13 +681,8 @@ where
         }
     }
 
-    if !read_gaps.is_empty() {
-        let unread: usize = read_gaps.iter().map(|g| g.requested - g.got).sum();
-        warnings.push(format!(
-            "partial reads: {} region window(s) returned short, {unread} byte(s) unreadable; a \
-             \"not found\" result may be in unread memory",
-            read_gaps.len()
-        ));
+    if let Some(w) = read_gap_warning(&read_gaps) {
+        warnings.push(w);
     }
 
     ScanResult {
