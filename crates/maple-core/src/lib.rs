@@ -26,13 +26,15 @@ pub mod stamp;
 #[cfg(windows)]
 pub mod process;
 
-pub use asmscan::{AsmHit, AsmPattern, assembly_scan, parse_asm_patterns};
+pub use asmscan::{AsmHit, AsmPattern, AsmScanResult, assembly_scan, parse_asm_patterns};
 pub use diff::{DiffReport, Moved, diff, parse_dump};
 pub use domain::{
     ExpectedHits, FailureReason, FindingStatus, ResolvePlan, ResolveTrace, ResolverSpec,
     SectionKind, checked_rva,
 };
-pub use engine::{PatternRow, ProfileReport, ScanResult, profile, scan, scan_in};
+pub use engine::{
+    PatternRow, ProfileReport, ReadGap, ScanResult, profile, read_gap_warning, scan, scan_in,
+};
 pub use fileimage::{FileImage, PackReport, RelocKind};
 pub use health::{Lint, lint};
 pub use live::{apply_string_anchors, scan_live};

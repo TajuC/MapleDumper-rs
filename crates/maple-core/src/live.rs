@@ -10,6 +10,7 @@ use crate::memory::{MemorySource, Region};
 use crate::output::Finding;
 use crate::pattern::{Arch, Pattern};
 use crate::sigmaker::{ImageInput, resolve_string_anchor};
+use std::sync::atomic::AtomicBool;
 
 /// Resolve string-anchored patterns against an image view, live target or file, and fold the results
 /// into a [`ScanResult`] from [`crate::engine::scan`]. The byte scan leaves each empty-signature
@@ -57,6 +58,7 @@ pub fn apply_string_anchors(result: &mut ScanResult, img: &ImageInput, patterns:
 /// anchors. The CLI and the desktop app both call this, so the live-scan sequence (the scan plus the
 /// degenerate `ImageInput` that string-anchor resolution needs) has a single definition and the two
 /// front-ends cannot drift on it.
+#[allow(clippy::too_many_arguments)]
 pub fn scan_live<S>(
     source: &S,
     module_base: usize,
@@ -65,6 +67,7 @@ pub fn scan_live<S>(
     code_regions: &[Region],
     patterns: &[Pattern],
     arch: Arch,
+    cancel: Option<&AtomicBool>,
 ) -> ScanResult
 where
     S: MemorySource + Sync,
@@ -77,6 +80,7 @@ where
         code_regions,
         patterns,
         arch,
+        cancel,
     );
     if patterns.iter().any(|p| p.string_anchor.is_some()) {
         let img = ImageInput {
@@ -185,6 +189,7 @@ mod tests {
             &code_regions,
             &patterns,
             Arch::X86,
+            None,
         );
         let img = ImageInput {
             label: String::new(),
@@ -210,6 +215,7 @@ mod tests {
             &code_regions,
             &patterns,
             Arch::X86,
+            None,
         );
 
         assert_eq!(live.found, reference.found);
@@ -217,6 +223,46 @@ mod tests {
         assert_eq!(live.findings, reference.findings);
         assert_eq!(live.rows.len(), reference.rows.len());
         assert!(live.found.contains(&"Stat".to_string()));
+        assert!(live.findings.iter().any(|f| f.name == "Mark"));
+    }
+
+    #[test]
+    fn a_set_cancel_flag_suppresses_the_scan() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let base = 0x1000usize;
+        let mut mem = vec![0u8; 0x200];
+        mem[0x150..0x154].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let source = BufferSource::new(base, mem);
+        let regions = [Region { base, size: 0x200 }];
+        let patterns = parse_patterns("Mark = DE AD BE EF", Arch::X86);
+
+        let cancel = AtomicBool::new(true);
+        let cancelled = scan_live(
+            &source,
+            base,
+            0x200,
+            &regions,
+            &[],
+            &patterns,
+            Arch::X86,
+            Some(&cancel),
+        );
+        assert!(cancelled.findings.is_empty());
+        assert!(cancelled.found.is_empty());
+
+        // Clearing the flag and rescanning the same input finds the marker, so it was the cancel that
+        // suppressed the result, not the fixture.
+        cancel.store(false, Ordering::SeqCst);
+        let live = scan_live(
+            &source,
+            base,
+            0x200,
+            &regions,
+            &[],
+            &patterns,
+            Arch::X86,
+            Some(&cancel),
+        );
         assert!(live.findings.iter().any(|f| f.name == "Mark"));
     }
 }
