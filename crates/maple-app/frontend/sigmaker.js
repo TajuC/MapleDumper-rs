@@ -206,6 +206,7 @@ async function runSigGen() {
   }
   const req = { clients: sigState.files.map((f) => f.path), jobs, negatives: sigState.negatives.map((n) => n.path) };
   $("sig-gen").disabled = true;
+  $("sig-stop").disabled = false;
   const setStatus = (msg) => {
     $("sig-results").innerHTML = `<div class="insp-hint">${esc(msg)}</div>`;
   };
@@ -231,10 +232,16 @@ async function runSigGen() {
   } catch (e) {
     sigState.response = null;
     $("sig-json").hidden = true;
-    setStatus(String(e));
-    toast(String(e), true);
+    if (String(e) === "signature generation cancelled") {
+      // User hit Stop; show the cancelled state rather than a red error.
+      setStatus(t("conn.cancelled"));
+    } else {
+      setStatus(String(e));
+      toast(String(e), true);
+    }
   } finally {
     if (unlisten) unlisten();
+    $("sig-stop").disabled = true;
     sigUpdateValidity();
   }
 }

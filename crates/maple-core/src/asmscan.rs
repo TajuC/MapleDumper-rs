@@ -1,4 +1,4 @@
-use crate::engine::read_range;
+use crate::engine::{ReadGap, read_range};
 use crate::memory::{MemorySource, Region};
 use crate::pattern::Arch;
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, NasmFormatter};
@@ -15,6 +15,15 @@ pub struct AsmHit {
     pub address: u64,
     pub bytes: Vec<u8>,
     pub lines: Vec<String>,
+}
+
+/// The matches plus any region windows that read short. Tracking the gaps is what lets a caller
+/// distinguish "no match" over fully-read code from "no match" over code that was partly unreadable,
+/// the same distinction the byte-scan engine already reports.
+#[derive(Debug, Clone, Default)]
+pub struct AsmScanResult {
+    pub hits: Vec<AsmHit>,
+    pub read_gaps: Vec<ReadGap>,
 }
 
 #[derive(Clone, Copy)]
@@ -140,7 +149,7 @@ pub fn assembly_scan<S: MemorySource + Sync>(
     arch: Arch,
     patterns: &AsmPattern,
     cancel: &AtomicBool,
-) -> Vec<AsmHit> {
+) -> AsmScanResult {
     assembly_scan_with(
         source,
         module_base,
@@ -163,10 +172,10 @@ fn assembly_scan_with<S: MemorySource + Sync>(
     cancel: &AtomicBool,
     chunk: usize,
     lead: usize,
-) -> Vec<AsmHit> {
+) -> AsmScanResult {
     let n = patterns.lines.len();
     if n == 0 {
-        return Vec::new();
+        return AsmScanResult::default();
     }
     let bitness = if matches!(arch, Arch::X64) { 64 } else { 32 };
     let chunk = chunk.max(1);
@@ -190,6 +199,9 @@ fn assembly_scan_with<S: MemorySource + Sync>(
         }
     }
 
+    // A window that reads short hit an unreadable hole; record it so a "no match" over partial code is
+    // reported as inconclusive instead of a confident absence, matching the byte-scan engine.
+    let read_gaps = std::sync::Mutex::new(Vec::<ReadGap>::new());
     let mut hits: Vec<AsmHit> = units
         .par_iter()
         .flat_map_iter(|&(read_base, accept_start, accept_end, read_len)| {
@@ -197,6 +209,15 @@ fn assembly_scan_with<S: MemorySource + Sync>(
                 return Vec::new().into_iter();
             }
             let buf = read_range(source, read_base, read_len);
+            if buf.len() < read_len
+                && let Ok(mut gaps) = read_gaps.lock()
+            {
+                gaps.push(ReadGap {
+                    base: read_base,
+                    requested: read_len,
+                    got: buf.len(),
+                });
+            }
             scan_unit(
                 &buf,
                 read_base as u64,
@@ -213,7 +234,11 @@ fn assembly_scan_with<S: MemorySource + Sync>(
         .collect();
     hits.sort_by_key(|h| h.address);
     hits.dedup_by_key(|h| h.address);
-    hits
+    let mut read_gaps = read_gaps
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    read_gaps.sort_by_key(|g| g.base);
+    AsmScanResult { hits, read_gaps }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -330,7 +355,7 @@ mod tests {
         let regions = [Region { base, size: 11 }];
         let cancel = AtomicBool::new(false);
 
-        let hits = assembly_scan(&src, base, &regions, Arch::X64, &pat("push"), &cancel);
+        let hits = assembly_scan(&src, base, &regions, Arch::X64, &pat("push"), &cancel).hits;
         assert_eq!(
             hits.iter().map(|h| h.address).collect::<Vec<_>>(),
             vec![0x1000, 0x1001]
@@ -344,15 +369,22 @@ mod tests {
             Arch::X64,
             &pat("push rcx\ncall"),
             &cancel,
-        );
+        )
+        .hits;
         assert_eq!(
             seq.iter().map(|h| h.address).collect::<Vec<_>>(),
             vec![0x1001]
         );
 
-        assert!(assembly_scan(&src, base, &regions, Arch::X64, &pat("^push$"), &cancel).is_empty());
         assert!(
-            assembly_scan(&src, base, &regions, Arch::X64, &pat("syscall"), &cancel).is_empty()
+            assembly_scan(&src, base, &regions, Arch::X64, &pat("^push$"), &cancel)
+                .hits
+                .is_empty()
+        );
+        assert!(
+            assembly_scan(&src, base, &regions, Arch::X64, &pat("syscall"), &cancel)
+                .hits
+                .is_empty()
         );
     }
 
@@ -371,7 +403,8 @@ mod tests {
             Arch::X64,
             &pat("mov rdi,rcx"),
             &cancel,
-        );
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].lines, vec!["mov rdi,rcx".to_string()]);
     }
@@ -399,7 +432,8 @@ mod tests {
             &cancel,
             4,
             64,
-        );
+        )
+        .hits;
         assert_eq!(hits.len(), 20);
         let mut addrs: Vec<u64> = hits.iter().map(|h| h.address).collect();
         addrs.dedup();
@@ -414,7 +448,11 @@ mod tests {
             size: 100,
         }];
         let cancel = AtomicBool::new(true);
-        assert!(assembly_scan(&src, 0x3000, &regions, Arch::X64, &pat("push"), &cancel).is_empty());
+        assert!(
+            assembly_scan(&src, 0x3000, &regions, Arch::X64, &pat("push"), &cancel)
+                .hits
+                .is_empty()
+        );
     }
 
     #[test]
@@ -428,10 +466,55 @@ mod tests {
             size: blob.len(),
         }];
         let cancel = AtomicBool::new(false);
-        let hits = assembly_scan(&src, base, &regions, Arch::X64, &pat("push rcx"), &cancel);
+        let hits = assembly_scan(&src, base, &regions, Arch::X64, &pat("push rcx"), &cancel).hits;
         assert_eq!(
             hits.iter().map(|h| h.address).collect::<Vec<_>>(),
             vec![0x1002]
         );
+    }
+
+    // A source that can only read the first `cap` bytes, so a window past it reads short. Mirrors the
+    // byte-scan engine's gap test: models a decommitted or guarded tail in a live module.
+    struct CappedSource {
+        base: usize,
+        data: Vec<u8>,
+        cap: usize,
+    }
+
+    impl MemorySource for CappedSource {
+        fn read_into(&self, address: usize, buf: &mut [u8]) -> std::io::Result<usize> {
+            if address < self.base {
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+            }
+            let off = address - self.base;
+            if off >= self.cap {
+                return Ok(0);
+            }
+            let avail = (self.cap - off).min(self.data.len().saturating_sub(off));
+            let n = buf.len().min(avail);
+            buf[..n].copy_from_slice(&self.data[off..off + n]);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn records_a_read_gap_over_an_unreadable_tail() {
+        let base = 0x4000usize;
+        let mut data = vec![0x90u8; 0x400];
+        data[0] = 0x50; // push rax in the readable head
+        let src = CappedSource {
+            base,
+            data,
+            cap: 0x200,
+        };
+        let regions = [Region { base, size: 0x400 }];
+        let cancel = AtomicBool::new(false);
+        let result = assembly_scan(&src, base, &regions, Arch::X64, &pat("push rax"), &cancel);
+        assert!(
+            !result.read_gaps.is_empty(),
+            "a short read must be recorded as a gap"
+        );
+        // the instruction in the readable head is still found despite the unreadable tail
+        assert!(result.hits.iter().any(|h| h.address == base as u64));
     }
 }
