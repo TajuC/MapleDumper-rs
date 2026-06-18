@@ -51,6 +51,10 @@ scriptable command-line tool. Both are built on the same engine crate.
 - Suffix-driven resolvers: RIP-relative and `rel32` pointers, nested calls, struct displacements,
   and packet-header immediates, arch-aware for x64 and x86.
 - Output as deterministic, sorted, de-duplicated module RVAs, immune to ASLR.
+- Unpack pipeline. Turn a Themida-packed client into a clean, analyzable binary: a native static
+  clean phase (repoint the exception directory to the real `.pdata`, rebuild the IAT directory, strip
+  the dead packer sections) plus verification gates, with the inherently dynamic dump step
+  orchestrated through unlicense. The clean phase is deterministic and code bytes are never touched.
 
 **Desktop workspace (`maple-app`)**
 
@@ -68,6 +72,9 @@ scriptable command-line tool. Both are built on the same engine crate.
 - Assembly scan. Find code by instruction instead of bytes: type lines of assembly with wildcards
   (`*` zero-or-more, `?` one character, `^` line start, `$` line end), and it disassembles the target
   and lists every address where those instructions appear back to back.
+- Unpack panel. Point it at a packed client (or an existing dump) and produce a cleaned binary with
+  live dump, clean, and verify progress and a results card: OEP, import count, `.pdata` entries,
+  virtualization sample, `.text` identity, and output size.
 - Built-in pattern manager (add, edit, delete, notes) and a syntax-highlighted editor.
 - Privacy mask. One click hides every signature, name, address, category, and note for screenshots.
   Pick blur, or a showcase mode that swaps in realistic fake values instead. Visual only; the real
@@ -78,12 +85,14 @@ scriptable command-line tool. Both are built on the same engine crate.
 
 **Command line (`maple-cli`)**
 
-- A subcommand per task (`scan`, `lint`, `diff`, `asm`, `mksig`, `profile`), suitable for scripting
-  and CI. Run `mapledumper help <command>` for the flags of any one.
+- A subcommand per task (`scan`, `lint`, `diff`, `asm`, `mksig`, `profile`, `unpack`), suitable for
+  scripting and CI. Run `mapledumper help <command>` for the flags of any one.
 - Offline helpers that need no target: `lint` flags weak signatures, `diff` reports which offsets
   moved between two dumps, and `profile` breaks a live scan into read/scan/resolve timing.
 - `asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
 - `mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
+- `unpack` turns a packed client into a clean binary: clean an existing dump (`--clean-only`, no
+  external tool) or run the full packed-to-min flow (dump via unlicense, then clean and verify).
 - A `maple.conf` in the working directory (or `--config <file>`) supplies defaults for the process,
   module, arch, pattern file, and output directory; explicit flags always win.
 
@@ -206,6 +215,7 @@ mapledumper <command> [options]      ( --config <file> is accepted on any comman
   asm       scan a live process by assembly instructions
   mksig     build a cross-version signature from client files on disk
   profile   measure the read/scan/resolve split against a live target
+  unpack    turn a packed client into a clean binary (clean a dump, or dump then clean)
 
 scan / profile share the attach and pattern options:
   --process <name>   attach by process name (e.g. MapleStory.exe)
@@ -234,6 +244,13 @@ mksig:
   --negative <exe> / --negative-dir <dir>   unrelated modules the result must not match
   --holdout          leave-one-out: regenerate per subset and confirm each held-out build matches
   --json / --json-out <path>   emit the full report as JSON
+unpack takes a positional <input> plus:
+  --out <path>       output path for the cleaned binary (required)
+  --clean-only       input is an existing dump; skip the dynamic dump step
+  --packed <exe>     packed original, for the strong .text-identity proof in --clean-only
+  --unlicense <exe>  path to unlicense.exe (default: beside the input, then PATH)
+  --keep-bound-iat / --keep-timestamp   keep the dump host's bound IAT / the timestamp
+  --json             emit the full report as JSON
 
 mapledumper help <command>   prints the full options for one command.
 ```
@@ -252,6 +269,11 @@ mapledumper asm --process MapleStory.exe find.asm
 
 # generate a cross-version signature from several client builds
 mapledumper mksig --client-dir ./clients --sig "48 8B ?? ?? ?? ?? ?? 48" --json
+
+# unpack a packed client to a clean binary (dump via unlicense, then clean and verify)
+mapledumper unpack 269.1.exe -o unpacked_269.1.min.exe
+# or clean an existing dump with no external tool
+mapledumper unpack --clean-only unpacked_269.1.exe -o clean.exe --packed 269.1.exe
 
 # keep the common settings in maple.conf and just run the verb
 printf 'process = MapleStory.exe\narch = 64\nout = dump\n' > maple.conf
@@ -272,6 +294,10 @@ treating every nonzero result the same:
 | `4`  | a scan ran but at least one pattern matched in several places (ambiguous) |
 | `5`  | invalid input: bad flags, bad config, bad/empty patterns, or the target could not be located |
 | `6`  | access denied opening the target process (try running as administrator) |
+
+`unpack` reuses these codes: `0` for a verified clean binary, `2` with advisory warnings only, `3`
+when verification fails and no binary is written, `5` for invalid input or a missing `unlicense`, and
+`6` for a denied read or write.
 
 A scan with `--arch` set to the wrong bitness for the target module fails fast with an architecture
 mismatch (exit `5`) rather than silently reporting everything "not found", and a region that reads
