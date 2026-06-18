@@ -15,6 +15,7 @@ use maple_core::{
     ResolveTrace, ScanResult, Target, arch_mismatch, assembly_scan, diff, lint, parse_asm_patterns,
     parse_dump, parse_stamp, profile,
 };
+use maple_core::{CleanOptions, Progress, Stage, UnpackReport, clean_to_path, unpack_to_path};
 use maple_core::{
     FileImage, HoldoutResult, ImageInput, NegativeEvidence, NegativeHit, SigCandidate, SigOptions,
     SigReport, TargetSpec, apply_negatives, generate, holdout_validate, make_string_anchor,
@@ -147,6 +148,8 @@ enum Command {
     Mksig(MksigArgs),
     /// Measure the read/scan/resolve split against a live target
     Profile(ProfileArgs),
+    /// Unpack a Themida-packed client to a clean binary, or clean an existing dump
+    Unpack(UnpackArgs),
 }
 
 #[derive(Args)]
@@ -222,6 +225,34 @@ struct DiffArgs {
     /// The newer dump file
     #[arg(value_name = "NEW")]
     new: PathBuf,
+}
+
+#[derive(Args)]
+struct UnpackArgs {
+    /// Input binary: a packed client (full flow) or a raw dump (with --clean-only)
+    #[arg(value_name = "INPUT")]
+    input: PathBuf,
+    /// Output path for the cleaned binary
+    #[arg(short = 'o', long, value_name = "PATH")]
+    out: PathBuf,
+    /// Skip the dynamic dump step; INPUT is already an unlicense dump
+    #[arg(long)]
+    clean_only: bool,
+    /// The packed original, for the strong .text-identity proof in --clean-only mode
+    #[arg(long, value_name = "EXE")]
+    packed: Option<PathBuf>,
+    /// Path to unlicense.exe (default: beside the packed exe, then PATH)
+    #[arg(long, value_name = "EXE")]
+    unlicense: Option<PathBuf>,
+    /// Keep the dump host's bound import addresses instead of unbinding the IAT
+    #[arg(long)]
+    keep_bound_iat: bool,
+    /// Keep the COFF TimeDateStamp instead of zeroing it
+    #[arg(long)]
+    keep_timestamp: bool,
+    /// Print the full report as JSON on stdout
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -930,6 +961,158 @@ fn cmd_profile(a: ProfileArgs, cfg: &Config) -> Result<ExitKind, CliError> {
     Ok(ExitKind::Success)
 }
 
+fn stage_label(s: Stage) -> &'static str {
+    match s {
+        Stage::Locate => "locating dumper",
+        Stage::Dump => "dumping (unlicense)",
+        Stage::Clean => "cleaning",
+        Stage::Verify => "verifying",
+        Stage::Done => "done",
+    }
+}
+
+/// Map a pipeline I/O failure to an exit code: a missing file or tool is input the user can
+/// fix, a permission failure is access-denied, and a dump that ran but produced nothing is
+/// unresolved.
+fn unpack_err(e: std::io::Error) -> CliError {
+    let kind = match e.kind() {
+        std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::InvalidData
+        | std::io::ErrorKind::InvalidInput => ExitKind::InvalidInput,
+        std::io::ErrorKind::PermissionDenied => ExitKind::AccessDenied,
+        _ => ExitKind::Unresolved,
+    };
+    CliError::new(kind, format!("unpack failed: {e}"))
+}
+
+fn mark(ok: bool) -> &'static str {
+    if ok { "PASS" } else { "FAIL" }
+}
+
+fn print_unpack_report(r: &UnpackReport) {
+    let v = &r.verify;
+    println!("input    {}", r.input);
+    if let Some(d) = &r.dump_path {
+        println!("dump     {d}");
+    }
+    match &r.output {
+        Some(o) => println!("output   {o}"),
+        None => println!("output   (not written: gates failed)"),
+    }
+    println!("size     {} bytes", v.output_size);
+    println!();
+    println!(
+        "  OEP            rva {:#x}  {}",
+        v.oep_rva,
+        if v.oep_is_msvc {
+            "MSVC prologue"
+        } else {
+            "non-standard prologue"
+        }
+    );
+    for line in &v.oep_disasm {
+        println!("                 {line}");
+    }
+    println!(
+        "  imports        {} DLLs / {} functions  {}",
+        v.import_dlls,
+        v.import_functions,
+        mark(v.imports_ok)
+    );
+    println!(
+        "  .pdata         {} entries  valid {:.2}%  ascending {:.2}%  {}",
+        v.pdata_entries,
+        v.pdata_valid_pct,
+        v.pdata_ascending_pct,
+        mark(v.pdata_ok)
+    );
+    println!(
+        "  virtualization {:.4}% of {} sampled starts",
+        v.virtualization_pct, v.virtualization_sampled
+    );
+    match v.text_identity {
+        Some(true) => println!(
+            "  .text identity PASS (vs {})",
+            v.text_ref.as_deref().unwrap_or("reference")
+        ),
+        Some(false) => println!(
+            "  .text identity FAIL (vs {})",
+            v.text_ref.as_deref().unwrap_or("reference")
+        ),
+        None => println!("  .text identity n/a (no reference supplied)"),
+    }
+    if let Some(sha) = &v.text_sha256 {
+        println!("  .text sha256   {sha}");
+    }
+    for w in &v.warnings {
+        eprintln!("[!] {w}");
+    }
+    println!();
+    println!(
+        "==> {}",
+        if r.gates_pass {
+            "GATES PASS"
+        } else {
+            "GATES FAILED"
+        }
+    );
+}
+
+fn cmd_unpack(a: UnpackArgs) -> Result<ExitKind, CliError> {
+    if !a.input.is_file() {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            format!("input not found: {}", a.input.display()),
+        ));
+    }
+    if let Some(p) = &a.packed
+        && !p.is_file()
+    {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            format!("packed reference not found: {}", p.display()),
+        ));
+    }
+    let opts = CleanOptions {
+        unbind_iat: !a.keep_bound_iat,
+        zero_timestamp: !a.keep_timestamp,
+    };
+    let mut on = |p: Progress| match p {
+        Progress::Stage(s) => eprintln!("[unpack] {}", stage_label(s)),
+        Progress::Line(l) => eprintln!("    {l}"),
+    };
+
+    let report = if a.clean_only {
+        clean_to_path(&a.input, &a.out, &opts, a.packed.as_deref(), &mut on)
+    } else {
+        if a.packed.is_some() {
+            eprintln!(
+                "[!] --packed is only used with --clean-only; the input is the packed original here"
+            );
+        }
+        unpack_to_path(&a.input, &a.out, &opts, a.unlicense.as_deref(), &mut on)
+    }
+    .map_err(unpack_err)?;
+
+    if a.json {
+        println!("{}", to_json_pretty(&report)?);
+    } else {
+        print_unpack_report(&report);
+    }
+
+    if !report.gates_pass {
+        return Err(CliError::new(
+            ExitKind::Unresolved,
+            "verification gates failed; no binary was written",
+        ));
+    }
+    Ok(if report.verify.warnings.is_empty() {
+        ExitKind::Success
+    } else {
+        ExitKind::SuccessWithWarnings
+    })
+}
+
 fn run() -> Result<ExitKind, CliError> {
     let cli = Cli::parse();
     let cfg = resolve_config(cli.config.as_deref())?;
@@ -940,6 +1123,7 @@ fn run() -> Result<ExitKind, CliError> {
         Command::Asm(a) => cmd_asm(a, &cfg),
         Command::Mksig(a) => cmd_mksig(a),
         Command::Profile(a) => cmd_profile(a, &cfg),
+        Command::Unpack(a) => cmd_unpack(a),
     }
 }
 
