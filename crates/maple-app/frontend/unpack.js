@@ -56,10 +56,10 @@ function unpackUpdateValidity() {
 
 function unpackSync() {
   unpackSetMode(unpackState.mode);
-  const ip = $("unpack-input");
-  if (ip) ip.value = unpackState.input;
-  const op = $("unpack-output");
-  if (op) op.value = unpackState.output;
+  for (const f of ["input", "output", "packed", "unlicense"]) {
+    const el = $("unpack-" + f);
+    if (el) el.value = unpackState[f];
+  }
   unpackUpdateValidity();
 }
 
@@ -165,7 +165,7 @@ function uGateRow(label, valueHtml, mark) {
 function renderUnpackError(msg) {
   const host = $("unpack-results");
   if (!host) return;
-  host.innerHTML = `<div class="u-banner bad">${esc(t("unpack.gatesFail"))}</div><div class="u-error">${esc(msg)}</div>`;
+  host.innerHTML = `<div class="u-banner bad">${esc(t("unpack.error"))}</div><div class="u-error">${esc(msg)}</div>`;
 }
 
 function renderUnpackReport(r) {
