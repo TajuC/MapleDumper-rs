@@ -22,6 +22,7 @@ pub mod resolver;
 pub mod scanner;
 pub mod sigmaker;
 pub mod stamp;
+pub mod unpack;
 
 #[cfg(windows)]
 pub mod process;
@@ -54,6 +55,10 @@ pub use sigmaker::{
     negative_corpus_hits, resolve_string_anchor, xref_count,
 };
 pub use stamp::{BuildStamp, parse_stamp, pe_machine};
+pub use unpack::{
+    CleanOptions, CleanSummary, Cleaned, Progress, Stage, UnpackReport, VerifyReport, clean_bytes,
+    clean_to_path, locate_unlicense, unpack_to_path, verify_bytes,
+};
 
 #[cfg(windows)]
 pub use process::{AttachOptions, Locator, Target};
