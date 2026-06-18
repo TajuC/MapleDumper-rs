@@ -138,6 +138,19 @@ const driver = `
   globalThis.__wsBody = document.getElementById("w-body").innerHTML;
   globalThis.__cap = capRows(new Array(900).fill(0));
   globalThis.__more = moreRow(100, 4);
+  // Unpack report card: the verification gates must render (a silent drop here once shipped a broken UI).
+  const fakeUnpack = {
+    input: "C:/x/269.1.exe", output: "C:/x/unpacked_269.1.min.exe", dump_path: "C:/x/unpacked_269.1.exe", gates_pass: true,
+    clean: { exception_repointed: true, cert_cleared: true, iat_dir: [0x7251000, 0x13c8], unbound_thunks: 591, deexec: [".themida", ".boot", ".SCY"], renamed: [".themida", ".boot"], timestamp_zeroed: true, stripped_bytes: 35555840, size_before: 193601536, size_after: 150477312 },
+    verify: { oep_rva: 0x6a2c61c, oep_bytes: "48895c2420", oep_is_msvc: true, oep_disasm: ["0x146a2c61c: mov [rsp+20h],rbx", "0x146a2c621: push rbp"], import_dlls: 39, import_functions: 591, imports_ok: true, pdata_entries: 361813, pdata_valid_pct: 99.99, pdata_ascending_pct: 100.0, pdata_ok: true, virtualization_pct: 0.0, virtualization_sampled: 2010, text_identity: true, text_ref: "packed original", text_sha256: "481e121e10f10028b8e180b9c6d17c54", output_size: 150477312, gates_pass: true, warnings: [] },
+  };
+  unpackState.report = fakeUnpack;
+  renderUnpackReport(fakeUnpack);
+  globalThis.__unpackHtml = document.getElementById("unpack-results").innerHTML;
+  const failUnpack = JSON.parse(JSON.stringify(fakeUnpack));
+  failUnpack.gates_pass = false; failUnpack.output = null; failUnpack.verify.text_identity = false; failUnpack.verify.gates_pass = false;
+  renderUnpackReport(failUnpack);
+  globalThis.__unpackFailHtml = document.getElementById("unpack-results").innerHTML;
 } catch (e) { globalThis.__renderError = String((e && e.stack) || e); }
 `;
 
@@ -149,7 +162,7 @@ const sigCode = fs.readFileSync(path.join(__dirname, "frontend", "sigmaker.js"),
 const histCode = fs.readFileSync(path.join(__dirname, "frontend", "history.js"), "utf8");
 const readFront = (f) => fs.readFileSync(path.join(__dirname, "frontend", f), "utf8");
 const code =
-  i18nCode + iconsCode + maskingCode + inspectorCode + sigCode + histCode +
+  i18nCode + iconsCode + maskingCode + inspectorCode + sigCode + readFront("unpack.js") + histCode +
   readFront("asmscan.js") + readFront("workspace.js") + readFront("patterns.js") + readFront("editor.js") +
   readFront("app.js") + driver;
 try {
@@ -255,6 +268,20 @@ for (const id of ["win-min", "win-max", "win-close", "mask-toggle", "w-source-bt
 const cap = sandbox.__cap;
 check(cap && cap.items.length === 800 && cap.hidden === 100, "history views must cap rendered rows (DESK-2)");
 check((sandbox.__more || "").includes("more"), "a capped history view must render a more-rows notice (DESK-2)");
+
+// Unpack report card: the verification report must surface, never silently drop (mirrors the engine-output regression).
+const up = sandbox.__unpackHtml || "";
+check(up.includes("Gates pass"), "unpack report must show the gates-pass banner");
+check(up.includes("0x6a2c61c"), "unpack report must show the OEP rva");
+check(up.includes("39 DLLs / 591 functions"), "unpack report must show the import count");
+check(up.includes("361813"), "unpack report must show the .pdata entry count");
+check(up.includes(".text identity") && up.includes("packed original"), "unpack report must show the .text-identity reference");
+check(up.includes("PASS"), "unpack report must show a PASS chip on a passing gate");
+check(up.includes("OEP disassembly") && up.includes("mov [rsp+20h],rbx"), "unpack report must show the OEP disassembly");
+check(up.includes("IAT directory set"), "unpack report must show the clean summary");
+const upf = sandbox.__unpackFailHtml || "";
+check(upf.includes("Gates failed") && upf.includes("No binary written"), "a failed unpack must explain itself and not claim an output");
+check(upf.includes("FAIL"), "a failed gate must show a FAIL chip");
 
 if (fails.length) {
   console.error("FRONTEND RENDER TEST FAILED:");

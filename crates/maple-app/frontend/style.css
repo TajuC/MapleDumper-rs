@@ -2771,3 +2771,187 @@ button.btn-ico:hover {
 .insp-distext {
   color: var(--t1);
 }
+
+/* Unpack panel */
+.unpack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.unpack-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.unpack-label {
+  font-size: 12px;
+}
+.unpack-pick {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.unpack-path {
+  flex: 1;
+  min-width: 0;
+}
+.unpack-hint {
+  font-size: 12px;
+}
+.unpack-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--t2);
+  cursor: pointer;
+}
+.chk input {
+  accent-color: var(--blue);
+}
+.unpack-progress {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--inset);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.unpack-stages {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ustage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--t3);
+  font-size: 12px;
+  background: var(--surface);
+}
+.ustage .ico svg {
+  width: 14px;
+  height: 14px;
+}
+.ustage.active {
+  color: var(--t1);
+  border-color: var(--ring);
+  background: var(--blue-soft);
+}
+.ustage.done {
+  color: var(--green);
+  border-color: rgba(52, 211, 153, 0.4);
+}
+.unpack-log {
+  margin: 10px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--t2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.u-banner {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.u-banner.ok {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+}
+.u-banner.bad {
+  color: var(--red);
+  background: rgba(251, 113, 133, 0.12);
+  border: 1px solid rgba(251, 113, 133, 0.35);
+}
+.u-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  word-break: break-all;
+}
+.u-meta .mono {
+  color: var(--t1);
+}
+.u-warn {
+  color: var(--amber);
+}
+.u-gates {
+  width: 100%;
+}
+.u-gk {
+  color: var(--t2);
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 18px;
+}
+.u-gv {
+  color: var(--t1);
+}
+.u-gm {
+  text-align: right;
+  width: 1%;
+}
+.u-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.u-chip.pass {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.12);
+}
+.u-chip.fail {
+  color: var(--red);
+  background: rgba(251, 113, 133, 0.12);
+}
+.u-chip.na {
+  color: var(--t3);
+  background: var(--surface-2);
+}
+.u-sha {
+  font-size: 11px;
+  color: var(--t2);
+  word-break: break-all;
+}
+.u-disasm {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--inset);
+  color: var(--t1);
+  font-size: 12px;
+  overflow: auto;
+}
+.u-warns,
+.u-summary {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--t2);
+}
+.u-warns li {
+  color: var(--amber);
+}
+.u-error {
+  color: var(--red);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

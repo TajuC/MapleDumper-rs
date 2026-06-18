@@ -15,6 +15,7 @@ mod jobs;
 mod scan;
 mod sigmaker;
 mod state;
+mod unpack_cmd;
 mod util;
 
 use std::sync::{Arc, Mutex};
@@ -59,7 +60,8 @@ fn main() {
             fileio::write_text_file,
             fileio::open_pattern_file,
             fileio::save_report_file,
-            fileio::import_config_file
+            fileio::import_config_file,
+            unpack_cmd::unpack_binary
         ])
         .run(tauri::generate_context!())
         .expect("error while running MapleDumper");

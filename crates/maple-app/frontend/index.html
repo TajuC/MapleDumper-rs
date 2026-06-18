@@ -44,6 +44,7 @@
             <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span data-i18n="nav.workspace">Workspace</span></button>
             <button class="nav-item" data-view="asmscan" data-icon="search"><span class="ico"></span><span data-i18n="nav.asmscan">Assembly scan</span></button>
             <button class="nav-item" data-view="sigmaker" data-icon="layers"><span class="ico"></span><span data-i18n="nav.sigmaker">Signature maker</span></button>
+            <button class="nav-item" data-view="unpack" data-icon="cpu"><span class="ico"></span><span data-i18n="nav.unpack">Unpack</span></button>
             <button class="nav-item" data-view="patterns" data-icon="file-code"><span class="ico"></span><span data-i18n="nav.patterns">Patterns</span></button>
             <button class="nav-item" data-view="editor" data-icon="terminal"><span class="ico"></span><span data-i18n="nav.editor">Editor</span></button>
             <button class="nav-item" data-view="output" data-icon="database"><span class="ico"></span><span data-i18n="nav.output">Output</span></button>
@@ -289,6 +290,64 @@
               <div class="panel table-scroll grow" id="sig-results"><div class="insp-hint" data-i18n="sig.empty">Pick client files and a target, then Generate.</div></div>
             </section>
 
+            <section class="view" id="view-unpack">
+              <div class="simple-head">
+                <div><h2 data-i18n="unpack.title">Unpack</h2><p class="muted" data-i18n="unpack.sub">Turn a packed client into a clean, analyzable binary</p></div>
+                <div class="head-actions">
+                  <button id="unpack-run" class="btn btn-primary" disabled><span class="ico" data-icon="play"></span><span data-i18n="unpack.run">Unpack</span></button>
+                </div>
+              </div>
+              <div class="unpack-form">
+                <div id="unpack-mode-tabs" class="tabs">
+                  <button class="tab active" data-umode="full" data-i18n="unpack.modeFull">Packed to clean</button>
+                  <button class="tab" data-umode="clean" data-i18n="unpack.modeClean">Clean a dump</button>
+                </div>
+                <div class="unpack-row">
+                  <span class="unpack-label muted" data-i18n="unpack.input">Input</span>
+                  <div class="unpack-pick">
+                    <input id="unpack-input" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.inputPh" placeholder="Choose a binary…" />
+                    <button id="unpack-pick-input" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                  </div>
+                  <span id="unpack-input-hint" class="muted unpack-hint" data-i18n="unpack.inputHintFull">A Themida-packed client (.exe). It will be dumped with unlicense, then cleaned.</span>
+                </div>
+                <div class="unpack-row">
+                  <span class="unpack-label muted" data-i18n="unpack.output">Output</span>
+                  <div class="unpack-pick">
+                    <input id="unpack-output" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.outputPh" placeholder="Choose where to save…" />
+                    <button id="unpack-pick-output" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="unpack.saveAs">Save as</span></button>
+                  </div>
+                </div>
+                <div id="unpack-packed-row" class="unpack-row" hidden>
+                  <span class="unpack-label muted" data-i18n="unpack.packedRef">.text identity reference</span>
+                  <div class="unpack-pick">
+                    <input id="unpack-packed" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.packedPh" placeholder="Packed original (optional)…" />
+                    <button id="unpack-pick-packed" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                  </div>
+                  <span class="muted unpack-hint" data-i18n="unpack.packedHint">Optional: the packed original, for the strong .text-identity proof.</span>
+                </div>
+                <div class="unpack-opts">
+                  <label class="chk"><input id="unpack-unbind" type="checkbox" checked /><span data-i18n="unpack.unbind">Unbind IAT (reproducible imports)</span></label>
+                  <label class="chk"><input id="unpack-zerots" type="checkbox" checked /><span data-i18n="unpack.zerots">Zero timestamp (deterministic output)</span></label>
+                </div>
+                <div id="unpack-unlicense-row" class="unpack-row">
+                  <span class="unpack-label muted" data-i18n="unpack.unlicense">unlicense.exe (optional)</span>
+                  <div class="unpack-pick">
+                    <input id="unpack-unlicense" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.unlicensePh" placeholder="Auto-detect beside the client or on PATH…" />
+                    <button id="unpack-pick-unlicense" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                  </div>
+                </div>
+              </div>
+              <div id="unpack-progress" class="unpack-progress" hidden>
+                <div class="unpack-stages">
+                  <span class="ustage" data-stage="dump"><span class="ico" data-icon="download"></span><span data-i18n="unpack.stageDump">Dump</span></span>
+                  <span class="ustage" data-stage="clean"><span class="ico" data-icon="layers"></span><span data-i18n="unpack.stageClean">Clean</span></span>
+                  <span class="ustage" data-stage="verify"><span class="ico" data-icon="shield"></span><span data-i18n="unpack.stageVerify">Verify</span></span>
+                </div>
+                <pre id="unpack-log" class="unpack-log mono"></pre>
+              </div>
+              <div class="panel table-scroll grow" id="unpack-results"><div class="insp-hint" data-i18n="unpack.empty">Choose an input and output, then Unpack.</div></div>
+            </section>
+
             <section class="view" id="view-patterns">
               <div class="simple-head">
                 <div><h2 data-i18n="pat.title">Patterns</h2><p id="pattern-count" class="muted">0 patterns</p></div>
@@ -470,6 +529,7 @@
     <script src="masking.js"></script>
     <script src="inspector.js"></script>
     <script src="sigmaker.js"></script>
+    <script src="unpack.js"></script>
     <script src="history.js"></script>
     <script src="asmscan.js"></script>
     <script src="workspace.js"></script>

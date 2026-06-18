@@ -166,6 +166,7 @@ function showView(name) {
   if (name === "history") loadHistory();
   if (name === "asmscan") asmSyncTarget();
   if (name === "sigmaker") renderSigFiles();
+  if (name === "unpack") unpackSync();
 }
 document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
 $("open-editor").addEventListener("click", () => showView("editor"));
@@ -385,6 +386,14 @@ $("sig-pick").addEventListener("click", sigPickFiles);
 $("sig-pick-neg").addEventListener("click", sigPickNegatives);
 $("sig-gen").addEventListener("click", runSigGen);
 $("sig-stop").addEventListener("click", () => invoke("cancel_scan"));
+$("unpack-run").addEventListener("click", runUnpack);
+$("unpack-pick-input").addEventListener("click", () => unpackPick("input"));
+$("unpack-pick-output").addEventListener("click", unpackPickOutput);
+$("unpack-pick-packed").addEventListener("click", () => unpackPick("packed"));
+$("unpack-pick-unlicense").addEventListener("click", () => unpackPick("unlicense"));
+$("unpack-mode-tabs")
+  .querySelectorAll(".tab")
+  .forEach((b) => b.addEventListener("click", () => unpackSetMode(b.dataset.umode)));
 $("sig-json").addEventListener("click", () => {
   sigState.showJson = !sigState.showJson;
   renderSigResults();
@@ -652,6 +661,7 @@ function relocalize() {
   if (asmState.report) renderAsmResults(asmState.report);
   renderSigFiles();
   if (sigState.response) renderSigResults();
+  if (typeof renderUnpackReport === "function" && typeof unpackState !== "undefined" && unpackState.report) renderUnpackReport(unpackState.report);
   if (histState.groups.length) {
     renderHistory();
     renderTabs();
