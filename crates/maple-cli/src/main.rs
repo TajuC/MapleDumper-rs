@@ -1073,6 +1073,42 @@ fn cmd_unpack(a: UnpackArgs) -> Result<ExitKind, CliError> {
             format!("packed reference not found: {}", p.display()),
         ));
     }
+    // Refuse a destructive --out: the engine reads the source fully before writing, so pointing
+    // --out at the input, the packed reference, or the intermediate dump would silently destroy it.
+    let same = |x: &Path, y: &Path| match (std::fs::canonicalize(x), std::fs::canonicalize(y)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => x == y,
+    };
+    if same(&a.out, &a.input) {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            "refusing to overwrite the input with --out",
+        ));
+    }
+    if let Some(p) = &a.packed
+        && same(&a.out, p)
+    {
+        return Err(CliError::new(
+            ExitKind::InvalidInput,
+            "refusing to overwrite the packed reference with --out",
+        ));
+    }
+    if !a.clean_only
+        && let Some(name) = a.input.file_name()
+    {
+        let dir = a
+            .input
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let dump = dir.join(format!("unpacked_{}", name.to_string_lossy()));
+        if same(&a.out, &dump) {
+            return Err(CliError::new(
+                ExitKind::InvalidInput,
+                "refusing to overwrite the intermediate dump with --out",
+            ));
+        }
+    }
     let opts = CleanOptions {
         unbind_iat: !a.keep_bound_iat,
         zero_timestamp: !a.keep_timestamp,
