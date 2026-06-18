@@ -34,9 +34,9 @@ fn sec(d: &mut [u8], idx: usize, name: &[u8], layout: [u32; 4], ch: u32) {
 }
 
 /// A coherent PE32+ that exercises every clean op: a bogus exception/cert directory, an
-/// empty IAT directory, real imports, a large valid `.pdata`, and contiguous dead
-/// `.themida`/`.boot` raw to strip. `virt_stubs` function starts jump into `.themida`.
-fn build_image(virt_stubs: usize) -> Vec<u8> {
+/// empty IAT directory, real imports, a large strictly-ascending `.pdata`, and contiguous dead
+/// `.themida`/`.boot` raw to strip. With `with_stub`, function-start 0x100 jumps into `.themida`.
+fn build_image(with_stub: bool) -> Vec<u8> {
     let mut d = vec![0u8; 0x6200];
     d[0..2].copy_from_slice(b"MZ");
     w32(&mut d, 0x3C, 0x80);
@@ -115,8 +115,10 @@ fn build_image(virt_stubs: usize) -> Vec<u8> {
         0x05, 0x00, 0x00, 0x00, 0x00, 0x48, 0xbb, 0x32, 0xa2, 0xdf, 0x2d, 0x99, 0x2b, 0x00, 0x00,
     ];
     d[TEXT_OFF..TEXT_OFF + oep.len()].copy_from_slice(&oep);
-    // jmp 0x140008000 (into .themida) at rva 0x1100, the virtualization stub target
-    d[TEXT_OFF + 0x100..TEXT_OFF + 0x105].copy_from_slice(&[0xE9, 0xFB, 0x6E, 0x00, 0x00]);
+    // a virtualization stub: jmp 0x140008000 (into .themida) at rva 0x1100, i.e. function-start 0x100
+    if with_stub {
+        d[TEXT_OFF + 0x100..TEXT_OFF + 0x105].copy_from_slice(&[0xE9, 0xFB, 0x6E, 0x00, 0x00]);
+    }
 
     // imports: 6 DLLs x 10 functions
     for i in 0..6 {
@@ -137,13 +139,9 @@ fn build_image(virt_stubs: usize) -> Vec<u8> {
         d[no..no + name.len()].copy_from_slice(name.as_bytes());
     }
 
-    // .pdata: valid ascending entries, the last `virt_stubs` pointing at the jmp stub
+    // .pdata: strictly ascending, in-range function starts; index 0x100 lands on the stub rva
     for k in 0..PDATA_ENTRIES {
-        let begin = if k >= PDATA_ENTRIES - virt_stubs {
-            0x1100
-        } else {
-            0x1000
-        };
+        let begin = 0x1000 + k as u32;
         w32(&mut d, PDATA_OFF + k * 12, begin);
         w32(&mut d, PDATA_OFF + k * 12 + 4, begin + 0x10);
     }
@@ -159,7 +157,7 @@ fn dir(d: &[u8], idx: usize) -> (u32, u32) {
 
 #[test]
 fn clean_rewrites_directories_and_sections() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let cleaned = clean_bytes(&raw, &CleanOptions::oracle()).unwrap();
     let d = &cleaned.data;
 
@@ -197,7 +195,7 @@ fn clean_rewrites_directories_and_sections() {
 
 #[test]
 fn clean_preserves_text_bytes() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
     let rp = Pe::parse(&raw).unwrap();
     let cp = Pe::parse(&cleaned.data).unwrap();
@@ -212,7 +210,7 @@ fn clean_preserves_text_bytes() {
 
 #[test]
 fn production_opts_unbind_and_zero_timestamp() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
     let d = &cleaned.data;
     assert_eq!(get_u32(d, COFF + 4), Some(0), "timestamp zeroed");
@@ -229,7 +227,7 @@ fn production_opts_unbind_and_zero_timestamp() {
 
 #[test]
 fn verify_passes_on_good_image() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
     let report = verify_bytes(&cleaned.data, Some((&raw, "input dump"))).unwrap();
     assert!(report.gates_pass, "gates should pass: {report:?}");
@@ -251,7 +249,7 @@ fn verify_passes_on_good_image() {
 
 #[test]
 fn verify_flags_virtualization() {
-    let raw = build_image(140);
+    let raw = build_image(true);
     let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
     let report = verify_bytes(&cleaned.data, Some((&raw, "input dump"))).unwrap();
     assert!(
@@ -266,7 +264,7 @@ fn verify_flags_virtualization() {
 
 #[test]
 fn verify_fails_on_gutted_imports() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let mut cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap().data;
     // wipe the import descriptors
     for i in 0..7 {
@@ -281,7 +279,7 @@ fn verify_fails_on_gutted_imports() {
 
 #[test]
 fn verify_fails_on_text_mismatch() {
-    let raw = build_image(0);
+    let raw = build_image(false);
     let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
     let mut reference = raw.clone();
     reference[TEXT_OFF] ^= 0xFF; // corrupt the reference .text
@@ -302,7 +300,7 @@ fn clean_to_path_writes_only_on_pass() {
     std::fs::create_dir_all(&dir).unwrap();
     let raw_path = dir.join("raw.bin");
     let out_path = dir.join("clean.bin");
-    std::fs::write(&raw_path, build_image(0)).unwrap();
+    std::fs::write(&raw_path, build_image(false)).unwrap();
 
     let mut stages = Vec::new();
     let report = clean_to_path(
@@ -323,6 +321,83 @@ fn clean_to_path_writes_only_on_pass() {
         stages.contains(&Stage::Clean)
             && stages.contains(&Stage::Verify)
             && stages.contains(&Stage::Done)
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn compute_iat_skips_zero_firstthunk() {
+    let mut raw = build_image(false);
+    // a single descriptor with FirstThunk == 0 must not collapse the IAT extent to 0
+    w32(&mut raw, RDATA_OFF + 5 * 20 + 16, 0);
+    let cleaned = clean_bytes(&raw, &CleanOptions::oracle()).unwrap();
+    assert_eq!(cleaned.summary.iat_dir, Some((0x20E8, 0x318)));
+}
+
+#[test]
+fn pdata_duplicate_begin_is_not_ascending() {
+    let raw = build_image(false);
+    let clean_ok = clean_bytes(&raw, &CleanOptions::default()).unwrap();
+    let strict = verify_bytes(&clean_ok.data, None).unwrap();
+    assert!(
+        (strict.pdata_ascending_pct - 100.0).abs() < 1e-9,
+        "strictly ascending starts"
+    );
+
+    // a duplicate consecutive BeginAddress must count as non-ascending, not ascending
+    let mut dup = build_image(false);
+    let prev = get_u32(&dup, PDATA_OFF + 4 * 12).unwrap();
+    w32(&mut dup, PDATA_OFF + 5 * 12, prev);
+    let dup_clean = clean_bytes(&dup, &CleanOptions::default()).unwrap();
+    let dup_report = verify_bytes(&dup_clean.data, None).unwrap();
+    assert!(
+        dup_report.pdata_ascending_pct < 100.0,
+        "duplicate begin must be flagged"
+    );
+}
+
+#[test]
+fn pdata_gate_fails_in_isolation() {
+    let mut raw = build_image(false);
+    // push every function start out of the .text range: pdata invalid, imports untouched
+    for k in 0..PDATA_ENTRIES {
+        w32(&mut raw, PDATA_OFF + k * 12, 0x9999);
+        w32(&mut raw, PDATA_OFF + k * 12 + 4, 0x99A9);
+    }
+    let cleaned = clean_bytes(&raw, &CleanOptions::default()).unwrap();
+    let report = verify_bytes(&cleaned.data, Some((&raw, "input dump"))).unwrap();
+    assert!(report.imports_ok, "imports gate still passes");
+    assert!(!report.pdata_ok, "pdata gate fails in isolation");
+    assert!(!report.gates_pass);
+}
+
+#[test]
+fn gate_failure_writes_no_output() {
+    let dir = std::env::temp_dir().join(format!("mapledumper_nowrite_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let raw_path = dir.join("raw.bin");
+    let ref_path = dir.join("ref.bin");
+    let out_path = dir.join("out.bin");
+    std::fs::write(&raw_path, build_image(false)).unwrap();
+    let mut reference = build_image(false);
+    reference[TEXT_OFF] ^= 0xFF; // reference .text differs -> identity FAIL
+    std::fs::write(&ref_path, &reference).unwrap();
+
+    let report = clean_to_path(
+        &raw_path,
+        &out_path,
+        &CleanOptions::default(),
+        Some(&ref_path),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(report.verify.text_identity, Some(false));
+    assert!(!report.gates_pass);
+    assert!(report.output.is_none());
+    assert!(
+        !out_path.is_file(),
+        "no binary may be written when a gate fails"
     );
 
     std::fs::remove_dir_all(&dir).ok();

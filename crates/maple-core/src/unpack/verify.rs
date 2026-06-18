@@ -74,18 +74,28 @@ pub fn verify_bytes(
 
     let cleaned_text = section_raw(cleaned, &pe, ".text");
     let text_sha256 = cleaned_text.map(sha256::hex);
+    let mut warnings = Vec::new();
     let (text_identity, text_ref) = match reference {
         Some((ref_bytes, label)) => {
-            let id = match (cleaned_text, Pe::parse(ref_bytes).ok()) {
-                (Some(ct), Some(rpe)) => Some(section_raw(ref_bytes, &rpe, ".text") == Some(ct)),
-                _ => Some(false),
-            };
-            (id, Some(label.to_string()))
+            let ref_pe = Pe::parse(ref_bytes).ok();
+            let ref_text = ref_pe
+                .as_ref()
+                .and_then(|rpe| section_raw(ref_bytes, rpe, ".text"));
+            match (cleaned_text, ref_text) {
+                (Some(ct), Some(rt)) => (Some(rt == ct), Some(label.to_string())),
+                // An unreadable reference is not a code mismatch; skip the check and say so
+                // rather than reporting a misleading FAIL.
+                _ => {
+                    warnings.push(format!(
+                        "could not read .text from the {label} reference; skipped the identity check"
+                    ));
+                    (None, Some(label.to_string()))
+                }
+            }
         }
         None => (None, None),
     };
 
-    let mut warnings = Vec::new();
     if !oep_is_msvc {
         warnings.push(format!(
             "OEP prologue at rva {:#x} is not the expected MSVC pattern",
@@ -94,7 +104,7 @@ pub fn verify_bytes(
     }
     if virtualization_pct > 1.0 {
         warnings.push(format!(
-            "virtualization sample {virtualization_pct:.2}% over {virt_sampled} starts suggests a VM-protected build"
+            "a virtualization sample of {virtualization_pct:.2}% across {virt_sampled} function starts suggests a VM-protected build"
         ));
     }
 
@@ -186,7 +196,7 @@ fn check_pdata(data: &[u8], pe: &Pe) -> (u32, f64, f64) {
         if begin >= tlo && (begin as u64) < thi && end > begin {
             valid += 1;
         }
-        if k > 0 && begin >= prev {
+        if k > 0 && begin > prev {
             ascending += 1;
         }
         prev = begin;
@@ -221,7 +231,7 @@ fn virtualization_sample(data: &[u8], pe: &Pe) -> (u32, u32) {
         return (0, 0);
     }
     let bitness = if pe.is64 { 64u32 } else { 32 };
-    let step = (n / VIRT_SAMPLE_CAP).max(1);
+    let step = n.div_ceil(VIRT_SAMPLE_CAP).max(1);
     let (mut sampled, mut flagged) = (0u32, 0u32);
     let mut k = 0usize;
     while k < n {

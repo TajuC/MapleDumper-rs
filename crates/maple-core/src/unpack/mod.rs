@@ -156,8 +156,9 @@ impl Pe {
             if s.rs == 0 {
                 continue;
             }
-            let span = s.vs.max(s.rs) as u64;
-            if rva >= s.va && (rva as u64) < s.va as u64 + span {
+            // Only the raw-backed span maps to a file offset; an RVA in a section's
+            // virtual-only tail (past SizeOfRawData) has no bytes on disk.
+            if rva >= s.va && (rva as u64) < s.va as u64 + s.rs as u64 {
                 return Some(s.ro as usize + (rva - s.va) as usize);
             }
         }
@@ -345,7 +346,11 @@ fn compute_iat(data: &[u8], pe: &Pe) -> io::Result<(u32, u32)> {
                 }
             }
         }
-        fts.push((ft, (cnt + 1) * ptr as u64));
+        // Only descriptors with a real FirstThunk define the IAT extent; a zero ft has no
+        // thunk array on disk, so including it would collapse the min to 0 and drop the rewrite.
+        if ft != 0 {
+            fts.push((ft, (cnt + 1) * ptr as u64));
+        }
         idx += 1;
     }
     if fts.is_empty() {
@@ -389,13 +394,10 @@ fn unbind_iat(data: &mut [u8], pe: &Pe) -> io::Result<u32> {
                     get_u32(data, so).map(u64::from)
                 };
                 let Some(v) = v else { break };
-                let wrote = if pe.is64 {
-                    put_u64(data, dofs, v)
+                if pe.is64 {
+                    put_u64(data, dofs, v)?;
                 } else {
-                    put_u32(data, dofs, v as u32)
-                };
-                if wrote.is_err() {
-                    break;
+                    put_u32(data, dofs, v as u32)?;
                 }
                 touched += 1;
                 if v == 0 {

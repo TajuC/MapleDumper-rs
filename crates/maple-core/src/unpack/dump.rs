@@ -5,10 +5,24 @@ use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use super::{Progress, Stage};
 
 const UL_NAMES: [&str; 2] = ["unlicense.exe", "unlicense"];
+const DEFAULT_TIMEOUT_SECS: u64 = 600;
+
+/// Backstop for a hung dump: a Frida-based tool that runs the real client can wedge on a
+/// dialog or anti-tamper spin. Generous by default, overridable for slow machines or huge
+/// clients via `MAPLE_UNPACK_TIMEOUT_SECS`.
+fn dump_timeout() -> Duration {
+    let secs = std::env::var("MAPLE_UNPACK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(DEFAULT_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 /// Resolve the dumper: an explicit path first, then beside the packed exe, then `PATH`.
 pub fn locate_unlicense(explicit: Option<&Path>, near: Option<&Path>) -> Option<PathBuf> {
@@ -86,13 +100,32 @@ pub fn dump(
         collected
     });
 
-    for line in rx {
-        on(Progress::Line(&line));
+    let timeout = dump_timeout();
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    loop {
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(line) => on(Progress::Line(&line)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    timed_out = true;
+                    break;
+                }
+            }
+        }
     }
     let _ = out_thread.join();
     let detail = err_thread.join().unwrap_or_default();
     let status = child.wait()?;
 
+    if timed_out {
+        return Err(io::Error::other(format!(
+            "unlicense timed out after {}s and was killed; set MAPLE_UNPACK_TIMEOUT_SECS to allow longer",
+            timeout.as_secs()
+        )));
+    }
     if !status.success() {
         let code = status
             .code()
@@ -110,4 +143,44 @@ pub fn dump(
         )));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locate_prefers_explicit_then_near() {
+        let dir = std::env::temp_dir().join(format!("mapledumper_ul_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let near = dir.join("unlicense.exe");
+        std::fs::write(&near, b"stub").unwrap();
+        let explicit = dir.join("custom-ul.exe");
+        std::fs::write(&explicit, b"stub").unwrap();
+
+        assert_eq!(
+            locate_unlicense(Some(&explicit), Some(&dir)),
+            Some(explicit.clone())
+        );
+        // an explicit path that does not exist falls back to the near directory
+        let missing = dir.join("nope.exe");
+        assert_eq!(
+            locate_unlicense(Some(&missing), Some(&dir)),
+            Some(near.clone())
+        );
+        // no explicit: found beside the input, ahead of PATH
+        assert_eq!(locate_unlicense(None, Some(&dir)), Some(near));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn locate_never_returns_a_missing_explicit() {
+        let dir = std::env::temp_dir().join(format!("mapledumper_ul_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bogus = dir.join("missing.exe");
+        // whatever PATH holds, a non-existent explicit path is never returned as-is
+        assert_ne!(locate_unlicense(Some(&bogus), Some(&dir)), Some(bogus));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
