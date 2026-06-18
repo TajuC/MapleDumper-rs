@@ -162,19 +162,19 @@ When no single byte pattern survives every supplied build, the generator falls b
 stack of recompile-stable anchors, tried strongest first and stopping at the first that pins the
 function confidently:
 
-- **String anchor** — a read-only string the function references (build-invariant, so it survives a
+- **String anchor**: a read-only string the function references (build-invariant, so it survives a
   recompile that moves every byte; see the measured cross-version coverage below).
-- **Import anchor** — the distinctive set of imported APIs it calls.
-- **Caller anchor** — a string-anchored *caller*, with the target re-found as the caller's callee whose
+- **Import anchor**: the distinctive set of imported APIs it calls.
+- **Caller anchor**: a string-anchored *caller*, with the target re-found as the caller's callee whose
   identity matches, so a function with no handle of its own is reachable through one that has.
-- **Vtable anchor** — for a C++ virtual method, the class's vtable is matched across builds by a
+- **Vtable anchor**: for a C++ virtual method, the class's vtable is matched across builds by a
   distinctiveness-weighted, semi-global affine alignment of its per-slot fingerprints, so methods
   inserted or removed across a major version shift the match instead of breaking it; the target's slot
   is then read back, following any adjustor thunk. When a refactor drifts the table past the per-slot
   matcher, the table is **grounded through the constructor that installs it** (the constructor pins
   itself by a build-stable class string), recovering the vtable address directly.
-- **Encoding and mnemonic fingerprints** — structural fallbacks for template-instance siblings.
-- **Shortlist** — when nothing pins the function uniquely, a per-build list of the structural family it
+- **Encoding and mnemonic fingerprints**: structural fallbacks for template-instance siblings.
+- **Shortlist**: when nothing pins the function uniquely, a per-build list of the structural family it
   belongs to, each with a minted AOB, instead of a confidently-wrong answer.
 
 A long version jump is crossed over the highest-confidence **chain** through intermediate builds rather
