@@ -2784,6 +2784,11 @@ button.btn-ico:hover {
   flex-direction: column;
   gap: 6px;
 }
+/* the mode toggle hides whole rows/pills; [hidden] must win over the display rules above */
+.unpack-row[hidden],
+.ustage[hidden] {
+  display: none;
+}
 .unpack-label {
   font-size: 12px;
 }
