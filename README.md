@@ -1,6 +1,6 @@
 # MapleDumper
 
-Cross-version signature and offset toolkit for MapleStory clients.
+Cross-version signature and offset toolkit for MapleStory clients. **v0.6.0**.
 
 [![CI](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -14,8 +14,31 @@ table, or a plain report. Its headline feature, the **Signature Maker**, reads s
 straight from disk and produces the highest-confidence pattern that resolves the same target in
 every version.
 
-It ships as a frameless desktop workspace that keeps a local history of every scan, alongside a
-scriptable command-line tool. Both are built on the same engine crate.
+## Three surfaces, one engine
+
+- **Engine: `maple-core`.** The library all surfaces call into: memory sources, the chunked parallel
+  scan pipeline, the AOB scanner, the resolver, PE/FileImage parsing, and the Signature Maker.
+- **CLI: `mapledumper.exe`.** A scriptable command-line tool with `scan`, `lint`, `diff`, `asm`,
+  `mksig`, and `profile` subcommands, JSON output, and stable exit codes for automation.
+- **Desktop: `maple-app`.** A frameless Tauri workspace with live scanning, the Signature Maker
+  view, the assembly scanner, a Monaco pattern editor, a local SQLite history, and (new in v0.6.0)
+  the deep "Investigate" inspector and RVA / absolute / both address modes.
+
+## Install
+
+The v0.6.0 release ships prebuilt Windows artifacts (with CycloneDX SBOMs and a `SHA256SUMS` file):
+
+| Artifact | What it is |
+|---|---|
+| `mapledumper.exe` | The command-line tool (built with `cargo auditable`). |
+| `MapleDumper_0.6.0_x64-setup.exe` | The desktop installer (Tauri NSIS). |
+| `*.cdx.json` SBOMs + `SHA256SUMS` | Per-crate software bill of materials and checksums. |
+
+Download from the [v0.6.0 release](https://github.com/TajuC/MapleDumper-rs/releases/tag/v0.6.0),
+verify the checksum against `SHA256SUMS`, then run the CLI directly or the installer for the desktop
+app. The desktop app needs the
+[WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (bundled with current
+Windows). Or build from source (see [Build](#build)).
 
 > **Terminology.** An **AOB** (array of bytes) is a sequence of byte values, some fixed and some
 > wildcarded, used to locate code or data in memory. A **pattern** in MapleDumper is a named AOB
@@ -106,7 +129,9 @@ The Signature Maker addresses this by working across builds:
 2. Choose a target by an existing AOB to harden, by a reference address (RVA) in one build, or both
    at once.
 3. It searches for three kinds of anchor: the target's own bytes (Direct), a call or jump to the
-   target (`_CALL` / `_JMP`), and a memory reference to the target (`_PTR`).
+   target (minted with a `_CALL` / `_JMP` suffix), and a memory reference to the target (`_PTR`).
+   Note these `_JMP`/`_CALL`/`_PTR` labels are the minted-signature suffixes the maker emits; the
+   pattern *parser* recognizes only `_PTR`, `_CALL`, `_OFF`, and `_HDR` name suffixes.
 4. Each candidate is masked using instruction decoding and the relocation table, then validated
    against every build for a unique match and a callee that stays similar across builds.
 5. Each candidate is scored on independent measures (uniqueness, recompile stability, byte entropy,
