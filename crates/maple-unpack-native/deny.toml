@@ -48,6 +48,10 @@ name = "maple-unpack-native"
 allow = ["GPL-3.0-or-later"]
 
 [[licenses.exceptions]]
+name = "maple-core"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
 name = "webpki-roots"
 allow = ["CDLA-Permissive-2.0"]
 

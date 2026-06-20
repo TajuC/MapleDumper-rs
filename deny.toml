@@ -47,6 +47,21 @@ allow = [
     "BSL-1.0",
 ]
 
+# MapleDumper-rs is GPL-3.0: the native dumper derives from ergrelet/unlicense (see LICENSE and
+# crates/maple-unpack-native/NOTICE), so the project relicensed from MIT. Allow the project's own
+# crates to carry that license per crate without opening the allow-list to copyleft dependencies.
+[[licenses.exceptions]]
+name = "maple-core"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
+name = "maple-cli"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
+name = "maple-app"
+allow = ["GPL-3.0-or-later"]
+
 [bans]
 # Duplicate transitive versions are mostly inherited from Tauri; surface them without failing CI.
 multiple-versions = "warn"

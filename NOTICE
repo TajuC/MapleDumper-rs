@@ -1,0 +1,9 @@
+MapleDumper-rs
+==============
+
+MapleDumper-rs is distributed under the GNU General Public License v3.0. See LICENSE.
+
+It includes maple-unpack-native, a Rust port of the dynamic unpacking logic of unlicense by Erwan
+Grelet (https://github.com/ergrelet/unlicense), which is GPL-3.0. Because the project derives from
+that code, the whole of MapleDumper-rs is GPL-3.0. See crates/maple-unpack-native/NOTICE for the
+ported components and full attribution.

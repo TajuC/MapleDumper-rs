@@ -3,7 +3,7 @@
 Cross-version signature and offset toolkit for MapleStory clients. **v0.6.0**.
 
 [![CI](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20x86-informational)
 ![Rust 2024](https://img.shields.io/badge/rust-2024%20edition-orange)
 
@@ -464,4 +464,10 @@ Against a live process, `--profile` breaks the wall clock into its read, scan, a
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+The native dumper under `crates/maple-unpack-native` is a Rust port of the dynamic unpacking logic of
+[unlicense](https://github.com/ergrelet/unlicense) by Erwan Grelet, which is GPL-3.0. Because
+MapleDumper-rs derives from that code, the whole project is distributed under the GNU General Public
+License v3.0; see [`crates/maple-unpack-native/NOTICE`](crates/maple-unpack-native/NOTICE) for the
+ported components.
