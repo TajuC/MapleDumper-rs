@@ -1,4 +1,4 @@
-const unpackState = { mode: "full", input: "", output: "", packed: "", unlicense: "", report: null, running: false };
+const unpackState = { mode: "full", input: "", output: "", packed: "", unlicense: "", nativeBin: "", native: false, report: null, running: false };
 
 function unpackSetMode(mode) {
   unpackState.mode = mode;
@@ -6,8 +6,8 @@ function unpackSetMode(mode) {
   if (tabs) tabs.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.umode === mode));
   const packedRow = $("unpack-packed-row");
   if (packedRow) packedRow.hidden = mode !== "clean";
-  const ulRow = $("unpack-unlicense-row");
-  if (ulRow) ulRow.hidden = mode !== "full";
+  const nativeRow = $("unpack-native-row");
+  if (nativeRow) nativeRow.hidden = mode !== "full";
   const dumpPill = document.querySelector('#unpack-progress .ustage[data-stage="dump"]');
   if (dumpPill) dumpPill.hidden = mode !== "full";
   const hint = $("unpack-input-hint");
@@ -16,7 +16,30 @@ function unpackSetMode(mode) {
     hint.setAttribute("data-i18n", key);
     hint.textContent = t(key);
   }
+  unpackSyncNative();
   unpackUpdateValidity();
+}
+
+// The native dumper runs the whole packed -> min flow itself, so unlicense.exe and the static
+// clean toggles do not apply to it. Reflect that in the panel instead of silently ignoring them.
+function unpackSyncNative() {
+  const on = unpackState.mode === "full" && unpackState.native;
+  const binRow = $("unpack-native-bin-row");
+  if (binRow) binRow.hidden = !on;
+  const ulRow = $("unpack-unlicense-row");
+  if (ulRow) ulRow.hidden = unpackState.mode !== "full" || on;
+  for (const id of ["unpack-unbind", "unpack-zerots"]) {
+    const el = $(id);
+    if (el) {
+      el.disabled = on;
+      if (el.closest(".chk")) el.closest(".chk").classList.toggle("disabled", on);
+    }
+  }
+}
+
+function unpackSetNative(checked) {
+  unpackState.native = !!checked;
+  unpackSyncNative();
 }
 
 async function unpackPick(target) {
@@ -31,6 +54,19 @@ async function unpackPick(target) {
   const field = $("unpack-" + target);
   if (field) field.value = paths[0];
   unpackUpdateValidity();
+}
+
+async function unpackPickNativeBin() {
+  let paths;
+  try {
+    paths = await invoke("pick_open_files");
+  } catch {
+    return;
+  }
+  if (!paths || !paths.length) return;
+  unpackState.nativeBin = paths[0];
+  const field = $("unpack-native-bin");
+  if (field) field.value = paths[0];
 }
 
 async function unpackPickOutput() {
@@ -60,6 +96,11 @@ function unpackSync() {
     const el = $("unpack-" + f);
     if (el) el.value = unpackState[f];
   }
+  const binEl = $("unpack-native-bin");
+  if (binEl) binEl.value = unpackState.nativeBin;
+  const nativeEl = $("unpack-native");
+  if (nativeEl) nativeEl.checked = unpackState.native;
+  unpackSyncNative();
   unpackUpdateValidity();
 }
 
@@ -123,14 +164,17 @@ async function runUnpack() {
   }
 
   const cleanOnly = unpackState.mode === "clean";
+  const useNative = !cleanOnly && unpackState.native;
   const args = {
     input: unpackState.input,
     output: unpackState.output,
     cleanOnly,
     packed: cleanOnly && unpackState.packed ? unpackState.packed : null,
-    unlicense: !cleanOnly && unpackState.unlicense ? unpackState.unlicense : null,
+    unlicense: !cleanOnly && !useNative && unpackState.unlicense ? unpackState.unlicense : null,
     unbindIat: $("unpack-unbind") ? $("unpack-unbind").checked : true,
     zeroTimestamp: $("unpack-zerots") ? $("unpack-zerots").checked : true,
+    native: useNative,
+    nativeBin: useNative && unpackState.nativeBin ? unpackState.nativeBin : null,
   };
 
   try {

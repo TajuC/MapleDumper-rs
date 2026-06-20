@@ -371,6 +371,7 @@
                     <div class="unpack-io-opts">
                       <label class="chk"><input id="unpack-unbind" type="checkbox" checked /><span data-i18n="unpack.unbindShort">Unbind IAT</span></label>
                       <label class="chk"><input id="unpack-zerots" type="checkbox" checked /><span data-i18n="unpack.zerotsShort">Zero timestamp</span></label>
+                      <span id="unpack-native-row" class="chk-wrap"><label class="chk"><input id="unpack-native" type="checkbox" /><span data-i18n="unpack.nativeShort">Native dumper</span></label></span>
                     </div>
                   </div>
                   <div id="unpack-packed-row" class="unpack-row" hidden>
@@ -378,6 +379,13 @@
                     <div class="unpack-pick">
                       <input id="unpack-packed" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.packedPh" placeholder="Packed original (optional)…" />
                       <button id="unpack-pick-packed" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                    </div>
+                  </div>
+                  <div id="unpack-native-bin-row" class="unpack-row" hidden>
+                    <span class="unpack-label muted" data-i18n="unpack.nativeBin">maple-unpack-native (optional)</span>
+                    <div class="unpack-pick">
+                      <input id="unpack-native-bin" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.nativeBinPh" placeholder="Auto-detect beside the app or on PATH…" />
+                      <button id="unpack-pick-native-bin" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
                     </div>
                   </div>
                   <div id="unpack-unlicense-row" class="unpack-row">
