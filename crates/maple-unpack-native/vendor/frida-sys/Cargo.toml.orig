@@ -1,0 +1,18 @@
+[package]
+name = "frida-sys"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[features]
+auto-download = ["frida-build"]
+
+[build-dependencies]
+bindgen = "0.72.1"
+frida-build = { path = "../frida-build", optional = true, version = "0.17.2" }
+
+[badges]
+maintenance = { status = "experimental" }

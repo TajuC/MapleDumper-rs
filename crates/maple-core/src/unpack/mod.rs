@@ -198,7 +198,7 @@ impl CleanOptions {
 }
 
 /// What the clean pass did, for the report card and CLI summary.
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CleanSummary {
     pub exception_repointed: bool,
     pub cert_cleared: bool,
@@ -239,7 +239,7 @@ pub enum Progress<'a> {
 
 /// The end-to-end result. `output` is `None` when the gates failed: in that case no
 /// binary is written, so the caller can report the failure without a broken artifact.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct UnpackReport {
     pub input: String,
     pub output: Option<String>,

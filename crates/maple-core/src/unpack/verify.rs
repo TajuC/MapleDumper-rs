@@ -11,7 +11,7 @@ const DEAD_RANGE_NAMES: [&str; 5] = [".themida", ".boot", ".SCY", ".rsrv0", ".rs
 const VIRT_SAMPLE_CAP: usize = 2000;
 
 /// The verification report shown on the CLI and in the GUI results card.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VerifyReport {
     pub oep_rva: u32,
     pub oep_bytes: String,

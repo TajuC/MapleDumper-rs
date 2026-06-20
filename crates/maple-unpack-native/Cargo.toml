@@ -1,0 +1,38 @@
+[package]
+name = "maple-unpack-native"
+version = "0.6.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["TajuC"]
+repository = "https://github.com/TajuC/MapleDumper-rs"
+rust-version = "1.95"
+publish = false
+description = "Native Themida/WinLicense 3.x dumper for MapleDumper-rs (Frida driver + Unicorn import emulation), a Rust port of ergrelet/unlicense"
+
+[lib]
+name = "maple_unpack_native"
+path = "src/lib.rs"
+
+[[bin]]
+name = "maple-unpack-native"
+path = "src/main.rs"
+
+[dependencies]
+# Frida 0.17 Rust binding (its bindgen handles GError), but pinned to a Frida 16 devkit via the
+# patched frida-sys below. Frida 17 broke the OEP trap (Memory.protect '---' +
+# Process.setExceptionHandler never faults on the live client); Frida 16 (what unlicense uses) works.
+frida = { version = "0.17", features = ["auto-download"] }
+# Dynamic linkage keeps Unicorn's bundled GLib compatibility shim (g_hash_table_*, g_array_*, ...)
+# inside unicorn.dll, where it cannot collide with the real GLib that Frida's static devkit bundles.
+# Statically linking both and forcing the duplicates together splices the two GLib implementations
+# and corrupts Frida's heap.
+unicorn-engine = { version = "2.1", features = ["dynamic_linkage"] }
+iced-x86 = "1"
+serde_json = "1"
+maple-core = { path = "../maple-core" }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[patch.crates-io]
+frida-sys = { path = "vendor/frida-sys" }

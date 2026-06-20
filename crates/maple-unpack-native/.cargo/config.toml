@@ -1,0 +1,6 @@
+# Frida's prebuilt devkit (frida-core.lib) links the static CRT (/DEFAULTLIB:LIBCMT). Build the
+# whole crate, including the Unicorn C library (the cmake crate then passes -MT), against the same
+# static CRT so the two native libraries share one heap. Mixing static and dynamic CRTs corrupts
+# the heap when Frida does real work on a target.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

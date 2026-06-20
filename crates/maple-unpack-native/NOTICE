@@ -1,0 +1,20 @@
+maple-unpack-native
+===================
+
+This crate is a Rust port of the dynamic unpacking logic of unlicense by
+Erwan Grelet (ergrelet), licensed under the GNU General Public License v3.0.
+
+  Upstream: https://github.com/ergrelet/unlicense
+  License:  GPL-3.0
+
+Ported components:
+  - The driver and orchestration (application.py, frida_exec.py, winlicense3.py).
+  - The import-wrapper emulation (emulation.py) and IAT scanning (imports.py).
+  - The instrumentation agent at src/resources/agent.js is a verbatim copy of
+    unlicense's resources/frida.js.
+
+The dump-and-rebuild step that unlicense delegates to Scylla (pyscylla) is not a
+port of Scylla; it is an independent native PE reconstruction (src/pe_build.rs).
+
+Because this crate derives from GPL-3.0 code, MapleDumper-rs is distributed under
+the GNU General Public License v3.0. See the repository LICENSE.
