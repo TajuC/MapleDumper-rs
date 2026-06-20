@@ -1,0 +1,54 @@
+name: Native dumper
+
+# The native Themida dumper (crates/maple-unpack-native) is excluded from the portable workspace: it
+# links Frida and Unicorn through the heavy native toolchain (LLVM/libclang, CMake, Ninja) and only
+# targets x64 Windows. It is built on its own workflow, gated to the crate's own paths, so the five
+# required checks stay fast and a regression here is still caught.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/maple-unpack-native/**"
+      - ".github/workflows/native.yml"
+  pull_request:
+    paths:
+      - "crates/maple-unpack-native/**"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # LLVM is preinstalled on the windows runner image; libclang is what frida-sys's bindgen needs.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # rustc on small runners can fast-fail (STATUS_STACK_BUFFER_OVERRUN) on these deep generic
+      # builds under low memory; a larger main-thread stack and -j2 keep it stable.
+      RUST_MIN_STACK: "67108864"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install Ninja (unicorn-engine-sys forces the Ninja CMake generator)
+        run: choco install ninja -y
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: crates/maple-unpack-native
+      - name: Format
+        working-directory: crates/maple-unpack-native
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: crates/maple-unpack-native
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build (Frida auto-downloads the pinned devkit; capped at -j2)
+        working-directory: crates/maple-unpack-native
+        run: cargo build -j 2
+      - name: Test (the live-client and recorded-dump cases are ignored by default)
+        working-directory: crates/maple-unpack-native
+        run: cargo test -j 2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.19.8 --locked
+      - name: Licenses, advisories, bans, sources (native dumper policy)
+        working-directory: crates/maple-unpack-native
+        run: cargo deny check

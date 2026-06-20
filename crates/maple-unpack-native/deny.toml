@@ -1,0 +1,60 @@
+# cargo-deny policy for the native dumper crate, which is excluded from the portable workspace and
+# gated on its own x64 CI job (the root deny.toml covers the shipped MIT workspace). The dumper
+# legitimately links copyleft dependencies, allowed here per-crate so nothing else can introduce one
+# unnoticed: GPL-2.0 for Unicorn, wxWindows for the Frida bindings, GPL-3.0 for this crate (a port of
+# ergrelet/unlicense), and CDLA-Permissive-2.0 for the bundled Mozilla CA roots.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+]
+
+[[licenses.exceptions]]
+name = "frida"
+allow = ["wxWindows"]
+
+[[licenses.exceptions]]
+name = "frida-build"
+allow = ["wxWindows"]
+
+[[licenses.exceptions]]
+name = "frida-sys"
+allow = ["wxWindows"]
+
+[[licenses.exceptions]]
+name = "unicorn-engine"
+allow = ["GPL-2.0"]
+
+[[licenses.exceptions]]
+name = "unicorn-engine-sys"
+allow = ["GPL-2.0"]
+
+[[licenses.exceptions]]
+name = "maple-unpack-native"
+allow = ["GPL-3.0-or-later"]
+
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
