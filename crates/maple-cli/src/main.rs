@@ -1064,56 +1064,32 @@ fn print_unpack_report(r: &UnpackReport) {
     );
 }
 
-fn locate_native_unpacker(explicit: Option<&Path>) -> Option<PathBuf> {
-    const NAMES: [&str; 2] = ["maple-unpack-native.exe", "maple-unpack-native"];
-    if let Some(p) = explicit
-        && p.is_file()
-    {
-        return Some(p.to_path_buf());
-    }
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        roots.push(dir.to_path_buf());
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        roots.extend(std::env::split_paths(&paths));
-    }
-    roots
-        .iter()
-        .flat_map(|d| NAMES.iter().map(move |n| d.join(n)))
-        .find(|c| c.is_file())
-}
-
-/// Drive the bundled native unpacker for the full packed-to-min flow. It runs the dump, the static
-/// clean, and the verification gates itself, writing the output only if every gate passes.
+/// Drive the bundled native unpacker for the full packed-to-min flow through the engine, which runs
+/// the dump, the static clean, and the verification gates and writes the output only if every gate
+/// passes. Routed through `maple_core` so the CLI and GUI share one locate-spawn-parse path.
 fn cmd_unpack_native(a: &UnpackArgs) -> Result<ExitKind, CliError> {
-    let bin = locate_native_unpacker(a.native_bin.as_deref()).ok_or_else(|| {
-        CliError::new(
-            ExitKind::Unresolved,
-            "maple-unpack-native not found; build it or pass --native-bin <exe>",
-        )
-    })?;
-    eprintln!("[unpack] native dumper: {}", bin.display());
-    let status = std::process::Command::new(&bin)
-        .arg(&a.input)
-        .arg(&a.out)
-        .status()
-        .map_err(|e| {
-            CliError::new(
-                ExitKind::InvalidInput,
-                format!("could not launch the native unpacker: {e}"),
-            )
-        })?;
-    if status.success() {
-        Ok(ExitKind::Success)
+    let mut on = |p: Progress| match p {
+        Progress::Stage(s) => eprintln!("[unpack] {}", stage_label(s)),
+        Progress::Line(l) => eprintln!("    {l}"),
+    };
+    let report = maple_core::run_native_dumper(&a.input, &a.out, a.native_bin.as_deref(), &mut on)
+        .map_err(unpack_err)?;
+    if a.json {
+        println!("{}", to_json_pretty(&report)?);
     } else {
-        Err(CliError::new(
-            ExitKind::Unresolved,
-            "native unpack did not produce a verified binary (see output above)",
-        ))
+        print_unpack_report(&report);
     }
+    if !report.gates_pass {
+        return Err(CliError::new(
+            ExitKind::Unresolved,
+            "verification gates failed; no binary was written",
+        ));
+    }
+    Ok(if report.verify.warnings.is_empty() {
+        ExitKind::Success
+    } else {
+        ExitKind::SuccessWithWarnings
+    })
 }
 
 fn cmd_unpack(a: UnpackArgs) -> Result<ExitKind, CliError> {

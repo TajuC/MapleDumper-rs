@@ -7,6 +7,7 @@
 //! [`clean_bytes`] reproduces the `proto/unpack_clean.py` oracle byte for byte.
 
 mod dump;
+mod native;
 mod sha256;
 mod verify;
 
@@ -14,6 +15,7 @@ use std::io;
 use std::path::Path;
 
 pub use dump::locate_unlicense;
+pub use native::{locate_native_dumper, run_native_dumper};
 pub use verify::{VerifyReport, verify_bytes};
 
 const IDATA: u32 = 0x40;

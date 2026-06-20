@@ -57,7 +57,8 @@ pub use sigmaker::{
 pub use stamp::{BuildStamp, parse_stamp, pe_machine};
 pub use unpack::{
     CleanOptions, CleanSummary, Cleaned, Progress, Stage, UnpackReport, VerifyReport, clean_bytes,
-    clean_to_path, locate_unlicense, unpack_to_path, verify_bytes,
+    clean_to_path, locate_native_dumper, locate_unlicense, run_native_dumper, unpack_to_path,
+    verify_bytes,
 };
 
 #[cfg(windows)]
