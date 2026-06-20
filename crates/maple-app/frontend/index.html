@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MapleDumper</title>
     <link rel="stylesheet" href="style.css" />
+    <script src="theme-init.js"></script>
     <script src="vs/loader.js"></script>
   </head>
   <body>
@@ -18,8 +19,15 @@
         <div class="tb-brand" data-tauri-drag-region>
           <img src="logo.png" class="tb-logo" alt="" />
           <span>MapleDumper</span>
+          <span id="tb-version" class="tb-version mono"></span>
         </div>
-        <div class="tb-spacer" data-tauri-drag-region></div>
+        <div class="tb-spacer" data-tauri-drag-region>
+          <label class="tb-search" title="Ctrl+K">
+            <span class="ico" data-icon="search"></span>
+            <input id="tb-search-input" type="text" spellcheck="false" data-i18n-ph="tb.search" placeholder="Search modules, patterns, offsets…" />
+            <span class="tb-kbd mono">Ctrl K</span>
+          </label>
+        </div>
         <div class="tb-right">
           <button id="mask-toggle" class="tb-btn" data-i18n-title="mask.off" title="Mask for screenshots"><span class="ico" data-icon="eye"></span></button>
           <span id="conn-pill" class="conn-pill"><span class="dot"></span><span id="conn-text">Idle</span></span>
@@ -39,7 +47,16 @@
 
       <div id="body">
         <aside id="sidebar">
-          <div class="brand"><img src="logo.png" class="brand-logo" alt="MapleDumper" /></div>
+          <div class="brand">
+            <div class="brand-core">
+              <svg class="brand-ring" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="20.5" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1" stroke-dasharray="2.5 5.5" /></svg>
+              <div class="brand-core-inner"><img src="logo.png" class="brand-logo" alt="MapleDumper" /></div>
+            </div>
+            <div class="brand-text">
+              <div class="brand-name">MapleDumper</div>
+              <div class="brand-sub" data-i18n="tb.subtitle">Forensic toolkit</div>
+            </div>
+          </div>
           <nav id="nav">
             <button class="nav-item active" data-view="workspace" data-icon="grid"><span class="ico"></span><span data-i18n="nav.workspace">Workspace</span></button>
             <button class="nav-item" data-view="asmscan" data-icon="search"><span class="ico"></span><span data-i18n="nav.asmscan">Assembly scan</span></button>
@@ -59,6 +76,7 @@
                 <span id="engine-badge">Engine</span>
                 <span class="engine-sub" data-i18n="engine.ready">Ready</span>
               </div>
+              <span class="engine-dot" aria-hidden="true"></span>
             </div>
           </div>
         </aside>
@@ -66,10 +84,30 @@
         <main id="main">
           <div id="views">
             <section class="view active" id="view-workspace">
-              <div class="target-row">
+              <div class="simple-head ws-head">
+                <div>
+                  <h2 data-i18n="ws.title">Workspace</h2>
+                  <p data-i18n="ws.subtitle">Live process scanning and pattern resolution</p>
+                </div>
+                <div class="head-actions">
+                  <button id="w-stop" class="btn btn-soft" disabled><span class="ico" data-icon="square"></span><span data-i18n="ws.stop">Stop</span></button>
+                  <div class="menu">
+                    <button id="w-export" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="ws.export">Export</span><span class="ico chev" data-icon="chevron"></span></button>
+                    <div id="export-menu" class="menu-list" hidden>
+                      <button data-export="header" data-i18n="ws.exportHeader">C++ header (offsets.h)</button>
+                      <button data-export="ce" data-i18n="ws.exportCe">Cheat Engine table</button>
+                      <button data-export="txt" data-i18n="ws.exportTxt">Plain text</button>
+                    </div>
+                  </div>
+                  <button id="w-scan" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="ws.startScan">Start Scan</span></button>
+                </div>
+              </div>
+
+              <div class="ws-config">
                 <label class="field">
                   <span class="field-label" id="target-label">Target process</span>
                   <span class="input-wrap">
+                    <span class="input-dot"></span>
                     <input id="w-target" type="text" value="MapleStory.exe" spellcheck="false" />
                     <span class="input-ico" data-icon="activity"></span>
                   </span>
@@ -81,42 +119,31 @@
                     <span class="input-ico" data-icon="boxes"></span>
                   </span>
                 </label>
-                <label class="field wide">
+                <label class="field">
                   <span class="field-label" data-i18n="ws.patternSource">Pattern source</span>
                   <span class="input-wrap">
                     <input id="w-source" type="text" value="Built-in samples" readonly />
                     <button id="w-source-btn" class="input-ico btn-ico" data-icon="folder" data-i18n-title="ws.loadFileTitle" title="Load a pattern file"></button>
                   </span>
                 </label>
-                <div class="field shrink">
-                  <span class="field-label">&nbsp;</span>
-                  <div class="scan-buttons">
-                    <button id="w-scan" class="btn btn-primary"><span class="ico" data-icon="play"></span><span data-i18n="ws.startScan">Start Scan</span></button>
-                    <button id="w-stop" class="btn btn-soft" disabled><span class="ico" data-icon="square"></span><span data-i18n="ws.stop">Stop</span></button>
-                  </div>
-                </div>
               </div>
 
-              <div class="options-row">
-                <div class="toggles">
-                  <button id="t-arch" class="toggle active" data-on="true"><span class="ico" data-icon="cpu"></span><span id="t-arch-label">64-bit</span></button>
-                  <button id="t-wait" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.waitTarget">Wait for target</span></button>
-                  <button id="t-class" class="toggle" data-on="false"><span class="check">✓</span><span data-i18n="ws.findByClass">Find by window class</span></button>
-                  <button id="t-code" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.codeOnly">Code regions only</span></button>
-                  <label class="toggle timeout">
-                    <span data-i18n="ws.timeout">Timeout</span>
-                    <input id="w-timeout" type="number" min="0" placeholder="∞" />
-                    <span class="muted" data-i18n="ws.seconds">s</span>
-                  </label>
-                </div>
-                <div class="menu">
-                  <button id="w-export" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="ws.export">Export</span><span class="ico chev" data-icon="chevron"></span></button>
-                  <div id="export-menu" class="menu-list" hidden>
-                    <button data-export="header" data-i18n="ws.exportHeader">C++ header (offsets.h)</button>
-                    <button data-export="ce" data-i18n="ws.exportCe">Cheat Engine table</button>
-                    <button data-export="txt" data-i18n="ws.exportTxt">Plain text</button>
-                  </div>
-                </div>
+              <div class="ws-chips">
+                <button id="t-arch" class="toggle active" data-on="true"><span class="ico" data-icon="cpu"></span><span id="t-arch-label">64-bit</span></button>
+                <button id="t-wait" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.waitTarget">Wait for target</span></button>
+                <button id="t-class" class="toggle" data-on="false"><span class="check">✓</span><span data-i18n="ws.findByClass">Find by window class</span></button>
+                <button id="t-code" class="toggle active" data-on="true"><span class="check">✓</span><span data-i18n="ws.codeOnly">Code regions only</span></button>
+                <label class="toggle timeout">
+                  <span data-i18n="ws.timeout">Timeout</span>
+                  <input id="w-timeout" type="number" min="0" placeholder="∞" />
+                  <span class="muted" data-i18n="ws.seconds">s</span>
+                </label>
+              </div>
+
+              <div class="md-wave-wrap">
+                <div class="md-wave-label"><span class="md-wave-dot"></span><span data-i18n="ws.memoryIo">Memory I/O</span></div>
+                <canvas id="md-wave" height="36"></canvas>
+                <div class="md-wave-rate"><span id="md-iorate">idle</span></div>
               </div>
 
               <div class="work-grid">
@@ -151,6 +178,25 @@
                         <tr class="empty"><td colspan="6" data-i18n="ws.empty">No scan yet. Set a target and click Start Scan.</td></tr>
                       </tbody>
                     </table>
+                  </div>
+                  <div id="w-radar" class="w-radar" hidden aria-hidden="true">
+                    <span class="radar-ping"></span><span class="radar-ping"></span><span class="radar-ping"></span>
+                    <div class="radar-dial">
+                      <div class="radar-grid"></div>
+                      <div class="radar-cross-v"></div>
+                      <div class="radar-cross-h"></div>
+                      <div class="radar-progress"></div>
+                      <div class="radar-sweep"><span class="radar-sweep-fill"></span><span class="radar-beam"></span></div>
+                      <div class="radar-blip radar-blip-a"></div>
+                      <div class="radar-blip radar-blip-b"></div>
+                      <div class="radar-blip radar-blip-c"></div>
+                      <div class="radar-core"></div>
+                      <div id="w-radar-pct" class="radar-pct"></div>
+                    </div>
+                    <div class="radar-caption">
+                      <div id="w-radar-title" class="radar-title" data-i18n="ws.awaiting">Awaiting target</div>
+                      <div id="w-radar-sub" class="radar-sub" data-i18n="ws.awaitingSub">Press Start Scan to resolve patterns</div>
+                    </div>
                   </div>
                 </div>
 
@@ -292,60 +338,74 @@
 
             <section class="view" id="view-unpack">
               <div class="simple-head">
-                <div><h2 data-i18n="unpack.title">Unpack</h2><p class="muted" data-i18n="unpack.sub">Turn a packed client into a clean, analyzable binary</p></div>
+                <div><h2 data-i18n="unpack.title">Unpack</h2><p data-i18n="unpack.sub">Turn a packed client into a clean, analyzable binary</p></div>
                 <div class="head-actions">
+                  <div id="unpack-mode-tabs" class="tabs">
+                    <button class="tab active" data-umode="full" data-i18n="unpack.modeFull">Packed to clean</button>
+                    <button class="tab" data-umode="clean" data-i18n="unpack.modeClean">Clean a dump</button>
+                  </div>
                   <button id="unpack-run" class="btn btn-primary" disabled><span class="ico" data-icon="play"></span><span data-i18n="unpack.run">Unpack</span></button>
                 </div>
               </div>
-              <div class="unpack-form">
-                <div id="unpack-mode-tabs" class="tabs">
-                  <button class="tab active" data-umode="full" data-i18n="unpack.modeFull">Packed to clean</button>
-                  <button class="tab" data-umode="clean" data-i18n="unpack.modeClean">Clean a dump</button>
-                </div>
-                <div class="unpack-row">
-                  <span class="unpack-label muted" data-i18n="unpack.input">Input</span>
-                  <div class="unpack-pick">
-                    <input id="unpack-input" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.inputPh" placeholder="Choose a binary…" />
-                    <button id="unpack-pick-input" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+              <div class="unpack-scroll">
+                <div class="unpack-io">
+                  <div class="unpack-io-grid">
+                    <div class="unpack-io-field">
+                      <div class="unpack-io-label" data-i18n="unpack.input">Input</div>
+                      <div class="unpack-pick">
+                        <div class="unpack-path-box red"><span class="ico" data-icon="file-code"></span><input id="unpack-input" type="text" readonly spellcheck="false" data-i18n-ph="unpack.inputPh" placeholder="Choose a binary…" /></div>
+                        <button id="unpack-pick-input" class="unpack-io-btn" data-icon="folder" data-i18n-title="unpack.browse" title="Browse"><span class="ico"></span></button>
+                      </div>
+                    </div>
+                    <div class="unpack-io-arrow"><span class="ico" data-icon="arrow-right"></span></div>
+                    <div class="unpack-io-field">
+                      <div class="unpack-io-label" data-i18n="unpack.output">Output</div>
+                      <div class="unpack-pick">
+                        <div class="unpack-path-box green"><span class="ico" data-icon="shield"></span><input id="unpack-output" type="text" readonly spellcheck="false" data-i18n-ph="unpack.outputPh" placeholder="Choose where to save…" /></div>
+                        <button id="unpack-pick-output" class="unpack-io-btn" data-icon="download" data-i18n-title="unpack.saveAs" title="Save as"><span class="ico"></span></button>
+                      </div>
+                    </div>
                   </div>
-                  <span id="unpack-input-hint" class="muted unpack-hint" data-i18n="unpack.inputHintFull">A Themida-packed client (.exe). It will be dumped with unlicense, then cleaned.</span>
-                </div>
-                <div class="unpack-row">
-                  <span class="unpack-label muted" data-i18n="unpack.output">Output</span>
-                  <div class="unpack-pick">
-                    <input id="unpack-output" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.outputPh" placeholder="Choose where to save…" />
-                    <button id="unpack-pick-output" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="unpack.saveAs">Save as</span></button>
+                  <div class="unpack-io-foot">
+                    <span id="unpack-input-hint" class="muted unpack-hint" data-i18n="unpack.inputHintFull">A Themida-packed client (.exe). It will be dumped with unlicense, then cleaned.</span>
+                    <div class="unpack-io-opts">
+                      <label class="chk"><input id="unpack-unbind" type="checkbox" checked /><span data-i18n="unpack.unbindShort">Unbind IAT</span></label>
+                      <label class="chk"><input id="unpack-zerots" type="checkbox" checked /><span data-i18n="unpack.zerotsShort">Zero timestamp</span></label>
+                    </div>
+                  </div>
+                  <div id="unpack-packed-row" class="unpack-row" hidden>
+                    <span class="unpack-label muted" data-i18n="unpack.packedRef">.text identity reference</span>
+                    <div class="unpack-pick">
+                      <input id="unpack-packed" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.packedPh" placeholder="Packed original (optional)…" />
+                      <button id="unpack-pick-packed" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                    </div>
+                  </div>
+                  <div id="unpack-unlicense-row" class="unpack-row">
+                    <span class="unpack-label muted" data-i18n="unpack.unlicense">unlicense.exe (optional)</span>
+                    <div class="unpack-pick">
+                      <input id="unpack-unlicense" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.unlicensePh" placeholder="Auto-detect beside the client or on PATH…" />
+                      <button id="unpack-pick-unlicense" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                    </div>
                   </div>
                 </div>
-                <div id="unpack-packed-row" class="unpack-row" hidden>
-                  <span class="unpack-label muted" data-i18n="unpack.packedRef">.text identity reference</span>
-                  <div class="unpack-pick">
-                    <input id="unpack-packed" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.packedPh" placeholder="Packed original (optional)…" />
-                    <button id="unpack-pick-packed" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+
+                <div id="unpack-progress" class="unpack-progress">
+                  <div class="unpack-pipeline">
+                    <div class="unpack-pipeline-head"><span class="unpack-pipeline-title" data-i18n="unpack.pipeline">Pipeline</span><span id="unpack-pipe-status" class="unpack-pipe-status" data-i18n="unpack.idle">idle</span></div>
+                    <div class="unpack-stages">
+                      <span class="ustage" data-stage="dump"><span class="ico" data-icon="download"></span><span data-i18n="unpack.stageDump">Dump</span></span>
+                      <span class="ustage" data-stage="clean"><span class="ico" data-icon="layers"></span><span data-i18n="unpack.stageClean">Clean</span></span>
+                      <span class="ustage" data-stage="verify"><span class="ico" data-icon="shield"></span><span data-i18n="unpack.stageVerify">Verify</span></span>
+                    </div>
                   </div>
-                  <span class="muted unpack-hint" data-i18n="unpack.packedHint">Optional: the packed original, for the strong .text-identity proof.</span>
-                </div>
-                <div class="unpack-opts">
-                  <label class="chk"><input id="unpack-unbind" type="checkbox" checked /><span data-i18n="unpack.unbind">Unbind IAT (reproducible imports)</span></label>
-                  <label class="chk"><input id="unpack-zerots" type="checkbox" checked /><span data-i18n="unpack.zerots">Zero timestamp (deterministic output)</span></label>
-                </div>
-                <div id="unpack-unlicense-row" class="unpack-row">
-                  <span class="unpack-label muted" data-i18n="unpack.unlicense">unlicense.exe (optional)</span>
-                  <div class="unpack-pick">
-                    <input id="unpack-unlicense" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.unlicensePh" placeholder="Auto-detect beside the client or on PATH…" />
-                    <button id="unpack-pick-unlicense" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                  <div class="unpack-console">
+                    <div class="unpack-console-head"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span><span class="unpack-console-title">unpack · agent log</span></div>
+                    <pre id="unpack-log" class="unpack-log mono" data-i18n-empty="unpack.consoleIdle"></pre>
                   </div>
                 </div>
+
+                <div class="panel" id="unpack-results"><div class="insp-hint" data-i18n="unpack.empty">Choose an input and output, then Unpack.</div></div>
               </div>
-              <div id="unpack-progress" class="unpack-progress" hidden>
-                <div class="unpack-stages">
-                  <span class="ustage" data-stage="dump"><span class="ico" data-icon="download"></span><span data-i18n="unpack.stageDump">Dump</span></span>
-                  <span class="ustage" data-stage="clean"><span class="ico" data-icon="layers"></span><span data-i18n="unpack.stageClean">Clean</span></span>
-                  <span class="ustage" data-stage="verify"><span class="ico" data-icon="shield"></span><span data-i18n="unpack.stageVerify">Verify</span></span>
-                </div>
-                <pre id="unpack-log" class="unpack-log mono"></pre>
-              </div>
-              <div class="panel table-scroll grow" id="unpack-results"><div class="insp-hint" data-i18n="unpack.empty">Choose an input and output, then Unpack.</div></div>
             </section>
 
             <section class="view" id="view-patterns">
@@ -378,7 +438,10 @@
                   <button id="ed-apply" class="btn btn-primary" data-i18n="ed.apply">Apply</button>
                 </div>
               </div>
-              <div id="editor-host" class="panel grow"></div>
+              <div class="code-window grow">
+                <div class="code-window-head"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span><span class="code-window-title">patterns.mdp</span></div>
+                <div id="editor-host"></div>
+              </div>
             </section>
 
             <section class="view" id="view-output">
@@ -389,7 +452,10 @@
                   <button id="out-save" class="btn btn-primary"><span class="ico" data-icon="download"></span><span data-i18n="out.save">Save</span></button>
                 </div>
               </div>
-              <pre id="output-text" class="panel output grow">Run a scan, then export from the Workspace toolbar.</pre>
+              <div class="code-window grow">
+                <div class="code-window-head"><span class="tl tl-r"></span><span class="tl tl-y"></span><span class="tl tl-g"></span><span class="code-window-title" data-i18n="out.title">Output</span></div>
+                <pre id="output-text" class="output">Run a scan, then export from the Workspace toolbar.</pre>
+              </div>
             </section>
 
             <section class="view" id="view-history">
@@ -416,28 +482,30 @@
                 <div><h2 data-i18n="set.title">Settings</h2><p class="muted" data-i18n="set.sub">Privacy mask and display options</p></div>
               </div>
               <div class="settings-wrap">
-                <div class="settings-card lang-card">
-                  <div class="settings-card-head">
-                    <span class="ico" data-icon="globe"></span>
-                    <div>
-                      <h3 data-i18n="set.langTitle">Language</h3>
-                      <p data-i18n="set.langDesc">Display language for the interface.</p>
+                <div class="settings-row">
+                  <div class="settings-card lang-card">
+                    <div class="settings-card-head">
+                      <span class="ico" data-icon="globe"></span>
+                      <div>
+                        <h3 data-i18n="set.langTitle">Language</h3>
+                        <p data-i18n="set.langDesc">Display language for the interface.</p>
+                      </div>
+                      <select id="lang-select" class="select"></select>
                     </div>
-                    <select id="lang-select" class="select"></select>
                   </div>
-                </div>
-                <div class="settings-card">
-                  <div class="settings-card-head">
-                    <span class="ico" data-icon="target"></span>
-                    <div>
-                      <h3 data-i18n="set.addrModeTitle">Address display</h3>
-                      <p data-i18n="set.addrModeDesc">How addresses are shown across the signature maker and inspector: the section-relative RVA, the absolute virtual address (image base + RVA), or both side by side.</p>
+                  <div class="settings-card lang-card">
+                    <div class="settings-card-head">
+                      <span class="ico" data-icon="target"></span>
+                      <div>
+                        <h3 data-i18n="set.addrModeTitle">Address display</h3>
+                        <p data-i18n="set.addrModeDesc">How addresses are shown across the signature maker and inspector: the section-relative RVA, the absolute virtual address (image base + RVA), or both side by side.</p>
+                      </div>
+                      <select id="addr-mode-select" class="select">
+                        <option value="rva" data-i18n="set.addrRva">RVA</option>
+                        <option value="abs" data-i18n="set.addrAbs">Absolute</option>
+                        <option value="both" data-i18n="set.addrBoth">Both</option>
+                      </select>
                     </div>
-                    <select id="addr-mode-select" class="select">
-                      <option value="rva" data-i18n="set.addrRva">RVA</option>
-                      <option value="abs" data-i18n="set.addrAbs">Absolute</option>
-                      <option value="both" data-i18n="set.addrBoth">Both</option>
-                    </select>
                   </div>
                 </div>
                 <div class="settings-card">
@@ -462,31 +530,28 @@
               </div>
             </section>
             <section class="view" id="view-about">
-              <div class="simple-head">
-                <div><h2 data-i18n="about.title">About</h2><p class="muted" data-i18n="about.sub">Version, license, and project information.</p></div>
-              </div>
-              <div class="settings-wrap">
-                <div class="settings-card">
-                  <div class="settings-card-head">
-                    <span class="ico" data-icon="info"></span>
-                    <div>
-                      <h3>MapleDumper <span class="about-ver mono" id="about-version"></span></h3>
-                      <p data-i18n="about.tagline">Cross-version signature and offset toolkit for MapleStory clients.</p>
-                    </div>
+              <div class="about-scroll">
+                <div class="about-hero">
+                  <div class="about-core">
+                    <svg class="about-ring" viewBox="0 0 104 104" aria-hidden="true"><circle cx="52" cy="52" r="50" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="1" stroke-dasharray="3 7" /></svg>
+                    <div class="about-core-inner"><img src="logo.png" class="brand-logo" alt="MapleDumper" /></div>
                   </div>
-                  <div class="about-body">
-                    <p data-i18n="about.desc">MapleDumper finds, generates, and validates byte signatures and offsets that survive client patches. Feed it several client builds and it produces the highest-confidence pattern that resolves the same target in every version.</p>
-                    <ul class="about-features">
-                      <li data-i18n="about.f1">Cross-version Signature Maker with confidence grading.</li>
-                      <li data-i18n="about.f2">Assembly scan, pattern editor, and version history comparison.</li>
-                      <li data-i18n="about.f3">Privacy mask for safe screenshots and sharing.</li>
-                    </ul>
-                    <div class="about-meta">
-                      <div class="about-row"><span class="about-key" data-i18n="about.licenseLabel">License</span><span>MIT</span></div>
-                      <div class="about-row"><span class="about-key" data-i18n="about.repoLabel">Repository</span><span class="mono copyable" id="about-repo" title="github.com/TajuC/MapleDumper-rs">github.com/TajuC/MapleDumper-rs</span></div>
-                    </div>
-                    <p class="muted about-hint" data-i18n="about.copyHint">Click to copy</p>
+                  <div class="about-name">MapleDumper</div>
+                  <div class="about-tagline" data-i18n="about.tagline">Cross-version signature and offset toolkit for MapleStory clients.</div>
+                  <div class="about-pill"><span class="about-pill-dot"></span><span><span data-i18n="engine.label">Engine</span> <span id="about-version" class="mono"></span> · <span data-i18n="engine.ready">Ready</span></span></div>
+                </div>
+                <div class="about-card">
+                  <p class="about-desc" data-i18n="about.desc">MapleDumper finds, generates, and validates byte signatures and offsets that survive client patches. Feed it several client builds and it produces the highest-confidence pattern that resolves the same target in every version.</p>
+                  <ul class="about-features">
+                    <li data-i18n="about.f1">Cross-version Signature Maker with confidence grading.</li>
+                    <li data-i18n="about.f2">Assembly scan, pattern editor, and version history comparison.</li>
+                    <li data-i18n="about.f3">Privacy mask for safe screenshots and sharing.</li>
+                  </ul>
+                  <div class="about-meta">
+                    <div class="about-row"><span class="about-key" data-i18n="about.licenseLabel">License</span><span>MIT</span></div>
+                    <div class="about-row"><span class="about-key" data-i18n="about.repoLabel">Repository</span><span class="mono copyable" id="about-repo" title="github.com/TajuC/MapleDumper-rs">github.com/TajuC/MapleDumper-rs</span></div>
                   </div>
+                  <p class="muted about-hint" data-i18n="about.copyHint">Click to copy</p>
                 </div>
               </div>
             </section>
@@ -536,5 +601,6 @@
     <script src="patterns.js"></script>
     <script src="editor.js"></script>
     <script src="app.js"></script>
+    <script src="theme.js"></script>
   </body>
 </html>

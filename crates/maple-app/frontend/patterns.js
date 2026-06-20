@@ -76,7 +76,7 @@ function renderPatterns() {
   body.innerHTML = rows
     .map(
       ({ p, i }) => `<tr data-pi="${i}">
-      <td class="mono d-name">${esc(p.name)}</td>
+      <td><div class="name-cell"><span class="pat-dot" style="--ch:${hueOf(p.category)}"></span><span class="mono d-name">${esc(p.name)}</span></div></td>
       <td><span class="tag">${esc(typeLabel(p.type))}</span></td>
       <td class="d-cat">${esc(p.category)}</td>
       <td><span class="sig d-sig copyable" title="${escAttr(p.aob)}" data-aob="${escAttr(p.aob)}">${esc(p.aob)}</span></td>

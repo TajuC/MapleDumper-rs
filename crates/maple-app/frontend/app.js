@@ -649,6 +649,8 @@ function relocalize() {
   $("engine-badge").textContent = state.engineVer ? `${t("engine.label")} ${state.engineVer}` : t("engine.offline");
   const av = $("about-version");
   if (av) av.textContent = state.engineVer || "";
+  const tv = $("tb-version");
+  if (tv) tv.textContent = state.engineVer ? "v" + state.engineVer : "";
   $("w-source").value = state.sourceFile || t("ws.builtinSamples");
   setConn(state.connKey, state.connCls);
   setFoot(state.foot.titleKey, state.foot.subKey, state.foot.params, state.foot.rawSub);
@@ -697,6 +699,8 @@ onLangChange = relocalize;
   }
   const av = $("about-version");
   if (av) av.textContent = state.engineVer || "";
+  const tv = $("tb-version");
+  if (tv) tv.textContent = state.engineVer ? "v" + state.engineVer : "";
   const repo = $("about-repo");
   if (repo) repo.addEventListener("click", () => copyText(repo.textContent.trim()));
   await reparse();

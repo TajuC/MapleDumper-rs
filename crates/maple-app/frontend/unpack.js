@@ -75,6 +75,14 @@ function setUnpackStage(stage) {
     el.classList.toggle("active", stage !== "done" && i === idx);
     el.classList.toggle("done", done);
   });
+  const ps = $("unpack-pipe-status");
+  if (ps) {
+    if (stage === "done") ps.textContent = t("unpack.complete");
+    else {
+      const k = { dump: "unpack.stageDump", clean: "unpack.stageClean", verify: "unpack.stageVerify" }[active];
+      ps.textContent = k ? t(k) + "…" : t("unpack.idle");
+    }
+  }
 }
 
 function appendUnpackLog(line) {

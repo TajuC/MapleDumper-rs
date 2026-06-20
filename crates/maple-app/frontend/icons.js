@@ -27,6 +27,7 @@ const ICONS = {
   diff: SVG('<line x1="12" y1="4" x2="12" y2="20"/><polyline points="7 9 4 12 7 15"/><polyline points="17 9 20 12 17 15"/>'),
   history: SVG('<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>'),
   info: SVG('<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'),
+  "arrow-right": SVG('<path d="M5 12h14M13 6l6 6-6 6"/>'),
 };
 
 function injectIcons(root = document) {
