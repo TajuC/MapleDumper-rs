@@ -13,19 +13,30 @@ use super::{Progress, Stage, UnpackReport};
 
 const NATIVE_NAMES: [&str; 2] = ["maple-unpack-native.exe", "maple-unpack-native"];
 
-/// Resolve the native dumper: an explicit path first, then beside `near`, then `PATH`.
-pub fn locate_native_dumper(explicit: Option<&Path>, near: Option<&Path>) -> Option<PathBuf> {
+fn component_dir_in(base: Option<PathBuf>) -> Option<PathBuf> {
+    base.map(|b| b.join("MapleDumper").join("bin"))
+}
+
+/// The stable per-user directory where the optional native dumper component is installed, kept
+/// separate from the app install directory so it survives app updates and needs no admin rights.
+/// Windows uses `%LOCALAPPDATA%\MapleDumper\bin`; other platforms (the dumper is Windows-only, but
+/// the resolver stays portable) fall back to an XDG or home data directory. This is also where a
+/// component installer or the desktop app's "locate" action places the binary.
+pub fn component_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
+        });
+    component_dir_in(base)
+}
+
+fn locate_in_roots(explicit: Option<&Path>, roots: &[PathBuf]) -> Option<PathBuf> {
     if let Some(p) = explicit
         && p.is_file()
     {
         return Some(p.to_path_buf());
-    }
-    let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = near {
-        roots.push(dir.to_path_buf());
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        roots.extend(std::env::split_paths(&paths));
     }
     roots
         .iter()
@@ -33,11 +44,28 @@ pub fn locate_native_dumper(explicit: Option<&Path>, near: Option<&Path>) -> Opt
         .find(|cand| cand.is_file())
 }
 
+/// Resolve the native dumper, most specific first: an explicit path, then beside `near` (the running
+/// program), then the per-user [`component_dir`], then `PATH`. The component dir lets a user install
+/// the dumper once, independent of the lean app, and have both the CLI and GUI find it.
+pub fn locate_native_dumper(explicit: Option<&Path>, near: Option<&Path>) -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = near {
+        roots.push(dir.to_path_buf());
+    }
+    if let Some(dir) = component_dir() {
+        roots.push(dir);
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        roots.extend(std::env::split_paths(&paths));
+    }
+    locate_in_roots(explicit, &roots)
+}
+
 /// Run the native dumper for the full packed-to-min flow and return its report. Locates the binary
-/// (explicit, then beside this executable, then `PATH`), streams the `[native-unpack]` stages and
-/// lines through `on`, and parses the JSON report from stdout. Fails loudly when the dumper is
-/// missing, fails to launch, exits non-zero, or prints no report; in the failure cases it writes no
-/// binary, matching the static path.
+/// (explicit, then beside this executable, then the per-user [`component_dir`], then `PATH`), streams
+/// the `[native-unpack]` stages and lines through `on`, and parses the JSON report from stdout. Fails
+/// loudly when the dumper is missing, fails to launch, exits non-zero, or prints no report; in the
+/// failure cases it writes no binary, matching the static path.
 pub fn run_native_dumper(
     packed: &Path,
     out: &Path,
@@ -132,6 +160,48 @@ mod tests {
             Some(near.clone())
         );
         assert_eq!(locate_native_dumper(None, Some(&dir)), Some(near));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn component_dir_appends_the_per_user_subpath() {
+        let base = PathBuf::from("C:/Users/x/AppData/Local");
+        assert_eq!(
+            component_dir_in(Some(base.clone())),
+            Some(base.join("MapleDumper").join("bin"))
+        );
+        assert_eq!(component_dir_in(None), None);
+    }
+
+    #[test]
+    fn locate_searches_roots_in_order_after_explicit() {
+        let dir = std::env::temp_dir().join(format!("mapledumper_roots_{}", std::process::id()));
+        let near = dir.join("near");
+        let component = dir.join("component");
+        std::fs::create_dir_all(&near).unwrap();
+        std::fs::create_dir_all(&component).unwrap();
+        // Only the component root holds the binary; with near empty, the search falls through to it.
+        let in_component = component.join("maple-unpack-native.exe");
+        std::fs::write(&in_component, b"stub").unwrap();
+        assert_eq!(
+            locate_in_roots(None, &[near.clone(), component.clone()]),
+            Some(in_component.clone())
+        );
+        // A present near root wins over a later root.
+        let in_near = near.join("maple-unpack-native.exe");
+        std::fs::write(&in_near, b"stub").unwrap();
+        assert_eq!(
+            locate_in_roots(None, &[near.clone(), component.clone()]),
+            Some(in_near)
+        );
+        // An existing explicit path short-circuits every root.
+        let explicit = dir.join("pick.exe");
+        std::fs::write(&explicit, b"stub").unwrap();
+        assert_eq!(
+            locate_in_roots(Some(&explicit), &[near, component]),
+            Some(explicit)
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
