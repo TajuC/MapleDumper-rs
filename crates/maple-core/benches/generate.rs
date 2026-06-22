@@ -5,7 +5,9 @@
 // the whole code section. Real client .text is ~7-12 MiB; cost is linear in code size, so the 256 KiB /
 // 1 MiB points extrapolate. This is the control the shared-analysis-model work (Phase 2) must beat.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use maple_core::Arch;
 use maple_core::memory::{BufferSource, Region};
 use maple_core::sigmaker::{ImageInput, SigOptions, TargetSpec, generate};

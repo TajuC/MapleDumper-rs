@@ -1,4 +1,6 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use maple_core::Signature;
 use maple_core::scanner::{CompiledPattern, find_all};
 
