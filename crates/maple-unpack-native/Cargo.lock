@@ -629,7 +629,7 @@ dependencies = [
 
 [[package]]
 name = "maple-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "iced-x86",
  "rayon",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "maple-unpack-native"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "frida",
  "iced-x86",

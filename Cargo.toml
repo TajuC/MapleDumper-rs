@@ -6,7 +6,7 @@ members = ["crates/maple-core", "crates/maple-cli", "crates/maple-app"]
 exclude = ["crates/maple-unpack-native"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["TajuC"]

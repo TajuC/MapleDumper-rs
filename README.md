@@ -1,6 +1,6 @@
 # MapleDumper
 
-Cross-version signature and offset toolkit for MapleStory clients. **v0.6.0**.
+Cross-version signature and offset toolkit for MapleStory clients. **v0.7.0**.
 
 [![CI](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -20,21 +20,21 @@ every version.
   scan pipeline, the AOB scanner, the resolver, PE/FileImage parsing, and the Signature Maker.
 - **CLI: `mapledumper.exe`.** A scriptable command-line tool with `scan`, `lint`, `diff`, `asm`,
   `mksig`, and `profile` subcommands, JSON output, and stable exit codes for automation.
-- **Desktop: `maple-app`.** A frameless Tauri workspace with live scanning, the Signature Maker
-  view, the assembly scanner, a Monaco pattern editor, a local SQLite history, and (new in v0.6.0)
-  the deep "Investigate" inspector and RVA / absolute / both address modes.
+- **Desktop: `maple-app`.** A frameless Tauri workspace (the Aurora interface) with live scanning,
+  the Signature Maker view, the assembly scanner, a Monaco pattern editor, a local SQLite history,
+  the deep "Investigate" inspector, and RVA / absolute / both address modes.
 
 ## Install
 
-The v0.6.0 release ships prebuilt Windows artifacts (with CycloneDX SBOMs and a `SHA256SUMS` file):
+The v0.7.0 release ships prebuilt Windows artifacts (with CycloneDX SBOMs and a `SHA256SUMS` file):
 
 | Artifact | What it is |
 |---|---|
 | `mapledumper.exe` | The command-line tool (built with `cargo auditable`). |
-| `MapleDumper_0.6.0_x64-setup.exe` | The desktop installer (Tauri NSIS). |
+| `MapleDumper_0.7.0_x64-setup.exe` | The desktop installer (Tauri NSIS). |
 | `*.cdx.json` SBOMs + `SHA256SUMS` | Per-crate software bill of materials and checksums. |
 
-Download from the [v0.6.0 release](https://github.com/TajuC/MapleDumper-rs/releases/tag/v0.6.0),
+Download from the [v0.7.0 release](https://github.com/TajuC/MapleDumper-rs/releases/tag/v0.7.0),
 verify the checksum against `SHA256SUMS`, then run the CLI directly or the installer for the desktop
 app. The desktop app needs the
 [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (bundled with current
@@ -77,7 +77,8 @@ Windows). Or build from source (see [Build](#build)).
 - Unpack pipeline. Turn a Themida-packed client into a clean, analyzable binary: a native static
   clean phase (repoint the exception directory to the real `.pdata`, rebuild the IAT directory, strip
   the dead packer sections) plus verification gates, with the inherently dynamic dump step
-  orchestrated through unlicense. The clean phase is deterministic and code bytes are never touched.
+  orchestrated through unlicense or an optional native dumper (a Frida and Unicorn port of unlicense,
+  in `crates/maple-unpack-native`). The clean phase is deterministic and code bytes are never touched.
 
 **Desktop workspace (`maple-app`)**
 
@@ -97,7 +98,8 @@ Windows). Or build from source (see [Build](#build)).
   and lists every address where those instructions appear back to back.
 - Unpack panel. Point it at a packed client (or an existing dump) and produce a cleaned binary with
   live dump, clean, and verify progress and a results card: OEP, import count, `.pdata` entries,
-  virtualization sample, `.text` identity, and output size.
+  virtualization sample, `.text` identity, and output size. A native dumper toggle runs the whole
+  flow without an external tool.
 - Built-in pattern manager (add, edit, delete, notes) and a syntax-highlighted editor.
 - Privacy mask. One click hides every signature, name, address, category, and note for screenshots.
   Pick blur, or a showcase mode that swaps in realistic fake values instead. Visual only; the real
@@ -115,7 +117,8 @@ Windows). Or build from source (see [Build](#build)).
 - `asm` runs the same instruction scan as the desktop Assembly scan, over an optional address range.
 - `mksig` runs the Signature Maker from the command line, with `--json` output for tooling.
 - `unpack` turns a packed client into a clean binary: clean an existing dump (`--clean-only`, no
-  external tool) or run the full packed-to-min flow (dump via unlicense, then clean and verify).
+  external tool) or run the full packed-to-min flow (dump via unlicense, or `--native` for the
+  bundled dumper, then clean and verify).
 - A `maple.conf` in the working directory (or `--config <file>`) supplies defaults for the process,
   module, arch, pattern file, and output directory; explicit flags always win.
 
