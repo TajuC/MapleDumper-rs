@@ -26,10 +26,12 @@ jobs:
       - name: Install Ninja (Unicorn's CMake generator for the native dumper)
         run: choco install ninja -y
       - name: Install build and SBOM tooling
+        # --force so a restored cache that recorded the install metadata but not the binary cannot
+        # make cargo skip the install and leave the command missing (the v0.7.1 run hit exactly that).
         run: |
-          cargo install cargo-auditable --version 0.7.4 --locked
-          cargo install cargo-cyclonedx --version 0.5.9 --locked
-          cargo install tauri-cli --version "^2.0" --locked
+          cargo install cargo-auditable --version 0.7.4 --locked --force
+          cargo install cargo-cyclonedx --version 0.5.9 --locked --force
+          cargo install tauri-cli --version "^2.0" --locked --force
       - name: Build the CLI with an embedded dependency list
         run: cargo auditable build --release -p maple-cli
       - name: Build the desktop app installer (Tauri NSIS)
