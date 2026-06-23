@@ -1,4 +1,4 @@
-const unpackState = { mode: "full", input: "", output: "", packed: "", unlicense: "", nativeBin: "", native: false, report: null, running: false };
+const unpackState = { mode: "full", input: "", output: "", packed: "", unlicense: "", native: false, report: null, running: false };
 
 function unpackSetMode(mode) {
   unpackState.mode = mode;
@@ -24,8 +24,8 @@ function unpackSetMode(mode) {
 // clean toggles do not apply to it. Reflect that in the panel instead of silently ignoring them.
 function unpackSyncNative() {
   const on = unpackState.mode === "full" && unpackState.native;
-  const binRow = $("unpack-native-bin-row");
-  if (binRow) binRow.hidden = !on;
+  const setup = $("unpack-native-setup");
+  if (setup) setup.hidden = !on;
   const ulRow = $("unpack-unlicense-row");
   if (ulRow) ulRow.hidden = unpackState.mode !== "full" || on;
   for (const id of ["unpack-unbind", "unpack-zerots"]) {
@@ -34,6 +34,49 @@ function unpackSyncNative() {
       el.disabled = on;
       if (el.closest(".chk")) el.closest(".chk").classList.toggle("disabled", on);
     }
+  }
+  if (on) refreshNativeStatus();
+}
+
+// Reflect whether the native dumper is installed before a run, so the panel guides setup instead of
+// failing at dump time.
+async function refreshNativeStatus() {
+  let path = null;
+  try {
+    path = await invoke("native_dumper_status");
+  } catch {
+    path = null;
+  }
+  const ready = $("unpack-native-ready");
+  const missing = $("unpack-native-missing");
+  if (ready) ready.hidden = !path;
+  if (missing) missing.hidden = !!path;
+  const pathEl = $("unpack-native-path");
+  if (pathEl) pathEl.textContent = path || "";
+}
+
+async function unpackGetNative() {
+  try {
+    await invoke("open_release_page");
+  } catch (e) {
+    toast(String(e), true);
+  }
+}
+
+async function unpackInstallNative() {
+  let paths;
+  try {
+    paths = await invoke("pick_open_files");
+  } catch {
+    return;
+  }
+  if (!paths || !paths.length) return;
+  try {
+    await invoke("install_native_dumper", { picked: paths[0] });
+    toast(t("unpack.nativeInstalled"));
+    await refreshNativeStatus();
+  } catch (e) {
+    toast(String(e), true);
   }
 }
 
@@ -54,19 +97,6 @@ async function unpackPick(target) {
   const field = $("unpack-" + target);
   if (field) field.value = paths[0];
   unpackUpdateValidity();
-}
-
-async function unpackPickNativeBin() {
-  let paths;
-  try {
-    paths = await invoke("pick_open_files");
-  } catch {
-    return;
-  }
-  if (!paths || !paths.length) return;
-  unpackState.nativeBin = paths[0];
-  const field = $("unpack-native-bin");
-  if (field) field.value = paths[0];
 }
 
 async function unpackPickOutput() {
@@ -96,8 +126,6 @@ function unpackSync() {
     const el = $("unpack-" + f);
     if (el) el.value = unpackState[f];
   }
-  const binEl = $("unpack-native-bin");
-  if (binEl) binEl.value = unpackState.nativeBin;
   const nativeEl = $("unpack-native");
   if (nativeEl) nativeEl.checked = unpackState.native;
   unpackSyncNative();
@@ -174,7 +202,7 @@ async function runUnpack() {
     unbindIat: $("unpack-unbind") ? $("unpack-unbind").checked : true,
     zeroTimestamp: $("unpack-zerots") ? $("unpack-zerots").checked : true,
     native: useNative,
-    nativeBin: useNative && unpackState.nativeBin ? unpackState.nativeBin : null,
+    nativeBin: null,
   };
 
   try {

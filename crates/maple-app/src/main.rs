@@ -61,7 +61,10 @@ fn main() {
             fileio::open_pattern_file,
             fileio::save_report_file,
             fileio::import_config_file,
-            unpack_cmd::unpack_binary
+            unpack_cmd::unpack_binary,
+            unpack_cmd::native_dumper_status,
+            unpack_cmd::install_native_dumper,
+            unpack_cmd::open_release_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running MapleDumper");

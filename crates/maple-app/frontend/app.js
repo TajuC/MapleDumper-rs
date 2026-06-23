@@ -392,7 +392,8 @@ $("unpack-pick-output").addEventListener("click", unpackPickOutput);
 $("unpack-pick-packed").addEventListener("click", () => unpackPick("packed"));
 $("unpack-pick-unlicense").addEventListener("click", () => unpackPick("unlicense"));
 $("unpack-native").addEventListener("change", (e) => unpackSetNative(e.target.checked));
-$("unpack-pick-native-bin").addEventListener("click", unpackPickNativeBin);
+$("unpack-native-get").addEventListener("click", unpackGetNative);
+$("unpack-native-install").addEventListener("click", unpackInstallNative);
 $("unpack-mode-tabs")
   .querySelectorAll(".tab")
   .forEach((b) => b.addEventListener("click", () => unpackSetMode(b.dataset.umode)));
