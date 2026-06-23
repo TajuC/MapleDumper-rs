@@ -1,8 +1,10 @@
 name: Release
 
-# Cut a release by pushing an annotated tag like v0.4.0. The job builds the CLI with an embedded
-# dependency list (cargo auditable) and the Tauri desktop app installer (NSIS), generates a CycloneDX
-# SBOM, computes SHA-256 checksums, and publishes a GitHub release with everything attached.
+# Cut a release by pushing an annotated tag like v0.7.0. The job builds the CLI with an embedded
+# dependency list (cargo auditable), the Tauri desktop installer (NSIS), and the native dumper plus
+# its per-user component installer, generates CycloneDX SBOMs, computes SHA-256 checksums, and
+# publishes a GitHub release with everything attached. Re-running for an existing tag clobbers the
+# assets in place (the notes are left untouched so a curated description survives a re-cut).
 on:
   push:
     tags: ["v*"]
@@ -13,9 +15,16 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # The native dumper links Frida through bindgen (libclang) and builds Unicorn through CMake and
+      # Ninja, the same toolchain the native.yml check uses. LLVM is preinstalled on the runner.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      RUST_MIN_STACK: "67108864"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Install Ninja (Unicorn's CMake generator for the native dumper)
+        run: choco install ninja -y
       - name: Install build and SBOM tooling
         run: |
           cargo install cargo-auditable --version 0.7.4 --locked
@@ -26,6 +35,22 @@ jobs:
       - name: Build the desktop app installer (Tauri NSIS)
         working-directory: crates/maple-app
         run: cargo tauri build --bundles nsis
+      - name: Build the native dumper (excluded from the workspace, x64 only)
+        working-directory: crates/maple-unpack-native
+        run: cargo build --release -j 2
+      - name: Build the native dumper component installer
+        shell: pwsh
+        run: |
+          $pkg = Join-Path $PWD 'crates/maple-unpack-native/packaging'
+          Copy-Item crates/maple-unpack-native/target/release/maple-unpack-native.exe $pkg
+          Copy-Item crates/maple-unpack-native/target/release/unicorn.dll $pkg
+          $makensis = Get-ChildItem -Recurse "$env:LOCALAPPDATA\tauri" -Filter makensis.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $makensis) { throw 'makensis not found under the Tauri NSIS cache' }
+          $ver = $env:GITHUB_REF_NAME -replace '^v', ''
+          Push-Location $pkg
+          & $makensis.FullName "/DVERSION=$ver" "/DSRCDIR=." component.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit $LASTEXITCODE" }
+          Pop-Location
       - name: Generate a CycloneDX SBOM
         run: cargo cyclonedx --format json
       - name: Assemble artifacts and checksums
@@ -33,10 +58,17 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/mapledumper.exe dist/mapledumper.exe
-          # The Tauri NSIS installer (MapleDumper_<version>_x64-setup.exe).
+          # The lean desktop installer (MapleDumper_<version>_x64-setup.exe); the native dumper is an
+          # optional component, not bundled here.
           $setup = Get-ChildItem target/release/bundle/nsis -Filter *-setup.exe | Select-Object -First 1
           if ($setup) { Copy-Item $setup.FullName -Destination (Join-Path 'dist' $setup.Name) }
           else { throw 'desktop installer not found under target/release/bundle/nsis' }
+          # The native dumper, both raw (for the CLI / --native-bin) and as a per-user installer.
+          Copy-Item crates/maple-unpack-native/target/release/maple-unpack-native.exe dist/maple-unpack-native.exe
+          Copy-Item crates/maple-unpack-native/target/release/unicorn.dll dist/unicorn.dll
+          $comp = Get-ChildItem crates/maple-unpack-native/packaging -Filter *NativeUnpacker*setup.exe | Select-Object -First 1
+          if ($comp) { Copy-Item $comp.FullName -Destination (Join-Path 'dist' $comp.Name) }
+          else { throw 'native dumper component installer not found' }
           $sboms = @(Get-ChildItem -Recurse -Filter *.cdx.json | Where-Object FullName -NotLike '*\dist\*')
           foreach ($f in $sboms) { Copy-Item $f.FullName -Destination (Join-Path 'dist' $f.Name) }
           $sums = Get-FileHash dist/* -Algorithm SHA256 |
@@ -47,7 +79,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
+          $tag = $env:GITHUB_REF_NAME
           $assets = Get-ChildItem dist -File | ForEach-Object { $_.FullName }
-          gh release create $env:GITHUB_REF_NAME @assets `
-            --title $env:GITHUB_REF_NAME `
-            --notes "Automated release. ``mapledumper.exe`` is the CLI (built with cargo auditable; verify with: cargo audit bin mapledumper.exe). ``MapleDumper_<version>_x64-setup.exe`` is the desktop app installer (Tauri/NSIS; bundles the WebView2 bootstrapper). A CycloneDX SBOM per crate and SHA-256 checksums are attached."
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # Re-cut: replace the assets, keep whatever notes are already on the release.
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets `
+              --title $tag `
+              --notes "Automated release. ``mapledumper.exe`` is the CLI (built with cargo auditable). ``MapleDumper_<version>_x64-setup.exe`` is the lean desktop installer (Tauri/NSIS, WebView2 bootstrapper). The optional native dumper ships as ``maple-unpack-native.exe`` plus ``unicorn.dll`` and a per-user ``MapleDumper_NativeUnpacker_<version>_x64-setup.exe`` that installs them where the app and CLI look. CycloneDX SBOMs and SHA-256 checksums are attached."
+          }
