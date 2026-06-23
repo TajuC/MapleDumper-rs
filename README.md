@@ -1,6 +1,6 @@
 # MapleDumper
 
-Cross-version signature and offset toolkit for MapleStory clients. **v0.7.0**.
+Cross-version signature and offset toolkit for MapleStory clients. **v0.7.1**.
 
 [![CI](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TajuC/MapleDumper-rs/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -26,15 +26,17 @@ every version.
 
 ## Install
 
-The v0.7.0 release ships prebuilt Windows artifacts (with CycloneDX SBOMs and a `SHA256SUMS` file):
+The v0.7.1 release ships prebuilt Windows artifacts (with CycloneDX SBOMs and a `SHA256SUMS` file):
 
 | Artifact | What it is |
 |---|---|
 | `mapledumper.exe` | The command-line tool (built with `cargo auditable`). |
-| `MapleDumper_0.7.0_x64-setup.exe` | The desktop installer (Tauri NSIS). |
+| `MapleDumper_0.7.1_x64-setup.exe` | The desktop installer (Tauri NSIS). |
+| `MapleDumper_NativeUnpacker_0.7.1_x64-setup.exe` | The optional native dumper, installed per-user where the app and CLI look. It runs the protected client, so use a VM or sandbox. |
+| `maple-unpack-native.exe` + `unicorn.dll` | The native dumper binaries, for the CLI or manual placement. |
 | `*.cdx.json` SBOMs + `SHA256SUMS` | Per-crate software bill of materials and checksums. |
 
-Download from the [v0.7.0 release](https://github.com/TajuC/MapleDumper-rs/releases/tag/v0.7.0),
+Download from the [v0.7.1 release](https://github.com/TajuC/MapleDumper-rs/releases/tag/v0.7.1),
 verify the checksum against `SHA256SUMS`, then run the CLI directly or the installer for the desktop
 app. The desktop app needs the
 [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (bundled with current
