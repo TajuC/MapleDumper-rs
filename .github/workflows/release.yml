@@ -43,7 +43,12 @@ jobs:
         run: |
           $pkg = Join-Path $PWD 'crates/maple-unpack-native/packaging'
           Copy-Item crates/maple-unpack-native/target/release/maple-unpack-native.exe $pkg
-          Copy-Item crates/maple-unpack-native/target/release/unicorn.dll $pkg
+          # unicorn.dll's build-output location varies by toolchain, so find it and place it next to
+          # the exe (for the dist step) and in the packaging dir (for the installer).
+          $dll = Get-ChildItem -Recurse crates/maple-unpack-native/target/release/build -Filter unicorn.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { throw 'unicorn.dll not found under the native build dir' }
+          Copy-Item $dll.FullName crates/maple-unpack-native/target/release/unicorn.dll -Force
+          Copy-Item $dll.FullName $pkg
           $makensis = Get-ChildItem -Recurse "$env:LOCALAPPDATA\tauri" -Filter makensis.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $makensis) { throw 'makensis not found under the Tauri NSIS cache' }
           $ver = $env:GITHUB_REF_NAME -replace '^v', ''

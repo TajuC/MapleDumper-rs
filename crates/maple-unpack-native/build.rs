@@ -33,31 +33,44 @@ fn main() {
     }
 }
 
-// Pick the freshest unicorn.dll among the unicorn-engine-sys build outputs (incremental builds can
-// leave several hash-suffixed dirs behind; the newest one matches the current build).
+// Recursively find unicorn.dll among the unicorn-engine-sys build outputs. The exact subdirectory
+// (out/bin, out, or a generator- and profile-specific path) varies by toolchain, so search the whole
+// subtree rather than guess; pick the freshest when several hash-suffixed dirs exist.
 fn find_unicorn_dll(build_dir: &Path) -> Option<PathBuf> {
     let mut best: Option<(SystemTime, PathBuf)> = None;
     for entry in fs::read_dir(build_dir).ok()?.flatten() {
-        if !entry
+        if entry
             .file_name()
             .to_string_lossy()
             .starts_with("unicorn-engine-sys-")
         {
-            continue;
-        }
-        let out = entry.path().join("out");
-        for candidate in [out.join("bin").join("unicorn.dll"), out.join("unicorn.dll")] {
-            let Ok(meta) = fs::metadata(&candidate) else {
-                continue;
-            };
-            if !meta.is_file() {
-                continue;
-            }
-            let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
-            if best.as_ref().is_none_or(|(t, _)| mtime >= *t) {
-                best = Some((mtime, candidate));
-            }
+            walk_for_dll(&entry.path(), &mut best);
         }
     }
     best.map(|(_, p)| p)
+}
+
+fn walk_for_dll(dir: &Path, best: &mut Option<(SystemTime, PathBuf)>) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => walk_for_dll(&path, best),
+            Ok(_)
+                if path
+                    .file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("unicorn.dll")) =>
+            {
+                let mtime = fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                if best.as_ref().is_none_or(|(t, _)| mtime >= *t) {
+                    *best = Some((mtime, path));
+                }
+            }
+            _ => {}
+        }
+    }
 }
