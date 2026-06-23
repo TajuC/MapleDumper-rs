@@ -1,1 +1,4 @@
 /target
+# Build-time staging for the component installer; only packaging/component.nsi is tracked.
+packaging/*.exe
+packaging/*.dll
