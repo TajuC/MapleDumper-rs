@@ -381,11 +381,22 @@
                       <button id="unpack-pick-packed" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
                     </div>
                   </div>
-                  <div id="unpack-native-bin-row" class="unpack-row" hidden>
-                    <span class="unpack-label muted" data-i18n="unpack.nativeBin">maple-unpack-native (optional)</span>
-                    <div class="unpack-pick">
-                      <input id="unpack-native-bin" class="select unpack-path mono" type="text" readonly data-i18n-ph="unpack.nativeBinPh" placeholder="Auto-detect beside the app or on PATH…" />
-                      <button id="unpack-pick-native-bin" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.browse">Browse</span></button>
+                  <div id="unpack-native-setup" class="unpack-row" hidden>
+                    <span class="unpack-label muted" data-i18n="unpack.nativeStatus">Native dumper</span>
+                    <div class="unpack-native-state">
+                      <div id="unpack-native-ready" class="native-ready" hidden>
+                        <span class="ico" data-icon="check"></span>
+                        <span data-i18n="unpack.nativeReady">Installed and ready</span>
+                        <span id="unpack-native-path" class="mono muted"></span>
+                      </div>
+                      <div id="unpack-native-missing" hidden>
+                        <p class="muted" data-i18n="unpack.nativeMissing">Not installed. Download the native dumper, then install it, or point at a copy you already have.</p>
+                        <p class="native-warn" data-i18n="unpack.nativeWarn">It runs the protected client, so use a virtual machine or a sandbox.</p>
+                        <div class="native-actions">
+                          <button id="unpack-native-get" class="btn btn-soft"><span class="ico" data-icon="download"></span><span data-i18n="unpack.nativeGet">Download</span></button>
+                          <button id="unpack-native-install" class="btn btn-soft"><span class="ico" data-icon="folder"></span><span data-i18n="unpack.nativeInstall">Install from file</span></button>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div id="unpack-unlicense-row" class="unpack-row">

@@ -4679,3 +4679,31 @@ button.btn-ico:hover {
   margin-left: 32px;
   margin-right: 32px;
 }
+
+/* Native dumper setup panel (Unpack view). */
+.unpack-native-state {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.native-ready {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.native-ready .ico {
+  color: var(--ok, #38d39f);
+}
+#unpack-native-missing p {
+  margin: 0 0 6px;
+}
+.native-warn {
+  color: var(--warn, #e2b341);
+  font-size: 12px;
+}
+.native-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}

@@ -10,7 +10,8 @@
 use std::path::Path;
 
 use maple_core::{
-    CleanOptions, Progress, Stage, UnpackReport, clean_to_path, run_native_dumper, unpack_to_path,
+    CleanOptions, Progress, Stage, UnpackReport, clean_to_path, component_dir,
+    locate_native_dumper, run_native_dumper, unpack_to_path,
 };
 use tauri::Emitter;
 
@@ -113,4 +114,58 @@ pub async fn unpack_binary(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+const RELEASE_URL: &str = "https://github.com/TajuC/MapleDumper-rs/releases/latest";
+
+/// Where the native dumper resolves, if at all, so the panel can guide setup before a run instead of
+/// failing at dump time. Mirrors the engine's discovery (beside this exe, the per-user component dir,
+/// then `PATH`).
+#[tauri::command]
+pub fn native_dumper_status() -> Option<String> {
+    let near = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf));
+    locate_native_dumper(None, near.as_deref()).map(|p| p.display().to_string())
+}
+
+/// Install a native dumper the user points at into the per-user component directory, copying its
+/// `unicorn.dll` alongside it so the dumper can start. Returns the install directory. This is the
+/// offline path: the app never downloads, it only copies files the user already has.
+#[tauri::command]
+pub fn install_native_dumper(picked: String) -> Result<String, String> {
+    let src = Path::new(&picked);
+    if !src.is_file() {
+        return Err(format!("not a file: {picked}"));
+    }
+    let src_dir = src
+        .parent()
+        .ok_or_else(|| "the chosen file has no parent directory".to_string())?;
+    let dll = src_dir.join("unicorn.dll");
+    if !dll.is_file() {
+        return Err(
+            "unicorn.dll must sit next to the dumper; download both from the release and keep them together"
+                .to_string(),
+        );
+    }
+    let dest =
+        component_dir().ok_or_else(|| "could not resolve the component directory".to_string())?;
+    std::fs::create_dir_all(&dest)
+        .map_err(|e| format!("could not create {}: {e}", dest.display()))?;
+    std::fs::copy(src, dest.join("maple-unpack-native.exe"))
+        .map_err(|e| format!("could not copy the dumper: {e}"))?;
+    std::fs::copy(&dll, dest.join("unicorn.dll"))
+        .map_err(|e| format!("could not copy unicorn.dll: {e}"))?;
+    Ok(dest.display().to_string())
+}
+
+/// Open the releases page in the default browser so the user can download the native dumper. The app
+/// stays offline; this hands a fixed, trusted URL to the OS.
+#[tauri::command]
+pub fn open_release_page() -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", RELEASE_URL])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open the browser: {e}"))
 }
