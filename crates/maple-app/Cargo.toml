@@ -19,3 +19,6 @@ rfd = "0.17"
 rusqlite = { version = "0.40", features = ["bundled"] }
 iced-x86 = "1"
 blake3 = "1"
+
+[lints]
+workspace = true
