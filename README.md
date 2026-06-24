@@ -442,6 +442,29 @@ this repository).
 
 ## Architecture at a glance
 
+```mermaid
+flowchart TB
+    CLI["maple-cli (mapledumper.exe)"] --> CORE
+    APP["maple-app (Tauri desktop)"] --> CORE
+    APP -. scan history .-> DB[("SQLite")]
+
+    subgraph CORE["maple-core (one engine, both shells delegate to it)"]
+        SRC["memory sources: process.rs (live, Windows), fileimage.rs (PE on disk)"]
+        PAT["pattern.rs: grammar and parser"]
+        SCAN["scanner.rs: AVX2/scalar masked matcher, multi-pattern index"]
+        RES["resolver.rs: decode-driven resolver (iced-x86)"]
+        SIG["sigmaker/: cross-build Signature Maker, relocation anchors"]
+        SRC --> SCAN
+        PAT --> SCAN
+        SCAN --> RES
+        SCAN --> SIG
+        RES --> SIG
+    end
+
+    RES --> OUT["exports: C/C++ header, report, Cheat Engine table"]
+    SIG --> OUT
+```
+
 | Crate        | Role                                                                          |
 |--------------|-------------------------------------------------------------------------------|
 | `maple-core` | The engine: pattern parsing, the SIMD scanner, process memory access, the resolver, the scan pipeline, the Signature Maker, the PE disk reader, and the output writers. |
