@@ -106,7 +106,10 @@ pub use inspect::{DisasmLine, FunctionInsight, VtableInsight, inspect_function};
 use bytepath::{branch_sites, candidate_at, mem_target, ptr_sites, single_build_aob};
 use chain::relocate_path;
 use ensemble::{anchor_landing, ensemble_decide};
-pub use identity::*;
+pub use identity::{
+    FnIdentity, StringAnchor, best_fingerprint_match, fn_identity, make_string_anchor,
+    resolve_string_anchor, xref_count,
+};
 use relocate::{
     caller_relocate, constant_relocate, encoding_relocate, fingerprint_relocate, graph_relocate,
     import_relocate, relocation_shortlists, strand_relocate, string_anchor_candidate,
