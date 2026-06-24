@@ -15,8 +15,15 @@ docs/
 
 # Local-only scratch prompts and notes (kept off the remote)
 /mapledumper_*_prompt.md
+/MAPLEDUMPER_*_PROMPT.md
 /*.scratch.md
 
-# Local-only audit artifacts (kept off the remote)
+# Local-only audit artifacts and numbered review notes (kept off the remote)
 /audit-output.zip
 /audit-output/
+/[0-9]*-*.md
+
+# Local-only design mockups, release staging, and agent config (kept off the remote)
+/vision/
+/reldist/
+.claude/
