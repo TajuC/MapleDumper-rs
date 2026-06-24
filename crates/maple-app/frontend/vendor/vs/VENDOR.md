@@ -24,5 +24,5 @@ are reviewed at the supply-chain level (version, source, license, integrity) rat
 2. Replace the contents of this directory with its `min/vs` tree. Keep it here at
    `crates/maple-app/frontend/vendor/vs/`; the frontend loads it from `vendor/vs`, not the repo
    root, so do not recreate a top-level `vs/`.
-3. Update the `Version` row here and the entry in `THIRD-PARTY-LICENSES.md`.
+3. Update the `Version` row here and the entry in `docs/THIRD-PARTY-LICENSES.md`.
 4. Re-run the desktop app and the frontend render test (`node crates/maple-app/frontend_test.cjs`).

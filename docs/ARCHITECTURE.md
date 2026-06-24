@@ -68,4 +68,4 @@ with `user_version` migrations and content-hash de-duplication.
 Preserve the load-bearing safety properties: the fuzzed PE parser, the differentially-tested AVX2
 matcher, the decode-driven resolver, the export gate that prevents an ambiguous match from becoming a
 trusted offset, and the one-directional scoring (grade is always the band of the final score). See
-`CONTRIBUTING.md` for the build and quality bar.
+`.github/CONTRIBUTING.md` for the build and quality bar.

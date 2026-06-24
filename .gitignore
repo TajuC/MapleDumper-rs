@@ -10,8 +10,11 @@
 # Tauri build-time generated ACL/permission schemas
 crates/maple-app/gen/
 
-# Local-only documentation suite (kept off the remote)
-docs/
+# Public docs live under docs/; the local-only documentation suite stays off the remote.
+docs/*
+!docs/ARCHITECTURE.md
+!docs/CROSS_VERSION_BASELINE.md
+!docs/THIRD-PARTY-LICENSES.md
 
 # Local-only scratch prompts and notes (kept off the remote)
 /mapledumper_*_prompt.md

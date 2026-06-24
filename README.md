@@ -401,7 +401,7 @@ CUserLocal = 48 8B 0D ?? ?? ?? ?? @kind=ptr @section=code @hits=unique
 | `@instr`    | a number                              | Which decoded instruction in the match window to resolve from. |
 | `@operand`  | a number                              | Which operand of that instruction to read. |
 
-See [patterns.sample.txt](patterns.sample.txt) for a worked example.
+See [examples/patterns.sample.txt](examples/patterns.sample.txt) for a worked example.
 
 A live process exposes page protection but not its on-disk section table, so `@section` is enforced
 at the granularity that protection allows: `code` requires the resolved target to land in an

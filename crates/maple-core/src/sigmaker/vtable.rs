@@ -54,7 +54,7 @@ const THUNK_INSTRS: usize = 2;
 // The structural match is accepted only at this weighted-agreement floor and runner-up margin; below
 // them the class has refactored past the per-slot fingerprint and the constructor-string grounding is
 // tried instead. Measured basis: on the GMS lineage the structural chain holds within v83-v91 and
-// declines to zero at the v95 class refactor (see CROSS_VERSION_BASELINE.md), and the round-trip sweep
+// declines to zero at the v95 class refactor (see docs/CROSS_VERSION_BASELINE.md), and the round-trip sweep
 // records zero conclusive wrong addresses under these gates. An installer-grounded match cannot report a
 // real weighted agreement (it is located by string, not by alignment), so it returns the sentinel score
 // below to mark itself grounded rather than structural. These are `pub(super)` so the production gate and
