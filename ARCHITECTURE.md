@@ -9,7 +9,7 @@ desktop app delegate to it, so a fix lands everywhere.
 | Crate | Role |
 |-------|------|
 | `maple-core` | The engine. Pattern grammar and parser, the AVX2/scalar masked scanner and the multi-pattern index, the decode-driven resolver, the scan pipeline, the Signature Maker (generation, cross-build validation, holdout, negative corpus, scoring), the on-disk PE reader, live process/memory access (Windows), and the output writers. |
-| `maple-cli` | A `clap` front end dispatching `scan`/`lint`/`diff`/`asm`/`mksig`/`profile`, with a stable 0-6 exit-code contract and `--json` output. |
+| `maple-cli` | A `clap` front end with one module per command (`scan`/`lint`/`diff`/`asm`/`mksig`/`profile`/`unpack` under `commands/`), a stable 0-6 exit-code contract, and `--json` output. |
 | `maple-app` | A Tauri v2 desktop workspace: a Rust backend wiring commands to per-feature modules, each delegating to `maple-core`, and a webview frontend. |
 
 ## Dependency direction
@@ -27,8 +27,9 @@ output writers.
   matches it with an AVX2 path (runtime-detected, scalar fallback) or a single-pass multi-pattern index.
 - `resolver.rs` lowers a resolve plan to a granular operation and executes it by decoding instructions
   (never by byte-scanning), with a typed failure taxonomy.
-- `engine.rs` orchestrates the scan: reader threads stream fixed-size blocks through a bounded channel
-  while a rayon pool scans them, then resolves matches and records partial-read gaps.
+- `engine/` orchestrates the scan (`scan.rs`): reader threads stream fixed-size blocks through a
+  bounded channel while a rayon pool scans them, then resolves matches and records partial-read gaps.
+  `types.rs` holds the result vocabulary and `profile.rs` the read/scan/resolve benchmark pipeline.
 - `fileimage.rs` is a bounds-checked, fuzz-tested PE32/PE32+ reader (sections, relocations, pack
   detection, RVA mapping).
 - `process.rs` (Windows) enumerates processes, modules, and memory regions with least-privilege,
