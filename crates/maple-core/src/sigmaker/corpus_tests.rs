@@ -1,8 +1,17 @@
 //! Real-corpus cross-version validation harnesses (run with `--ignored`; they need the GMS clients
-//! in X:\Client_Unpacked). Kept out of the inline unit-test module so mod.rs stays a thin orchestrator
+//! in X:\Client_Unpacked, or wherever MAPLE_CORPUS_DIR points). Kept out of the inline unit-test module so mod.rs stays a thin orchestrator
 //! (Phase 9).
 
 use super::*;
+
+/// Root of the local GMS corpus. Overridable with MAPLE_CORPUS_DIR so the ignored sweeps run from
+/// any checkout, and None when the corpus is absent so the harnesses skip instead of panicking.
+fn corpus_dir() -> Option<std::path::PathBuf> {
+    let dir = std::env::var_os("MAPLE_CORPUS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"X:\Client_Unpacked"));
+    dir.is_dir().then_some(dir)
+}
 
 // Phase 7: measure the global call-graph alignment on the real lineage. It seeds with the 1:1 string
 // anchors between two builds and propagates the correspondence by neighbour consensus; a function it
@@ -13,13 +22,14 @@ use super::*;
 // within-lineage hop (v83 -> v84, where seeds are plentiful and propagation should reach widely) and
 // the hard major break (v83 -> v95.1, where the vtable chain collapses to zero).
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn graph_alignment_propagates_beyond_seeds_and_is_reverse_consistent() {
     use crate::fileimage::FileImage;
     use std::collections::BTreeSet;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v83.1_U_DEVM.exe",
         "GMS_v84.1_U_DEVM.exe",
@@ -122,14 +132,15 @@ fn graph_alignment_propagates_beyond_seeds_and_is_reverse_consistent() {
 // would justify wiring these seed channels into `graph_relocate`; a null result is the honest finding that
 // the break is seed-quality-limited, not merely seed-count-limited.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 #[allow(clippy::too_many_lines)]
 fn graph_seed_densification_across_v95_is_measured_and_reverse_consistent() {
     use crate::fileimage::FileImage;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v83.1_U_DEVM.exe",
         "GMS_v84.1_U_DEVM.exe",
@@ -286,12 +297,13 @@ fn graph_seed_densification_across_v95_is_measured_and_reverse_consistent() {
 // rather than only argued. This is what lets `best_fingerprint_match`/`fingerprint_topk` switch to the fast
 // scan with the false-positive floor and the golden snapshot untouched.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn fingerprint_scan_is_byte_equivalent_to_the_naive_decode_on_real_gms() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v61.1_U_DEVM.exe",
         "GMS_v83.1_U_DEVM.exe",
@@ -335,16 +347,18 @@ fn fingerprint_scan_is_byte_equivalent_to_the_naive_decode_on_real_gms() {
 // AOB target the user reported (v83 0x4D6D95) and confirm the bundle is populated with real data, so the
 // frontend panel has something to render.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn inspect_function_populates_on_real_gms() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
-    let p = Path::new(r"X:\Client_Unpacked\GMS_v83.1_U_DEVM.exe");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
+    let p = dir.join("GMS_v83.1_U_DEVM.exe");
     if !p.exists() {
         eprintln!("real GMS client not present; skipping");
         return;
     }
-    let fi = FileImage::open(p).expect("open v83");
+    let fi = FileImage::open(&p).expect("open v83");
     let pack = fi.pack_report();
     let img = ImageInput {
         label: "v83".into(),
@@ -413,14 +427,15 @@ fn inspect_function_populates_on_real_gms() {
 // misfire, so they lower coverage without inflating the false-positive count: declining is correct.
 
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 #[allow(clippy::too_many_lines)]
 fn cross_version_relocation_coverage_and_false_positive_sweep() {
     use crate::fileimage::FileImage;
     use std::collections::{BTreeSet, HashMap};
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     // The full GMS unprotected lineage (v61.1 -> v111.1), spanning several real major refactors, not
     // just the single v95 structural break. Themida/VMProtect builds (v116/v117/v126/v131) are
     // statically unanalyzable and excluded. The reference is v83 and the headline round-trip target is
@@ -1197,14 +1212,15 @@ fn cross_version_relocation_coverage_and_false_positive_sweep() {
 // before any grade-changing recalibration: it quantifies whether the current grades predict
 // cross-version survival, so a change can be shown to improve calibration rather than just move it.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 #[allow(clippy::too_many_lines)]
 fn scoring_grade_calibration_on_real_gms() {
     use crate::fileimage::FileImage;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v83.1_U_DEVM.exe",
         "GMS_v84.1_U_DEVM.exe",
@@ -1326,12 +1342,13 @@ fn scoring_grade_calibration_on_real_gms() {
 // DECLINES here (its uniqueness-margin gate is not met) rather than emit an ambiguous guess. We
 // assert exactly this: a perfect match at the true site, and no usable uniqueness margin globally.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn fingerprint_relocation_on_real_gms_v83_to_v84_is_measured_and_honest() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let v83_path = dir.join("GMS_v83.1_U_DEVM.exe");
     let v84_path = dir.join("GMS_v84.1_U_DEVM.exe");
     if !v83_path.exists() || !v84_path.exists() {
@@ -1412,12 +1429,13 @@ fn fingerprint_relocation_on_real_gms_v83_to_v84_is_measured_and_honest() {
 //   v84 -> v88 (a real recompile): register allocation shifts, the leading-signature prefilter
 //     either matches nothing or a tied family, and the relocation DECLINES rather than guess.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn encoding_relocation_on_real_gms_is_unique_on_v84_and_declines_on_recompile() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let paths = [
         dir.join("GMS_v83.1_U_DEVM.exe"),
         dir.join("GMS_v84.1_U_DEVM.exe"),
@@ -1523,12 +1541,13 @@ fn encoding_relocation_on_real_gms_is_unique_on_v84_and_declines_on_recompile() 
 // that uniquely matches v88. Self-discovering: it walks v83 prologues until it finds a string anchor
 // that resolves uniquely in both builds, then asserts the v88 AOB is real and unique.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn string_anchor_mints_a_working_aob_across_a_real_recompile() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let p83 = dir.join("GMS_v83.1_U_DEVM.exe");
     let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
     if !p83.exists() || !p88.exists() {
@@ -1635,12 +1654,13 @@ fn string_anchor_mints_a_working_aob_across_a_real_recompile() {
 // to v88 and is handed a fresh v88 AOB that uniquely matches v88. Demonstrates finding a function
 // across a recompile by a recompile-stable import set, for a function that references no string.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn import_anchor_relocates_a_network_function_across_a_real_recompile() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let p84 = dir.join("GMS_v84.1_U_DEVM.exe");
     let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
     if !p84.exists() || !p88.exists() {
@@ -1706,12 +1726,13 @@ fn import_anchor_relocates_a_network_function_across_a_real_recompile() {
 // it. The engine returns a v88 shortlist of the structural family it belongs to, each with a minted
 // AOB, for manual or runtime disambiguation, instead of nothing. Records the honest candidate list.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn degenerate_target_yields_a_v88_shortlist_on_real_gms() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let p84 = dir.join("GMS_v84.1_U_DEVM.exe");
     let p88 = dir.join("GMS_v88.1_U_DEVM.exe");
     if !p84.exists() || !p88.exists() {
@@ -1770,12 +1791,13 @@ fn degenerate_target_yields_a_v88_shortlist_on_real_gms() {
 // widest-path chain, pinned where confidence holds and reported unreached past the structural break,
 // then its per-build AOBs are collapsed into contiguous version ranges.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn vtable_relocation_reports_version_ranges_on_real_gms() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v83.1_U_DEVM.exe",
         "GMS_v84.1_U_DEVM.exe",
@@ -1863,12 +1885,13 @@ fn vtable_relocation_reports_version_ranges_on_real_gms() {
 // v91 -> v95 structural break the vtable cannot cross. Checks the method's own string and import
 // anchors, then whether any of its callers string-anchor (so a caller-relative bridge is viable).
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn probe_v91_to_v95_handles_for_the_clean_method() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let needed = [
         "GMS_v91.1_U_DEVM.exe",
         "GMS_v95.1_U_DEVM.exe",
@@ -1969,13 +1992,14 @@ fn probe_v91_to_v95_handles_for_the_clean_method() {
 // is the way across the v95 break for any function with a stable handle (a string survives a
 // recompile that moves every byte), and it is fully automated end to end.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn automated_v91_to_v95_aobs_via_string_anchor() {
     use crate::fileimage::FileImage;
     use std::collections::BTreeSet;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     if !dir.join("GMS_v91.1_U_DEVM.exe").exists() || !dir.join("GMS_v95.1_U_DEVM.exe").exists() {
         eprintln!("real GMS clients not present; skipping");
         return;
@@ -2059,13 +2083,14 @@ fn automated_v91_to_v95_aobs_via_string_anchor() {
 // as that caller's matching callee in v95.1, then mint and validate a fresh AOB there. Proves the
 // automated bridge for functions reachable only through a caller.
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn caller_relative_bridges_non_string_functions_v91_to_v95() {
     use crate::fileimage::FileImage;
     use std::collections::BTreeSet;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     if !dir.join("GMS_v91.1_U_DEVM.exe").exists() || !dir.join("GMS_v95.1_U_DEVM.exe").exists() {
         eprintln!("real GMS clients not present; skipping");
         return;
@@ -2188,7 +2213,7 @@ fn caller_relative_bridges_non_string_functions_v91_to_v95() {
 }
 
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
     // Phase 4: the ensemble must not introduce a confident wrong address. For a sample of v83 functions
     // that take the relocation path, run the ensemble v83 -> v95.1; for every confident (A/B) result,
@@ -2196,9 +2221,10 @@ fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
     // origin. A confident result that does not round-trip would be a wrong address; the floor is zero.
     use crate::fileimage::FileImage;
     use std::collections::BTreeSet;
-    use std::path::Path;
 
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = ["GMS_v83.1_U_DEVM.exe", "GMS_v95.1_U_DEVM.exe"];
     if names.iter().any(|n| !dir.join(n).exists()) {
         eprintln!("real GMS clients not present; skipping");
@@ -2318,11 +2344,12 @@ fn ensemble_relocation_holds_the_fp_floor_on_real_gms() {
 // against an impostor (a different build function). A useful channel scores true twins clearly above
 // impostors; measured on a clean recompile (v83 -> v84) and the major break (v83 -> v95.1).
 #[test]
-#[ignore = "needs the real GMS clients in X:\\Client_Unpacked; run with --ignored"]
+#[ignore = "needs the real GMS clients (set MAPLE_CORPUS_DIR, default X:\\Client_Unpacked); run with --ignored"]
 fn data_flow_strands_separate_true_twins_from_impostors() {
     use crate::fileimage::FileImage;
-    use std::path::Path;
-    let dir = Path::new(r"X:\Client_Unpacked");
+    let Some(dir) = corpus_dir() else {
+        return;
+    };
     let names = [
         "GMS_v83.1_U_DEVM.exe",
         "GMS_v84.1_U_DEVM.exe",
