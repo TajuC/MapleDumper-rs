@@ -486,6 +486,7 @@ body {
   flex-direction: column;
   line-height: 1.35;
   min-width: 0;
+  margin-right: auto;
 }
 #engine-badge {
   font-size: 12px;
@@ -3406,7 +3407,7 @@ button.btn-ico:hover {
   border-radius: 50%;
   background: var(--green);
   box-shadow: 0 0 8px var(--green);
-  margin-left: auto;
+  align-self: center;
   animation: md-pulse 1.8s infinite;
 }
 
