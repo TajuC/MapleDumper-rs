@@ -5,6 +5,48 @@ the project aims to follow Semantic Versioning while in its 0.x line.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-24
+
+A maintenance release focused on internal structure and repository layout. No engine behavior or
+output changes; the golden snapshot is byte-stable.
+
+### Changed
+- Reorganized the repository root: the community health files moved under `.github/`, the project docs
+  (`ARCHITECTURE`, `CROSS_VERSION_BASELINE`, `THIRD-PARTY-LICENSES`) under `docs/`, and the worked
+  pattern sample under `examples/`.
+
+### Fixed
+- The workspace clippy lint policy now applies to the desktop app crate; it was previously inert there.
+- Centered the engine status indicator in the desktop app's status card.
+
+### Internal
+- Split the CLI binary from a single roughly 2,400-line `main.rs` into a module tree (one module per
+  subcommand under `commands/`, plus exit, cli, config, attach, patterns, json, and report).
+- Split the engine's scan module into an `engine/` tree (result types, the scan and resolve pipeline,
+  and the profiling sub-pipeline) behind a stable facade.
+- Tightened the sigmaker identity re-export to an explicit list, gave the workspace an inheritable
+  package description, and made the cross-version corpus harness root configurable through
+  `MAPLE_CORPUS_DIR` with a graceful skip when the corpus is absent.
+
+## [0.7.1] - 2026-06-23
+
+### Added
+- The native dumper now ships as an optional per-user component: a discovery path that finds it in a
+  per-user component directory, a component installer wired into the release automation, and a guided
+  setup panel in the desktop app's Unpack view.
+
+## [0.7.0] - 2026-06-22
+
+A reverse-engineering release: native unpacking and a redesigned desktop interface.
+
+### Added
+- A native Themida/WinLicense dumper (`maple-unpack-native`, a Frida and Unicorn driver) that unpacks a
+  protected client to a clean binary, attached to releases alongside the CLI and the installer.
+- The Aurora desktop interface, a glass redesign of the app frontend.
+
+### Changed
+- Relicensed the project to GPL-3.0-or-later, since the native dumper is a port of GPL-licensed work.
+
 ## [0.6.0] - 2026-06-10
 
 A desktop-app release: ship the GUI, surface the engine's full analysis, and add a deep per-function
