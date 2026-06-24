@@ -9,8 +9,8 @@ Cross-version signature and offset toolkit for MapleStory clients. **v0.7.2**.
 
 MapleDumper finds, generates, and validates byte signatures and offsets that survive client patches.
 It attaches to a running process, scans the target module with an AVX2-accelerated masked matcher,
-resolves matches into stable module-relative RVAs, and emits a reusable C/C++ header, a Cheat Engine
-table, or a plain report. Its headline feature, the **Signature Maker**, reads several client builds
+resolves matches into stable module-relative RVAs, and emits a reusable C/C++ header or a plain
+report. Its headline feature, the **Signature Maker**, reads several client builds
 straight from disk and produces the highest-confidence pattern that resolves the same target in
 every version.
 
@@ -227,7 +227,7 @@ Launch `maple-app.exe`. In the Workspace view:
    switch to **Find by window class** to locate it by class instead of name. **Code regions only**
    (on by default) scans executable memory; turn it off to scan the whole module.
 3. Load or edit your pattern list (Patterns or Editor views), then press **Start Scan**.
-4. Inspect any result, then **Export** an `offsets.h`, a Cheat Engine table, or a plain report.
+4. Inspect any result, then **Export** an `offsets.h`, a plain report, or a Cheat Engine table.
 5. Every scan is saved to **History**: revisit it, compare two builds, open the **Matrix** to track
    an offset across all versions, or click a changed symbol for its bytes and disassembly.
 
@@ -441,6 +441,29 @@ own client builds (the real clients are copyrighted and not redistributable, so 
 this repository).
 
 ## Architecture at a glance
+
+```mermaid
+flowchart TB
+    CLI["maple-cli (mapledumper.exe)"] --> CORE
+    APP["maple-app (Tauri desktop)"] --> CORE
+    APP -. scan history .-> DB[("SQLite")]
+
+    subgraph CORE["maple-core (one engine, both shells delegate to it)"]
+        SRC["memory sources: process.rs (live, Windows), fileimage.rs (PE on disk)"]
+        PAT["pattern.rs: grammar and parser"]
+        SCAN["scanner.rs: AVX2/scalar masked matcher, multi-pattern index"]
+        RES["resolver.rs: decode-driven resolver (iced-x86)"]
+        SIG["sigmaker/: cross-build Signature Maker, relocation anchors"]
+        SRC --> SCAN
+        PAT --> SCAN
+        SCAN --> RES
+        SCAN --> SIG
+        RES --> SIG
+    end
+
+    RES --> OUT["exports: C/C++ header, report, Cheat Engine table"]
+    SIG --> OUT
+```
 
 | Crate        | Role                                                                          |
 |--------------|-------------------------------------------------------------------------------|

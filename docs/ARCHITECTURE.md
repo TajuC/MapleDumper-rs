@@ -45,7 +45,7 @@ A target is attached (by PID, name, or window class) or a client `.exe` is read 
 regions are enumerated, patterns are compiled, and the pipeline scans them into matches. Each match is
 resolved to a module-relative RVA (ASLR-immune) and validated against its expected section; only
 unambiguous, in-module results are exportable. Output is sorted, de-duplicated, and emitted as a C/C++
-header, a Cheat Engine table, or a plain report.
+header, a plain report, or a Cheat Engine table.
 
 ## Data flow (signature generation)
 
