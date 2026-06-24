@@ -6,7 +6,7 @@ function ensureEditor() {
   if (monacoLoading) return;
   monacoLoading = true;
   $("editor-host").innerHTML = `<div style="padding:18px;color:#64748b">${esc(t("ed.loading"))}</div>`;
-  require.config({ paths: { vs: "vs" } });
+  require.config({ paths: { vs: "vendor/vs" } });
   require(["vs/editor/editor.main"], () => {
     monaco.languages.register({ id: "maplepat" });
     monaco.languages.setMonarchTokensProvider("maplepat", {
