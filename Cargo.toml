@@ -9,6 +9,7 @@ exclude = ["crates/maple-unpack-native"]
 version = "0.7.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
+description = "Cross-version signature and offset toolkit for MapleStory clients"
 authors = ["TajuC"]
 repository = "https://github.com/TajuC/MapleDumper-rs"
 rust-version = "1.95"

@@ -571,7 +571,7 @@ $("modal-ok").addEventListener("click", async () => {
 
 window.MonacoEnvironment = {
   getWorkerUrl() {
-    return "vs/base/worker/workerMain.js";
+    return "vendor/vs/base/worker/workerMain.js";
   },
 };
 

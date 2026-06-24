@@ -4,6 +4,6 @@
 *.ico binary
 *.jpg binary
 
-# Vendored Monaco Editor distribution: exclude from language stats and diffs (see vs/VENDOR.md).
-crates/maple-app/frontend/vs/** linguist-vendored
-crates/maple-app/frontend/vs/** -diff
+# Vendored Monaco Editor distribution: exclude from language stats and diffs (see vendor/vs/VENDOR.md).
+crates/maple-app/frontend/vendor/vs/** linguist-vendored
+crates/maple-app/frontend/vendor/vs/** -diff
