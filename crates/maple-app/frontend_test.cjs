@@ -98,9 +98,22 @@ const driver = `
     { label: "E8 ?? ?? ?? ?? 48 83 C4 ??", report: fakeReport, cross: null, error: null },
     { label: "0x24190", report: fakeReport, cross: { expected_rva: "0x24190", matched_rva: "0x24190", agrees: true }, error: null },
     { label: "zz zz", report: null, cross: null, error: "invalid signature: bad hex byte 'zz'" },
-  ] };
+  ], warnings: ["0x1000 bytes of MapleStory.exe could not be read from the live process and were left as zero"] };
   renderSigResults();
   globalThis.__reportHtml = document.getElementById("sig-results").innerHTML;
+  document.getElementById("w-target").value = "MapleStory.exe";
+  sigSetMode("ref");
+  sigSetRefSrc("live");
+  document.getElementById("sig-rva").value = ["MapleStory.exe+0x4D6D95", "0x8D6D95"].join(String.fromCharCode(10));
+  globalThis.__liveJobs = JSON.stringify(buildSigJobs());
+  globalThis.__liveProc = document.getElementById("sig-live-proc").value;
+  globalThis.__liveValid = sigRvaValidity();
+  globalThis.__liveLabel = document.getElementById("sig-rva-label").textContent;
+  sigSetRefSrc("file");
+  globalThis.__fileJobs = JSON.stringify(buildSigJobs());
+  globalThis.__fileValid = sigRvaValidity();
+  sigSetMode("aob");
+  document.getElementById("sig-rva").value = "";
   // A declined 3-target run (template-clone target): no chosen signature, but a structural family and
   // partial byte matches are surfaced, and absolute addressing (base + rva) is exercised via "both" mode.
   state.addrMode = "both";
@@ -192,6 +205,15 @@ const rep = sandbox.__reportHtml || "";
 check(rep.includes("E8 ?? ?? ?? ??") && rep.includes("_CALL"), "chosen AOB/suffix missing");
 check(rep.includes(">A<"), "chosen grade badge missing");
 check(rep.includes("0x24190"), "resolved target RVA missing from per-version table");
+check(rep.includes("sig-warn") && rep.includes("could not be read from the live process"), "run warnings missing");
+const liveJobs = JSON.parse(sandbox.__liveJobs || "[]");
+check(liveJobs.length === 2 && liveJobs.every((j) => j.type === "ref" && j.reference.kind === "live"), "live reference jobs malformed");
+check(sandbox.__liveProc === "MapleStory.exe", "live process should prefill from the workspace target");
+check(sandbox.__liveValid === true, "module+offset should validate against a live reference");
+check(/module\+offset/.test(sandbox.__liveLabel || ""), "address label should switch to the live form");
+const fileJobs = JSON.parse(sandbox.__fileJobs || "[]");
+check(fileJobs.length === 2 && fileJobs.every((j) => j.reference.kind === "file"), "file reference jobs malformed");
+check(sandbox.__fileValid === false, "module+offset is not an RVA for a file reference");
 check(rep.includes("Score breakdown") && rep.includes("sig-sc-fill"), "score breakdown bars missing");
 check(rep.includes("Unique") && rep.includes(">91<") && rep.includes("Final") && rep.includes(">88<"), "sub-score values missing");
 check(rep.includes("Why this grade") && rep.includes("callee fingerprint stable across builds"), "candidate reasons missing");

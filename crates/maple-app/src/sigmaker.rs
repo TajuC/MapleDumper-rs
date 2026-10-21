@@ -1,19 +1,29 @@
 //! The Signature Maker feature: inspect a PE for packing, and generate
 //! cross-version byte signatures (AOB / ref-RVA / cross) over a set of client
-//! binaries, with per-job progress events and holdout validation.
+//! binaries and, optionally, a module snapshotted from a running process, with
+//! per-job progress events and holdout validation.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use maple_core::{
-    FileImage, FunctionInsight, ImageInput, NegativeEvidence, SigCandidate, SigOptions, SigReport,
-    SigStage, TargetSpec, apply_negatives, generate_cross_with_progress, generate_with_progress,
-    inspect_function, make_string_anchor, negative_corpus_hits, try_signature_from_aob,
+    FileImage, FunctionInsight, ImageInput, ModuleSnapshot, NegativeEvidence, SigCandidate,
+    SigOptions, SigReport, SigStage, TargetSpec, apply_negatives, generate_cross_with_progress,
+    generate_with_progress, inspect_function, make_string_anchor, negative_corpus_hits,
+    try_signature_from_aob,
 };
 use tauri::Emitter;
 
 use crate::state::AppState;
+
+/// Where an address-based job's reference build comes from.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum RefSource {
+    File { path: String },
+    Live,
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -22,14 +32,23 @@ enum SigJob {
         sig: String,
     },
     Ref {
-        ref_path: String,
+        reference: RefSource,
         rva: String,
     },
     Cross {
         sig: String,
-        ref_path: String,
+        reference: RefSource,
         rva: String,
     },
+}
+
+/// A running process whose mapped module serves as a build. An empty `module` means the process's
+/// main module.
+#[derive(Deserialize)]
+struct LiveSource {
+    process: String,
+    #[serde(default)]
+    module: String,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +57,8 @@ pub struct SigGenRequest {
     jobs: Vec<SigJob>,
     #[serde(default)]
     negatives: Vec<String>,
+    #[serde(default)]
+    live: Option<LiveSource>,
 }
 
 #[derive(Serialize)]
@@ -205,6 +226,7 @@ struct SigJobResultView {
 #[derive(Serialize)]
 pub struct SigGenResponse {
     jobs: Vec<SigJobResultView>,
+    warnings: Vec<String>,
 }
 
 fn sig_cand_view(c: &SigCandidate) -> SigCandView {
@@ -546,13 +568,117 @@ fn stage_phase(stage: SigStage) -> (&'static str, u32, u32) {
     }
 }
 
+const CANCELLED: &str = "signature generation cancelled";
+
+struct LiveCapture {
+    module: String,
+    snapshot: ModuleSnapshot,
+}
+
+#[cfg(windows)]
+fn capture_live(src: &LiveSource, cancel: &AtomicBool) -> Result<LiveCapture, String> {
+    use maple_core::{AttachOptions, Locator, Target};
+
+    let process = src.process.trim();
+    if process.is_empty() {
+        return Err("enter the live process to use as the reference".to_string());
+    }
+    let module = match src.module.trim() {
+        "" => process,
+        m => m,
+    };
+    let opts = AttachOptions {
+        wait: false,
+        timeout: None,
+        poll: std::time::Duration::from_millis(300),
+    };
+    let failed = |what: String| {
+        move |e: std::io::Error| {
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                CANCELLED.to_string()
+            } else {
+                format!("{what}: {e}")
+            }
+        }
+    };
+    let target = Target::attach(&Locator::Name(process.to_string()), module, &opts, cancel)
+        .map_err(failed(format!("attach to {process}")))?;
+    let snapshot = ModuleSnapshot::capture(
+        &target,
+        target.module.base,
+        target.module.size,
+        &target.regions(),
+        &target.code_regions(),
+        Some(cancel),
+    )
+    .map_err(failed(format!("read {module} from {process}")))?;
+    Ok(LiveCapture {
+        module: module.to_string(),
+        snapshot,
+    })
+}
+
+#[cfg(not(windows))]
+fn capture_live(_src: &LiveSource, _cancel: &AtomicBool) -> Result<LiveCapture, String> {
+    Err("a live process reference is only available on Windows".to_string())
+}
+
+fn parse_hex(raw: &str) -> Option<u64> {
+    let hex = raw.trim();
+    let hex = hex
+        .strip_prefix("0x")
+        .or_else(|| hex.strip_prefix("0X"))
+        .unwrap_or(hex);
+    u64::from_str_radix(hex, 16).ok()
+}
+
+fn module_stem(name: &str) -> String {
+    let lower = name.trim().to_ascii_lowercase();
+    match lower.rsplit_once('.') {
+        Some((stem, "exe" | "dll")) => stem.to_string(),
+        _ => lower,
+    }
+}
+
+/// Resolve an address typed against a live module to an RVA. A bare value is the absolute address a
+/// debugger shows; `module+offset` (or `+offset`) gives the offset directly. The two forms are kept
+/// distinct because on a 32-bit client a value like 0x4D6D95 is a valid RVA and a valid VA at once.
+fn live_rva(raw: &str, module: &str, base: usize, size: usize) -> Result<u64, String> {
+    let text = raw.trim();
+    let end = base as u64 + size as u64;
+    if let Some((name, off)) = text.rsplit_once('+') {
+        if !name.trim().is_empty() && module_stem(name) != module_stem(module) {
+            return Err(format!(
+                "'{text}' names {}, but the live reference is {module}",
+                name.trim()
+            ));
+        }
+        let rva = parse_hex(off).ok_or_else(|| format!("invalid offset in '{text}'"))?;
+        return if rva < size as u64 {
+            Ok(rva)
+        } else {
+            Err(format!(
+                "offset 0x{rva:X} is past the end of {module} (size 0x{size:X})"
+            ))
+        };
+    }
+    let va = parse_hex(text).ok_or_else(|| format!("invalid address '{text}'"))?;
+    if va >= base as u64 && va < end {
+        Ok(va - base as u64)
+    } else {
+        Err(format!(
+            "0x{va:X} is outside {module} (0x{base:X} to 0x{end:X}); write {module}+0x<offset> to give an offset"
+        ))
+    }
+}
+
 fn run_generate_signature(
     app: &tauri::AppHandle,
     cancel: &AtomicBool,
     req: SigGenRequest,
 ) -> Result<SigGenResponse, String> {
-    if req.clients.is_empty() {
-        return Err("add at least one client binary".to_string());
+    if req.clients.is_empty() && req.live.is_none() {
+        return Err("add at least one client binary or a live process".to_string());
     }
     if req.jobs.is_empty() {
         return Err("add at least one target".to_string());
@@ -579,20 +705,41 @@ fn run_generate_signature(
     };
 
     // Open and inspect every client once, then reuse the images across all jobs.
-    let total = req.clients.len() as u32;
+    let total = (req.clients.len() + usize::from(req.live.is_some())) as u32;
     let mut images: Vec<FileImage> = Vec::with_capacity(req.clients.len());
     for (k, p) in req.clients.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
-            return Err("signature generation cancelled".to_string());
+            return Err(CANCELLED.to_string());
         }
         emit("load", label_of(p), k as u32 + 1, total, 0);
         images
             .push(FileImage::open(std::path::Path::new(p)).map_err(|e| format!("open {p}: {e}"))?);
     }
+    let live = match &req.live {
+        Some(src) => {
+            emit(
+                "load",
+                format!("{} (live)", src.process.trim()),
+                total,
+                total,
+                0,
+            );
+            Some(capture_live(src, cancel)?)
+        }
+        None => None,
+    };
+    let mut warnings = Vec::new();
+    if let Some(cap) = live.as_ref().filter(|c| c.snapshot.unread_bytes() > 0) {
+        warnings.push(format!(
+            "0x{:X} bytes of {} could not be read from the live process and were left as zero",
+            cap.snapshot.unread_bytes(),
+            cap.module
+        ));
+    }
     emit("pack", String::new(), 0, 0, 0);
     let reports: Vec<_> = images.iter().map(FileImage::pack_report).collect();
 
-    let inputs: Vec<ImageInput> = images
+    let mut inputs: Vec<ImageInput> = images
         .iter()
         .enumerate()
         .map(|(k, img)| {
@@ -604,6 +751,10 @@ fn run_generate_signature(
             )
         })
         .collect();
+    let live_index = inputs.len();
+    if let Some(cap) = &live {
+        inputs.push(cap.snapshot.image_input(format!("{} (live)", cap.module)));
+    }
 
     let neg_images: Vec<FileImage> = req
         .negatives
@@ -618,15 +769,26 @@ fn run_generate_signature(
         .map(|(img, p)| image_input(label_of(p), img, false, Vec::new()))
         .collect();
 
-    let ref_index = |ref_path: &str| -> Result<usize, String> {
-        req.clients
-            .iter()
-            .position(|c| c == ref_path)
-            .ok_or_else(|| "the reference must be one of the chosen clients".to_string())
-    };
-    let parse_rva = |raw: &str| -> Result<u64, String> {
-        let hex = raw.trim().trim_start_matches("0x").trim_start_matches("0X");
-        u64::from_str_radix(hex, 16).map_err(|_| format!("invalid RVA '{raw}'"))
+    // The reference image, the RVA inside it, and the label the job is reported under.
+    let resolve = |reference: &RefSource, raw: &str| -> Result<(usize, u64, String), String> {
+        match reference {
+            RefSource::File { path } => {
+                let idx = req
+                    .clients
+                    .iter()
+                    .position(|c| c == path)
+                    .ok_or("the reference must be one of the chosen clients")?;
+                let rva = parse_hex(raw).ok_or_else(|| format!("invalid RVA '{}'", raw.trim()))?;
+                Ok((idx, rva, format!("0x{rva:X}")))
+            }
+            RefSource::Live => {
+                let cap = live
+                    .as_ref()
+                    .ok_or("the job references a live process, but none was given")?;
+                let rva = live_rva(raw, &cap.module, cap.snapshot.base(), cap.snapshot.size())?;
+                Ok((live_index, rva, format!("{}+0x{rva:X}", cap.module)))
+            }
+        }
     };
 
     let opts = SigOptions::default();
@@ -635,7 +797,7 @@ fn run_generate_signature(
         // Cancellation lands between jobs (and between client loads above): the Stop button flips this
         // job's token, so a long multi-client or multi-target run halts instead of being uninterruptible.
         if cancel.load(Ordering::Relaxed) {
-            return Err("signature generation cancelled".to_string());
+            return Err(CANCELLED.to_string());
         }
         let job_n = ji as u32 + 1;
         let mut on_stage = |stage: SigStage| {
@@ -665,29 +827,33 @@ fn run_generate_signature(
                     }
                 }
             }
-            SigJob::Ref { ref_path, rva } => match (ref_index(ref_path), parse_rva(rva)) {
-                (Ok(idx), Ok(rva_val)) => {
+            SigJob::Ref { reference, rva } => match resolve(reference, rva) {
+                Ok((idx, rva_val, label)) => {
                     let spec = TargetSpec::Ref {
                         image: idx,
                         rva: rva_val,
                     };
                     let report = generate_with_progress(&inputs, &spec, &opts, &mut on_stage);
                     SigJobResultView {
-                        label: format!("0x{rva_val:X}"),
+                        label,
                         report: Some(enrich_report(&report, &inputs, &neg_inputs, &spec, &opts)),
                         cross: None,
                         error: None,
                     }
                 }
-                (Err(e), _) | (_, Err(e)) => job_error(rva.clone(), e),
+                Err(e) => job_error(rva.clone(), e),
             },
-            SigJob::Cross { sig, ref_path, rva } => {
+            SigJob::Cross {
+                sig,
+                reference,
+                rva,
+            } => {
                 let sig = sig.trim().to_string();
                 let aob_ok = try_signature_from_aob(&sig)
                     .map(|_| ())
                     .map_err(|e| format!("invalid signature: {e}"));
-                match (aob_ok, ref_index(ref_path), parse_rva(rva)) {
-                    (Ok(()), Ok(idx), Ok(rva_val)) => {
+                match aob_ok.and_then(|()| resolve(reference, rva)) {
+                    Ok((idx, rva_val, label)) => {
                         let cr = generate_cross_with_progress(
                             &inputs,
                             &sig,
@@ -697,7 +863,7 @@ fn run_generate_signature(
                             &mut on_stage,
                         );
                         SigJobResultView {
-                            label: format!("0x{rva_val:X}"),
+                            label,
                             report: Some(enrich_report(
                                 &cr.report,
                                 &inputs,
@@ -713,13 +879,16 @@ fn run_generate_signature(
                             error: None,
                         }
                     }
-                    (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => job_error(rva.clone(), e),
+                    Err(e) => job_error(rva.clone(), e),
                 }
             }
         };
         results.push(result);
     }
-    Ok(SigGenResponse { jobs: results })
+    Ok(SigGenResponse {
+        jobs: results,
+        warnings,
+    })
 }
 
 fn job_error(label: String, error: String) -> SigJobResultView {
@@ -824,6 +993,69 @@ mod tests {
             }],
             diagnostics: vec![Diag::NotUnique],
         }
+    }
+
+    #[test]
+    fn live_addresses_are_absolute_unless_written_as_module_plus_offset() {
+        let (base, size) = (0x0040_0000, 0x0080_0000);
+        assert_eq!(
+            live_rva("0x8D6D95", "MapleStory.exe", base, size),
+            Ok(0x4D_6D95)
+        );
+        assert_eq!(
+            live_rva("MapleStory.exe+0x4D6D95", "MapleStory.exe", base, size),
+            Ok(0x4D_6D95)
+        );
+        assert_eq!(
+            live_rva("maplestory+4D6D95", "MapleStory.exe", base, size),
+            Ok(0x4D_6D95)
+        );
+        assert_eq!(live_rva(" +0x10 ", "MapleStory.exe", base, size), Ok(0x10));
+        assert!(
+            live_rva("0x1000", "MapleStory.exe", base, size)
+                .unwrap_err()
+                .contains("+0x<offset>")
+        );
+        assert!(
+            live_rva("other.dll+0x10", "MapleStory.exe", base, size)
+                .unwrap_err()
+                .contains("other.dll")
+        );
+        assert!(live_rva("MapleStory.exe+0x800000", "MapleStory.exe", base, size).is_err());
+        assert!(live_rva("0xC00000", "MapleStory.exe", base, size).is_err());
+        assert!(live_rva("zz", "MapleStory.exe", base, size).is_err());
+    }
+
+    #[test]
+    fn sig_request_carries_a_tagged_reference_and_an_optional_live_source() {
+        let req: SigGenRequest = serde_json::from_value(serde_json::json!({
+            "clients": [],
+            "jobs": [
+                { "type": "ref", "reference": { "kind": "live" }, "rva": "0x8D6D95" },
+                { "type": "cross", "sig": "E8", "reference": { "kind": "file", "path": "C:/a.exe" }, "rva": "0x10" },
+            ],
+            "live": { "process": "MapleStory.exe" },
+        }))
+        .unwrap();
+        assert!(matches!(
+            req.jobs[0],
+            SigJob::Ref {
+                reference: RefSource::Live,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&req.jobs[1], SigJob::Cross { reference: RefSource::File { path }, .. } if path == "C:/a.exe")
+        );
+        let live = req.live.unwrap();
+        assert_eq!(
+            (live.process.as_str(), live.module.as_str()),
+            ("MapleStory.exe", "")
+        );
+        let bare: SigGenRequest =
+            serde_json::from_value(serde_json::json!({ "clients": ["C:/a.exe"], "jobs": [] }))
+                .unwrap();
+        assert!(bare.live.is_none());
     }
 
     // The desktop view shares the CLI's hex address contract but is otherwise a DIFFERENT wire shape,

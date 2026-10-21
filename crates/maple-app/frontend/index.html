@@ -323,11 +323,17 @@
                 <div id="sig-ref-row" class="sig-mode-row" hidden>
                   <div class="sig-ref-pick">
                     <span class="muted" data-i18n="sig.refLabel">Reference client</span>
+                    <div id="sig-ref-src" class="seg">
+                      <button class="seg-btn active" data-src="file" data-i18n="sig.refFile">Client file</button>
+                      <button class="seg-btn" data-src="live" data-i18n="sig.refLive">Live process</button>
+                    </div>
                     <select id="sig-ref" class="select"></select>
                     <button id="sig-ref-add" class="icon-btn sig-ref-add" data-i18n-title="sig.refPick" title="Add a client and use it as the reference"><span class="ico" data-icon="folder"></span><span data-i18n="sig.refAdd">Add client</span></button>
+                    <input id="sig-live-proc" class="select sig-live-in mono" type="text" spellcheck="false" data-i18n-ph="sig.liveProcPh" placeholder="Process name" hidden />
+                    <input id="sig-live-mod" class="select sig-live-in mono" type="text" spellcheck="false" data-i18n-ph="sig.liveModPh" placeholder="Module (main module if blank)" hidden />
                   </div>
                   <div class="sig-field-head">
-                    <span class="muted" data-i18n="sig.rvaLabel">Addresses, RVA (one per line)</span>
+                    <span id="sig-rva-label" class="muted" data-i18n="sig.rvaLabel">Addresses, RVA (one per line)</span>
                     <button class="icon-btn sig-load" data-target="sig-rva" data-i18n="sig.loadFile" data-i18n-title="sig.loadFileTitle" title="Import a text file with one entry per line">Import list</button>
                   </div>
                   <textarea id="sig-rva" class="mono sig-batch" spellcheck="false" rows="2" data-i18n-ph="sig.rvaPh" placeholder="0x…"></textarea>

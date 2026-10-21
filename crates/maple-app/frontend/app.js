@@ -419,6 +419,10 @@ $("sig-cross-toggle")
 });
 document.querySelectorAll(".sig-load").forEach((b) => b.addEventListener("click", () => sigLoadFile(b.dataset.target)));
 $("sig-ref-add").addEventListener("click", sigPickReference);
+$("sig-ref-src")
+  .querySelectorAll(".seg-btn")
+  .forEach((b) => b.addEventListener("click", () => sigSetRefSrc(b.dataset.src)));
+$("sig-live-proc").addEventListener("input", sigUpdateValidity);
 sigUpdateValidity();
 
 

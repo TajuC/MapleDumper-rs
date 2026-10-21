@@ -1,4 +1,4 @@
-const sigState = { files: [], negatives: [], response: null, mode: "aob", cross: "separate", showJson: false, alertDismissed: false };
+const sigState = { files: [], negatives: [], response: null, mode: "aob", cross: "separate", refSrc: "file", showJson: false, alertDismissed: false };
 
 function renderSigFiles() {
   const host = $("sig-files");
@@ -143,6 +143,33 @@ function sigSetMode(mode) {
   sigUpdateValidity();
 }
 
+function sigSetRefSrc(src) {
+  sigState.refSrc = src;
+  const live = src === "live";
+  $("sig-ref-src")
+    .querySelectorAll(".seg-btn")
+    .forEach((b) => b.classList.toggle("active", b.dataset.src === src));
+  $("sig-ref").hidden = live;
+  $("sig-ref-add").hidden = live;
+  $("sig-live-proc").hidden = !live;
+  $("sig-live-mod").hidden = !live;
+  const proc = $("sig-live-proc");
+  if (live && !proc.value.trim()) proc.value = $("w-target").value.trim();
+  const relabel = (id, attr, key) => {
+    const el = $(id);
+    el.setAttribute(attr, key);
+    if (attr === "data-i18n") el.textContent = t(key);
+    else el.setAttribute("placeholder", t(key));
+  };
+  relabel("sig-rva-label", "data-i18n", live ? "sig.rvaLabelLive" : "sig.rvaLabel");
+  relabel("sig-rva", "data-i18n-ph", live ? "sig.rvaPhLive" : "sig.rvaPh");
+  sigUpdateValidity();
+}
+
+function sigLiveOn() {
+  return sigState.refSrc === "live" && sigState.mode !== "aob" && !!$("sig-live-proc").value.trim();
+}
+
 function sigSetCross(mode) {
   sigState.cross = mode;
   $("sig-cross-toggle")
@@ -163,16 +190,19 @@ function sigLines(id) {
 }
 
 const SIG_RVA_RE = /^(0x)?[0-9a-fA-F]+$/;
+const SIG_LIVE_ADDR_RE = /^([^+\s][^+]*)?\+\s*(0x)?[0-9a-fA-F]+$|^(0x)?[0-9a-fA-F]+$/;
 function sigRvaValidity() {
   const lines = sigLines("sig-rva");
-  const bad = lines.length > 0 && lines.some((l) => !SIG_RVA_RE.test(l));
+  const re = sigState.refSrc === "live" ? SIG_LIVE_ADDR_RE : SIG_RVA_RE;
+  const bad = lines.length > 0 && lines.some((l) => !re.test(l));
   $("sig-rva").classList.toggle("invalid", bad);
   return lines.length > 0 && !bad;
 }
 
 function sigUpdateValidity() {
   const m = sigState.mode;
-  const hasFiles = sigState.files.length > 0;
+  const live = sigState.refSrc === "live" && m !== "aob";
+  const hasFiles = live ? !!$("sig-live-proc").value.trim() : sigState.files.length > 0;
   const aobOk = sigLines("sig-aob").length > 0;
   const rvaOk = sigRvaValidity();
   let ok = hasFiles;
@@ -185,20 +215,20 @@ function sigUpdateValidity() {
 
 function buildSigJobs() {
   const m = sigState.mode;
-  const refPath = $("sig-ref").value;
+  const reference = sigState.refSrc === "live" ? { kind: "live" } : { kind: "file", path: $("sig-ref").value };
   const aobs = sigLines("sig-aob");
   const rvas = sigLines("sig-rva");
   const jobs = [];
   if (m === "aob") {
     for (const sig of aobs) jobs.push({ type: "aob", sig });
   } else if (m === "ref") {
-    for (const rva of rvas) jobs.push({ type: "ref", ref_path: refPath, rva });
+    for (const rva of rvas) jobs.push({ type: "ref", reference, rva });
   } else if (sigState.cross === "cross") {
     const n = Math.min(aobs.length, rvas.length);
-    for (let i = 0; i < n; i++) jobs.push({ type: "cross", sig: aobs[i], ref_path: refPath, rva: rvas[i] });
+    for (let i = 0; i < n; i++) jobs.push({ type: "cross", sig: aobs[i], reference, rva: rvas[i] });
   } else {
     for (const sig of aobs) jobs.push({ type: "aob", sig });
-    for (const rva of rvas) jobs.push({ type: "ref", ref_path: refPath, rva });
+    for (const rva of rvas) jobs.push({ type: "ref", reference, rva });
   }
   return jobs;
 }
@@ -233,7 +263,8 @@ function sigPhaseText(p) {
 }
 
 async function runSigGen() {
-  if (!sigState.files.length) {
+  const live = sigLiveOn();
+  if (!sigState.files.length && !live) {
     toast(t("sig.noFiles"), true);
     return;
   }
@@ -247,7 +278,12 @@ async function runSigGen() {
     const r = sigLines("sig-rva").length;
     if (a !== r) toast(t("sig.crossUneven", { sigs: a, rvas: r }));
   }
-  const req = { clients: sigState.files.map((f) => f.path), jobs, negatives: sigState.negatives.map((n) => n.path) };
+  const req = {
+    clients: sigState.files.map((f) => f.path),
+    jobs,
+    negatives: sigState.negatives.map((n) => n.path),
+    live: live ? { process: $("sig-live-proc").value.trim(), module: $("sig-live-mod").value.trim() } : null,
+  };
   $("sig-gen").disabled = true;
   $("sig-stop").disabled = false;
   const setStatus = (msg) => {
@@ -566,7 +602,7 @@ function renderSigResults() {
     return;
   }
   const multi = jobs.length > 1;
-  let html = "";
+  let html = (resp.warnings || []).map((w) => `<div class="sig-warn">⚠ ${esc(w)}</div>`).join("");
   jobs.forEach((job, i) => {
     const framed = multi || !!job.cross;
     html += `<div class="sig-job${framed ? " framed" : ""}">`;

@@ -1,4 +1,5 @@
 use crate::memory::{MemorySource, Region};
+use crate::pattern::Arch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildStamp {
@@ -54,6 +55,18 @@ pub fn pe_machine<S: MemorySource>(source: &S, module_base: usize) -> Option<u16
         return None;
     }
     Some(u16::from_le_bytes(pe[4..6].try_into().ok()?))
+}
+
+/// Map a PE COFF `Machine` value to the instruction set this tool can decode. ARM (and any other
+/// machine) returns `None` so the caller refuses rather than mis-decoding the bytes as x86/x64,
+/// since address width and instruction set are not the same thing.
+#[must_use]
+pub fn arch_from_machine(machine: u16) -> Option<Arch> {
+    match machine {
+        0x8664 => Some(Arch::X64), // amd64
+        0x014C => Some(Arch::X86), // i386
+        _ => None,
+    }
 }
 
 fn pe_timestamp<S: MemorySource>(source: &S, module_base: usize) -> Option<u32> {
@@ -154,6 +167,17 @@ mod tests {
         data[0x88..0x8C].copy_from_slice(&0x6655_4433u32.to_le_bytes());
         let source = BufferSource::new(0x1_0000, data);
         assert_eq!(pe_timestamp(&source, 0x1_0000), Some(0x6655_4433));
+    }
+
+    #[test]
+    fn arch_from_machine_rejects_arm_and_unknown_machines() {
+        assert_eq!(arch_from_machine(0x8664), Some(Arch::X64), "amd64");
+        assert_eq!(arch_from_machine(0x014C), Some(Arch::X86), "i386");
+        // ARM machines share the address-width buckets but are a different instruction set; they
+        // must be rejected, not mapped onto x64/x86 (WPE-1), or the decoder would read garbage.
+        assert_eq!(arch_from_machine(0xAA64), None, "arm64");
+        assert_eq!(arch_from_machine(0x01C4), None, "armnt");
+        assert_eq!(arch_from_machine(0x0000), None, "unknown");
     }
 
     #[test]
