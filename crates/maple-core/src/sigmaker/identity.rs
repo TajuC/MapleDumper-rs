@@ -70,9 +70,11 @@ fn read_string_ref(img: &ImageInput, abs: usize) -> Option<String> {
         return Some(ascii);
     }
     let wide: String = bytes
-        .chunks_exact(2)
-        .take_while(|c| c[1] == 0 && printable(c[0]))
-        .map(|c| char::from(c[0]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .take_while(|&&[lo, hi]| hi == 0 && printable(lo))
+        .map(|&[lo, _]| char::from(lo))
         .take(48)
         .collect();
     (wide.len() >= 4).then_some(wide)
