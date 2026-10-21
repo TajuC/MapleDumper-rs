@@ -72,6 +72,11 @@ impl BufferSource {
     pub fn new(base: usize, data: Vec<u8>) -> Self {
         Self { base, data }
     }
+
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }
 
 impl MemorySource for BufferSource {

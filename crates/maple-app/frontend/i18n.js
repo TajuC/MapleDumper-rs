@@ -1237,3 +1237,47 @@ const SIG_LIST_I18N = {
   },
 };
 Object.keys(SIG_LIST_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_LIST_I18N[lang]));
+
+const SIG_LIVE_I18N = {
+  en: {
+    "sig.refFile": "Client file",
+    "sig.refLive": "Live process",
+    "sig.liveProcPh": "Process name",
+    "sig.liveModPh": "Module (main module if blank)",
+    "sig.rvaLabelLive": "Addresses, absolute or module+offset (one per line)",
+    "sig.rvaPhLive": "0x… or MapleStory.exe+0x…",
+  },
+  ja: {
+    "sig.refFile": "クライアントファイル",
+    "sig.refLive": "実行中のプロセス",
+    "sig.liveProcPh": "プロセス名",
+    "sig.liveModPh": "モジュール（空欄でメインモジュール）",
+    "sig.rvaLabelLive": "アドレス、絶対値または モジュール+オフセット（1行に1つ）",
+    "sig.rvaPhLive": "0x… または MapleStory.exe+0x…",
+  },
+  zh: {
+    "sig.refFile": "客户端文件",
+    "sig.refLive": "运行中的进程",
+    "sig.liveProcPh": "进程名",
+    "sig.liveModPh": "模块（留空则为主模块）",
+    "sig.rvaLabelLive": "地址，绝对地址或 模块+偏移（每行一个）",
+    "sig.rvaPhLive": "0x… 或 MapleStory.exe+0x…",
+  },
+  ko: {
+    "sig.refFile": "클라이언트 파일",
+    "sig.refLive": "실행 중인 프로세스",
+    "sig.liveProcPh": "프로세스 이름",
+    "sig.liveModPh": "모듈 (비워 두면 메인 모듈)",
+    "sig.rvaLabelLive": "주소, 절대 주소 또는 모듈+오프셋 (한 줄에 하나)",
+    "sig.rvaPhLive": "0x… 또는 MapleStory.exe+0x…",
+  },
+  he: {
+    "sig.refFile": "קובץ לקוח",
+    "sig.refLive": "תהליך פעיל",
+    "sig.liveProcPh": "שם התהליך",
+    "sig.liveModPh": "מודול (ריק עבור המודול הראשי)",
+    "sig.rvaLabelLive": "כתובות, מוחלטות או מודול+היסט (אחת בכל שורה)",
+    "sig.rvaPhLive": "0x… או MapleStory.exe+0x…",
+  },
+};
+Object.keys(SIG_LIVE_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_LIVE_I18N[lang]));

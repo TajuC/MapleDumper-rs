@@ -287,17 +287,6 @@ fn is_readable(protect: u32) -> bool {
     protect & READABLE != 0
 }
 
-/// Map a PE COFF `Machine` value to the instruction set this tool can decode. ARM (and any other
-/// machine) returns `None` so the caller refuses rather than mis-decoding the bytes as x86/x64,
-/// since address width and instruction set are not the same thing.
-fn arch_from_machine(machine: u16) -> Option<Arch> {
-    match machine {
-        0x8664 => Some(Arch::X64), // amd64
-        0x014C => Some(Arch::X86), // i386
-        _ => None,
-    }
-}
-
 fn is_executable(protect: u32) -> bool {
     const EXECUTABLE: u32 =
         PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
@@ -528,7 +517,7 @@ impl Target {
     /// when the header is unreadable or the machine is one this tool does not model.
     #[must_use]
     pub fn module_arch(&self) -> Option<Arch> {
-        arch_from_machine(crate::stamp::pe_machine(self, self.module.base)?)
+        crate::stamp::arch_from_machine(crate::stamp::pe_machine(self, self.module.base)?)
     }
 
     /// The image's on-disk file version (VS_FIXEDFILEINFO), best-effort. Note this reads the
@@ -619,17 +608,6 @@ impl MemorySource for Target {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn arch_from_machine_rejects_arm_and_unknown_machines() {
-        assert_eq!(arch_from_machine(0x8664), Some(Arch::X64), "amd64");
-        assert_eq!(arch_from_machine(0x014C), Some(Arch::X86), "i386");
-        // ARM machines share the address-width buckets but are a different instruction set; they
-        // must be rejected, not mapped onto x64/x86 (WPE-1), or the decoder would read garbage.
-        assert_eq!(arch_from_machine(0xAA64), None, "arm64");
-        assert_eq!(arch_from_machine(0x01C4), None, "armnt");
-        assert_eq!(arch_from_machine(0x0000), None, "unknown");
-    }
 
     #[test]
     fn name_matching_is_tolerant() {

@@ -21,6 +21,7 @@ pub mod pattern;
 pub mod resolver;
 pub mod scanner;
 pub mod sigmaker;
+pub mod snapshot;
 pub mod stamp;
 pub mod unpack;
 
@@ -54,7 +55,8 @@ pub use sigmaker::{
     generate_with_progress, holdout_validate, inspect_function, make_string_anchor,
     negative_corpus_hits, resolve_string_anchor, xref_count,
 };
-pub use stamp::{BuildStamp, parse_stamp, pe_machine};
+pub use snapshot::ModuleSnapshot;
+pub use stamp::{BuildStamp, arch_from_machine, parse_stamp, pe_machine};
 pub use unpack::{
     CleanOptions, CleanSummary, Cleaned, Progress, Stage, UnpackReport, VerifyReport, clean_bytes,
     clean_to_path, component_dir, locate_native_dumper, locate_unlicense, run_native_dumper,
