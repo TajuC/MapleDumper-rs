@@ -501,7 +501,7 @@ const SIG_I18N = {
     "sig.separateHint": "Signature and address are independent targets.",
     "sig.crossHint": "Each signature must resolve to the address on the same line.",
     "sig.aobLabel": "Signatures (one per line)", "sig.refLabel": "Reference client", "sig.rvaLabel": "Addresses, RVA (one per line)",
-    "sig.loadFile": "Load file", "sig.loadedLines": "Loaded {n} line(s)", "sig.dismiss": "Dismiss", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.loadFile": "Import list", "sig.loadedLines": "Loaded {n} line(s)", "sig.dismiss": "Dismiss", "sig.jobProgress": "[{job}/{jobs}]",
     "sig.crossOk": "Resolves to {rva} as expected.", "sig.crossMismatch": "Resolves to {got}, expected {expected}.",
     "sig.crossNoMatch": "no match", "sig.crossUneven": "{sigs} signature(s) and {rvas} address(es); extra lines are ignored.",
   },
@@ -529,7 +529,7 @@ const SIG_I18N = {
     "sig.separateHint": "シグネチャとアドレスは独立した対象です。",
     "sig.crossHint": "各シグネチャは同じ行のアドレスに解決する必要があります。",
     "sig.aobLabel": "シグネチャ（1行に1つ）", "sig.refLabel": "参照クライアント", "sig.rvaLabel": "アドレス、RVA（1行に1つ）",
-    "sig.loadFile": "ファイルを読み込み", "sig.loadedLines": "{n} 行を読み込みました", "sig.dismiss": "閉じる", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.loadFile": "リストをインポート", "sig.loadedLines": "{n} 行を読み込みました", "sig.dismiss": "閉じる", "sig.jobProgress": "[{job}/{jobs}]",
     "sig.crossOk": "期待どおり {rva} に解決しました。", "sig.crossMismatch": "{got} に解決しました。期待値は {expected} です。",
     "sig.crossNoMatch": "一致なし", "sig.crossUneven": "シグネチャ {sigs} 個、アドレス {rvas} 個。余分な行は無視されます。",
   },
@@ -557,7 +557,7 @@ const SIG_I18N = {
     "sig.separateHint": "特征码和地址是独立的目标。",
     "sig.crossHint": "每个特征码必须解析到同一行的地址。",
     "sig.aobLabel": "特征码（每行一个）", "sig.refLabel": "参考客户端", "sig.rvaLabel": "地址，RVA（每行一个）",
-    "sig.loadFile": "加载文件", "sig.loadedLines": "已加载 {n} 行", "sig.dismiss": "关闭", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.loadFile": "导入列表", "sig.loadedLines": "已加载 {n} 行", "sig.dismiss": "关闭", "sig.jobProgress": "[{job}/{jobs}]",
     "sig.crossOk": "按预期解析到 {rva}。", "sig.crossMismatch": "解析到 {got}，预期为 {expected}。",
     "sig.crossNoMatch": "无匹配", "sig.crossUneven": "{sigs} 个特征码，{rvas} 个地址；多余的行将被忽略。",
   },
@@ -585,7 +585,7 @@ const SIG_I18N = {
     "sig.separateHint": "시그니처와 주소는 독립적인 대상입니다.",
     "sig.crossHint": "각 시그니처는 같은 줄의 주소로 해결되어야 합니다.",
     "sig.aobLabel": "시그니처 (한 줄에 하나)", "sig.refLabel": "참조 클라이언트", "sig.rvaLabel": "주소, RVA (한 줄에 하나)",
-    "sig.loadFile": "파일 불러오기", "sig.loadedLines": "{n}개 줄을 불러왔습니다", "sig.dismiss": "닫기", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.loadFile": "목록 가져오기", "sig.loadedLines": "{n}개 줄을 불러왔습니다", "sig.dismiss": "닫기", "sig.jobProgress": "[{job}/{jobs}]",
     "sig.crossOk": "예상대로 {rva}로 해결되었습니다.", "sig.crossMismatch": "{got}로 해결되었습니다. 예상값은 {expected}입니다.",
     "sig.crossNoMatch": "일치 없음", "sig.crossUneven": "시그니처 {sigs}개, 주소 {rvas}개. 남는 줄은 무시됩니다.",
   },
@@ -613,7 +613,7 @@ const SIG_I18N = {
     "sig.separateHint": "החתימה והכתובת הן יעדים נפרדים.",
     "sig.crossHint": "כל חתימה חייבת להתפענח לכתובת באותה שורה.",
     "sig.aobLabel": "חתימות (אחת בכל שורה)", "sig.refLabel": "קובץ ייחוס", "sig.rvaLabel": "כתובות, RVA (אחת בכל שורה)",
-    "sig.loadFile": "טען קובץ", "sig.loadedLines": "נטענו {n} שורות", "sig.dismiss": "סגור", "sig.jobProgress": "[{job}/{jobs}]",
+    "sig.loadFile": "ייבוא רשימה", "sig.loadedLines": "נטענו {n} שורות", "sig.dismiss": "סגור", "sig.jobProgress": "[{job}/{jobs}]",
     "sig.crossOk": "מתפענח אל {rva} כצפוי.", "sig.crossMismatch": "מתפענח אל {got}, צפוי {expected}.",
     "sig.crossNoMatch": "אין התאמה", "sig.crossUneven": "{sigs} חתימות ו-{rvas} כתובות; שורות עודפות יתעלמו.",
   },
@@ -1198,3 +1198,42 @@ const THEME_I18N = {
   },
 };
 Object.keys(THEME_I18N).forEach((lang) => Object.assign(I18N[lang], THEME_I18N[lang]));
+
+const SIG_LIST_I18N = {
+  en: {
+    "sig.loadFileTitle": "Import a text file with one entry per line",
+    "sig.refNone": "Add a client to use as the reference",
+    "sig.refAdd": "Add client",
+    "sig.refPick": "Add a client and use it as the reference",
+    "sig.listWasClient": "{name} is a client binary, so it was added to the clients instead of the list",
+  },
+  ja: {
+    "sig.loadFileTitle": "1行に1項目のテキストファイルをインポート",
+    "sig.refNone": "参照にするクライアントを追加してください",
+    "sig.refAdd": "クライアントを追加",
+    "sig.refPick": "クライアントを追加して参照にする",
+    "sig.listWasClient": "{name} はクライアントのバイナリのため、リストではなくクライアントに追加しました",
+  },
+  zh: {
+    "sig.loadFileTitle": "导入每行一个条目的文本文件",
+    "sig.refNone": "请添加一个客户端作为参考",
+    "sig.refAdd": "添加客户端",
+    "sig.refPick": "添加客户端并将其作为参考",
+    "sig.listWasClient": "{name} 是客户端二进制文件，已添加到客户端而不是列表",
+  },
+  ko: {
+    "sig.loadFileTitle": "한 줄에 하나의 항목이 있는 텍스트 파일 가져오기",
+    "sig.refNone": "참조로 사용할 클라이언트를 추가하세요",
+    "sig.refAdd": "클라이언트 추가",
+    "sig.refPick": "클라이언트를 추가하고 참조로 사용",
+    "sig.listWasClient": "{name}은(는) 클라이언트 바이너리이므로 목록 대신 클라이언트에 추가했습니다",
+  },
+  he: {
+    "sig.loadFileTitle": "ייבוא קובץ טקסט עם פריט אחד בכל שורה",
+    "sig.refNone": "הוסף לקוח שישמש כייחוס",
+    "sig.refAdd": "הוסף לקוח",
+    "sig.refPick": "הוסף לקוח והשתמש בו כייחוס",
+    "sig.listWasClient": "{name} הוא קובץ בינארי של לקוח, ולכן נוסף ללקוחות ולא לרשימה",
+  },
+};
+Object.keys(SIG_LIST_I18N).forEach((lang) => Object.assign(I18N[lang], SIG_LIST_I18N[lang]));

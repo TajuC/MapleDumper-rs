@@ -2427,6 +2427,13 @@ button.btn-ico:hover {
 .sig-ref-pick .select {
   flex: 1;
 }
+.sig-ref-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: stretch;
+  white-space: nowrap;
+}
 .sig-both-opts {
   display: flex;
   align-items: center;

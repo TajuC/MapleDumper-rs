@@ -20,7 +20,13 @@ function renderSigFiles() {
     host.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => sigRemoveFile(b.dataset.rm)));
   }
   const sel = $("sig-ref");
-  if (sel) sel.innerHTML = sigState.files.map((f) => `<option value="${escAttr(f.path)}">${esc(f.name)}</option>`).join("");
+  if (sel) {
+    const keep = sel.value;
+    sel.innerHTML = sigState.files.length
+      ? sigState.files.map((f) => `<option value="${escAttr(f.path)}">${esc(f.name)}</option>`).join("")
+      : `<option value="" disabled selected>${esc(t("sig.refNone"))}</option>`;
+    if (sigState.files.some((f) => f.path === keep)) sel.value = keep;
+  }
   const anyPacked = sigState.files.some((f) => f.packed);
   const alert = $("sig-alert");
   if (anyPacked && !sigState.alertDismissed) {
@@ -44,6 +50,27 @@ async function sigPickFiles() {
   } catch {
     return;
   }
+  await sigAddFiles(paths);
+}
+
+async function sigPickReference() {
+  let paths;
+  try {
+    paths = await invoke("pick_open_files");
+  } catch {
+    return;
+  }
+  if (!paths.length) return;
+  await sigAddFiles(paths);
+  sigSelectReference(paths[0]);
+}
+
+function sigSelectReference(path) {
+  const sel = $("sig-ref");
+  if (sigState.files.some((f) => f.path === path)) sel.value = path;
+}
+
+async function sigAddFiles(paths) {
   for (const p of paths) {
     if (sigState.files.some((f) => f.path === p)) continue;
     try {
@@ -176,10 +203,26 @@ function buildSigJobs() {
   return jobs;
 }
 
-let sigLoadTarget = null;
-function sigLoadFile(targetId) {
-  sigLoadTarget = targetId;
-  $("sig-file-input").click();
+// A PE picked as a list is a client build the user meant to add, so it joins the clients (and becomes
+// the reference for the address row) rather than being decoded as text.
+async function sigLoadFile(targetId) {
+  let list;
+  try {
+    list = await invoke("open_target_list");
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!list) return;
+  if (list.kind === "client") {
+    await sigAddFiles([list.path]);
+    if (targetId === "sig-rva") sigSelectReference(list.path);
+    toast(t("sig.listWasClient", { name: list.name }));
+    return;
+  }
+  $(targetId).value = sigLines(targetId).concat(list.lines).join("\n");
+  sigUpdateValidity();
+  toast(t("sig.loadedLines", { n: list.lines.length }));
 }
 
 function sigPhaseText(p) {
