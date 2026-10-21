@@ -4,9 +4,10 @@
 //! reaches these commands is treated as untrusted (a compromised webview could call them), so every
 //! path is held to a typed extension allowlist, screened for alternate-data-stream and traversal
 //! tricks, and canonicalized before any byte is touched. The intent-specific commands
-//! (`open_pattern_file`, `save_report_file`, `import_config_file`) pair the OS dialog with the IO so
-//! the path is never round-tripped through the frontend at all.
+//! (`open_pattern_file`, `open_target_list`, `save_report_file`, `import_config_file`) pair the OS
+//! dialog with the IO so the path is never round-tripped through the frontend at all.
 
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
@@ -191,6 +192,84 @@ pub async fn open_pattern_file() -> Result<Option<OpenedFile>, String> {
     }
 }
 
+/// Generous for a hand-made list of addresses or signatures, and small enough that a stray binary
+/// is refused before it is ever decoded into a text box.
+const TARGET_LIST_MAX_BYTES: usize = 4 << 20;
+
+/// What the Signature Maker's list import found in the picked file.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TargetList {
+    /// A text list: one address or signature per non-blank line.
+    Lines { name: String, lines: Vec<String> },
+    /// A PE image. A list cannot hold one, so the user meant it as a client build.
+    Client { name: String, path: String },
+}
+
+fn is_pe(head: &[u8]) -> bool {
+    let Some(lfanew) = head.get(0x3C..0x40) else {
+        return false;
+    };
+    let lfanew = u32::from_le_bytes(lfanew.try_into().unwrap()) as usize;
+    head.starts_with(b"MZ") && head.get(lfanew..lfanew.saturating_add(4)) == Some(b"PE\0\0")
+}
+
+fn classify_target_list(name: String, path: String, head: &[u8]) -> Result<TargetList, String> {
+    if is_pe(head) {
+        return Ok(TargetList::Client { name, path });
+    }
+    if head.len() > TARGET_LIST_MAX_BYTES {
+        return Err(format!(
+            "{name} is larger than {} MiB; a target list is plain text with one address or signature per line",
+            TARGET_LIST_MAX_BYTES >> 20
+        ));
+    }
+    if head.contains(&0) {
+        return Err(format!(
+            "{name} is a binary file, not a text list of addresses or signatures"
+        ));
+    }
+    let text = String::from_utf8_lossy(head);
+    let lines = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    Ok(TargetList::Lines { name, lines })
+}
+
+/// Import a list of addresses or signatures via the OS dialog. Only the first
+/// `TARGET_LIST_MAX_BYTES + 1` bytes are ever read, so picking a game client here cannot stall the
+/// app the way decoding a whole executable as text did.
+#[tauri::command]
+pub async fn open_target_list() -> Result<Option<TargetList>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Address or signature lists", &["txt", "csv", "log", "lst"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+        else {
+            return Ok(None);
+        };
+        let shown = path.to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .map_or_else(|| shown.clone(), |n| n.to_string_lossy().into_owned());
+        let mut head = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|f| {
+                f.take(TARGET_LIST_MAX_BYTES as u64 + 1)
+                    .read_to_end(&mut head)
+            })
+            .map_err(|e| format!("cannot read {shown}: {e}"))?;
+        classify_target_list(name, shown, &head).map(Some)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Save a report via the OS dialog, writing `contents` to the user-chosen path. Returns the path
 /// written, or `None` if the dialog was cancelled.
 #[tauri::command]
@@ -286,5 +365,42 @@ mod tests {
     fn read_of_a_missing_file_is_refused() {
         let missing = std::env::temp_dir().join("mapledumper_nope_4d1c.txt");
         assert!(read_checked(&missing.to_string_lossy(), FileKind::Any).is_err());
+    }
+
+    fn classify(head: &[u8]) -> Result<TargetList, String> {
+        classify_target_list("in".to_string(), "C:\\in".to_string(), head)
+    }
+
+    #[test]
+    fn target_list_keeps_nonblank_trimmed_lines_and_drops_the_bom() {
+        let Ok(TargetList::Lines { lines, .. }) =
+            classify(b"\xEF\xBB\xBF0x4D6D95\r\n\r\n  0x1000 \n")
+        else {
+            panic!("a text list must import as lines");
+        };
+        assert_eq!(lines, ["0x4D6D95", "0x1000"]);
+    }
+
+    #[test]
+    fn target_list_hands_a_pe_back_as_a_client() {
+        let mut pe = vec![0u8; 0x100];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let Ok(TargetList::Client { path, .. }) = classify(&pe) else {
+            panic!("a PE must be routed to the client list");
+        };
+        assert_eq!(path, "C:\\in");
+        assert!(matches!(
+            classify(b"MZ is not a header\n"),
+            Ok(TargetList::Lines { .. })
+        ));
+    }
+
+    #[test]
+    fn target_list_refuses_other_binaries_and_oversized_text() {
+        assert!(classify(b"\x7FELF\x00\x01").is_err());
+        assert!(classify(&vec![b'a'; TARGET_LIST_MAX_BYTES + 1]).is_err());
+        assert!(classify(&vec![b'a'; TARGET_LIST_MAX_BYTES]).is_ok());
     }
 }

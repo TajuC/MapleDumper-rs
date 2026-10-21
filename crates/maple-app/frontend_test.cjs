@@ -67,6 +67,9 @@ process.on("unhandledRejection", noop);
 
 const driver = `
 ;try {
+  sigState.files = [];
+  renderSigFiles();
+  globalThis.__refEmptyHtml = document.getElementById("sig-ref").innerHTML;
   sigState.files = [
     { path: "C:/a.exe", name: "a.exe", arch: "x64", packed: false, reasons: [], max_entropy: 6.1 },
     { path: "C:/b.exe", name: "b.exe", arch: "x64", packed: true, reasons: ["high entropy 7.90 in .text"], max_entropy: 7.9 },
@@ -74,6 +77,7 @@ const driver = `
   renderSigFiles();
   globalThis.__filesHtml = document.getElementById("sig-files").innerHTML;
   globalThis.__alertHidden = document.getElementById("sig-alert").hidden;
+  globalThis.__refHtml = document.getElementById("sig-ref").innerHTML;
   const fakeReport = {
     arch: "x64", unique_builds: 2,
     inputs: [ { label: "a.exe", packed: false, reasons: [] }, { label: "b.exe", packed: true, reasons: ["x"] } ],
@@ -182,6 +186,8 @@ check(files.includes("a.exe") && files.includes("b.exe"), "file chips missing na
 check(files.includes("Unpacked") && files.includes("Packed"), "file chips missing packed/unpacked badges");
 check(files.includes("entropy 7.90"), "packed chip tooltip missing entropy");
 check(sandbox.__alertHidden === false, "packed alert should be visible when a file is packed");
+check((sandbox.__refEmptyHtml || "").includes("Add a client to use as the reference"), "empty reference select should explain how to fill it");
+check((sandbox.__refHtml || "").includes('value="C:/a.exe"') && !(sandbox.__refHtml || "").includes("disabled"), "reference select should list the clients without the placeholder");
 const rep = sandbox.__reportHtml || "";
 check(rep.includes("E8 ?? ?? ?? ??") && rep.includes("_CALL"), "chosen AOB/suffix missing");
 check(rep.includes(">A<"), "chosen grade badge missing");

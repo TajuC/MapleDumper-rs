@@ -418,31 +418,7 @@ $("sig-cross-toggle")
   });
 });
 document.querySelectorAll(".sig-load").forEach((b) => b.addEventListener("click", () => sigLoadFile(b.dataset.target)));
-$("sig-file-input").addEventListener("change", (e) => {
-  const file = e.target.files && e.target.files[0];
-  if (!file || !sigLoadTarget) {
-    e.target.value = "";
-    return;
-  }
-  const target = sigLoadTarget;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const ta = $(target);
-    const incoming = String(reader.result || "")
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const existing = ta.value
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    ta.value = existing.concat(incoming).join("\n");
-    sigUpdateValidity();
-    toast(t("sig.loadedLines", { n: incoming.length }));
-  };
-  reader.readAsText(file);
-  e.target.value = "";
-});
+$("sig-ref-add").addEventListener("click", sigPickReference);
 sigUpdateValidity();
 
 

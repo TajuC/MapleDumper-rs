@@ -316,7 +316,7 @@
                 <div id="sig-aob-row" class="sig-mode-row">
                   <div class="sig-field-head">
                     <span class="muted" data-i18n="sig.aobLabel">Signatures (one per line)</span>
-                    <button class="icon-btn sig-load" data-target="sig-aob" data-i18n="sig.loadFile">Load file</button>
+                    <button class="icon-btn sig-load" data-target="sig-aob" data-i18n="sig.loadFile" data-i18n-title="sig.loadFileTitle" title="Import a text file with one entry per line">Import list</button>
                   </div>
                   <textarea id="sig-aob" class="mono d-sig sig-batch" spellcheck="false" rows="2" data-i18n-ph="sig.aobPh" placeholder="48 8B ?? ?? ?? ??"></textarea>
                 </div>
@@ -324,15 +324,15 @@
                   <div class="sig-ref-pick">
                     <span class="muted" data-i18n="sig.refLabel">Reference client</span>
                     <select id="sig-ref" class="select"></select>
+                    <button id="sig-ref-add" class="icon-btn sig-ref-add" data-i18n-title="sig.refPick" title="Add a client and use it as the reference"><span class="ico" data-icon="folder"></span><span data-i18n="sig.refAdd">Add client</span></button>
                   </div>
                   <div class="sig-field-head">
                     <span class="muted" data-i18n="sig.rvaLabel">Addresses, RVA (one per line)</span>
-                    <button class="icon-btn sig-load" data-target="sig-rva" data-i18n="sig.loadFile">Load file</button>
+                    <button class="icon-btn sig-load" data-target="sig-rva" data-i18n="sig.loadFile" data-i18n-title="sig.loadFileTitle" title="Import a text file with one entry per line">Import list</button>
                   </div>
                   <textarea id="sig-rva" class="mono sig-batch" spellcheck="false" rows="2" data-i18n-ph="sig.rvaPh" placeholder="0x…"></textarea>
                 </div>
               </div>
-              <input type="file" id="sig-file-input" accept=".txt,.csv,.log,text/plain" hidden />
               <div class="panel table-scroll grow" id="sig-results"><div class="insp-hint" data-i18n="sig.empty">Pick client files and a target, then Generate.</div></div>
             </section>
 

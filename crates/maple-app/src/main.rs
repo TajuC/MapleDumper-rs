@@ -59,6 +59,7 @@ fn main() {
             fileio::pick_save_file,
             fileio::write_text_file,
             fileio::open_pattern_file,
+            fileio::open_target_list,
             fileio::save_report_file,
             fileio::import_config_file,
             unpack_cmd::unpack_binary,
