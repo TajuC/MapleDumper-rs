@@ -58,20 +58,19 @@ pub fn hex(data: &[u8]) -> String {
         }
     };
 
-    let mut chunks = data.chunks_exact(64);
-    for chunk in &mut chunks {
-        process(chunk.try_into().unwrap());
+    let (blocks, rem) = data.as_chunks::<64>();
+    for block in blocks {
+        process(block);
     }
 
-    let rem = chunks.remainder();
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut tail = [0u8; 128];
     tail[..rem.len()].copy_from_slice(rem);
     tail[rem.len()] = 0x80;
     let tail_len = if rem.len() < 56 { 64 } else { 128 };
     tail[tail_len - 8..tail_len].copy_from_slice(&bit_len.to_be_bytes());
-    for block in tail[..tail_len].chunks_exact(64) {
-        process(block.try_into().unwrap());
+    for block in tail[..tail_len].as_chunks::<64>().0 {
+        process(block);
     }
 
     let mut out = String::with_capacity(64);
