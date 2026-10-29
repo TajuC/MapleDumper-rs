@@ -1,15 +1,17 @@
 //! Drive the bundled `maple-unpack-native` dumper as a subprocess. The native dumper runs the whole
-//! packed-to-min flow itself (dump, clean, verify) and prints an [`UnpackReport`] as one JSON line on
-//! stdout, with `[native-unpack] <stage>` progress on stderr. Centralizing the locate/spawn/parse
-//! here keeps the CLI and GUI on one path and one report shape; maple-core stays Frida-free because
-//! the dumper is a sibling binary, not a linked dependency, the same way [`super::dump`] shells out
-//! to unlicense.
+//! packed-to-min flow itself (dump, clean, verify) and prints its report as one JSON line on stdout,
+//! with `[native-unpack] <stage>` progress on stderr. The dumper ships as its own component, so it
+//! can be older or newer than this program: the binary it writes is verified again here, with this
+//! build's gates, and its report is read only for what this side cannot know. Centralizing the
+//! locate/spawn/verify here keeps the CLI and GUI on one path and one report shape; maple-core stays
+//! Frida-free because the dumper is a sibling binary, not a linked dependency, the same way
+//! [`super::dump`] shells out to unlicense.
 
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{Progress, Stage, UnpackReport};
+use super::{CleanSummary, Progress, Stage, UnpackReport, verify_bytes};
 
 const NATIVE_NAMES: [&str; 2] = ["maple-unpack-native.exe", "maple-unpack-native"];
 
@@ -61,11 +63,11 @@ pub fn locate_native_dumper(explicit: Option<&Path>, near: Option<&Path>) -> Opt
     locate_in_roots(explicit, &roots)
 }
 
-/// Run the native dumper for the full packed-to-min flow and return its report. Locates the binary
-/// (explicit, then beside this executable, then the per-user [`component_dir`], then `PATH`), streams
-/// the `[native-unpack]` stages and lines through `on`, and parses the JSON report from stdout. Fails
-/// loudly when the dumper is missing, fails to launch, exits non-zero, or prints no report; in the
-/// failure cases it writes no binary, matching the static path.
+/// Run the native dumper for the full packed-to-min flow and return the report on what it wrote.
+/// Locates the binary (explicit, then beside this executable, then the per-user [`component_dir`],
+/// then `PATH`), streams the `[native-unpack]` stages and lines through `on`, and verifies the output
+/// with [`verified_report`]. Fails loudly when the dumper is missing, fails to launch, exits non-zero,
+/// or writes nothing; in the failure cases no binary is left, matching the static path.
 pub fn run_native_dumper(
     packed: &Path,
     out: &Path,
@@ -125,15 +127,62 @@ pub fn run_native_dumper(
         )));
     }
 
-    let report_line = stdout
-        .lines()
-        .rev()
-        .find(|l| l.trim_start().starts_with('{'))
-        .ok_or_else(|| io::Error::other("the native dumper produced no report"))?;
-    let report: UnpackReport = serde_json::from_str(report_line)
-        .map_err(|e| io::Error::other(format!("could not read the native dumper report: {e}")))?;
+    let report = verified_report(packed, out, &stdout)?;
     on(Progress::Stage(Stage::Done));
     Ok(report)
+}
+
+/// The report on the binary the native dumper wrote to `out`, verified here against `packed` with
+/// this build's gates. The dumper's own report (`stdout`) is read only for the clean pass and the
+/// raw dump's path; one this build cannot read is a warning, not a lost dump. When this build's
+/// gates fail the output is removed, as the static path would never have written it.
+pub(super) fn verified_report(packed: &Path, out: &Path, stdout: &str) -> io::Result<UnpackReport> {
+    let cleaned = std::fs::read(out).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("the native dumper wrote no output ({e}); no verified binary was written"),
+        )
+    })?;
+    let packed_bytes = std::fs::read(packed)?;
+    let mut verify = verify_bytes(&cleaned, Some((&packed_bytes, "packed original")))?;
+    let (clean, dump_path) = dumper_report(stdout).unwrap_or_else(|| {
+        verify.warnings.push(
+            "the native dumper's report could not be read (it comes from another MapleDumper \
+             build); the output was verified by this one"
+                .into(),
+        );
+        (CleanSummary::default(), None)
+    });
+    let output = if verify.gates_pass {
+        Some(out.display().to_string())
+    } else {
+        std::fs::remove_file(out)?;
+        None
+    };
+    Ok(UnpackReport {
+        input: packed.display().to_string(),
+        output,
+        dump_path,
+        gates_pass: verify.gates_pass,
+        clean,
+        verify,
+    })
+}
+
+/// The clean summary and the raw dump's path from the dumper's last JSON line, whatever else the
+/// report carries or lacks.
+pub(super) fn dumper_report(stdout: &str) -> Option<(CleanSummary, Option<String>)> {
+    let line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with('{'))?;
+    let mut report: serde_json::Value = serde_json::from_str(line).ok()?;
+    let clean = serde_json::from_value(report.get_mut("clean")?.take()).ok()?;
+    let dump_path = report
+        .get("dump_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Some((clean, dump_path))
 }
 
 #[cfg(test)]

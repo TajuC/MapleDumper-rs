@@ -460,3 +460,92 @@ fn real_269_golden() {
         "production clean is reproducible"
     );
 }
+
+fn native_run(name: &str, written: Option<Vec<u8>>) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir =
+        std::env::temp_dir().join(format!("mapledumper_native_{name}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let packed = dir.join("packed.bin");
+    let out = dir.join("clean.bin");
+    let raw = build_image(false);
+    std::fs::write(&packed, &raw).unwrap();
+    if let Some(bytes) = written {
+        std::fs::write(&out, bytes).unwrap();
+    }
+    (packed, out)
+}
+
+/// A report from an older dumper: no export gates in its verify block, and a clean block that
+/// lacks fields this build has.
+const OLDER_REPORT: &str = r#"{"input":"p","output":"o","dump_path":"C:/d/raw.bin","gates_pass":true,"clean":{"exception_repointed":true,"unbound_thunks":7},"verify":{"oep_rva":4096}}"#;
+
+#[test]
+fn a_native_dump_is_verified_here_whatever_report_the_dumper_printed() {
+    let good = clean_bytes(&build_image(false), &CleanOptions::default())
+        .unwrap()
+        .data;
+    let (packed, out) = native_run("older", Some(good.clone()));
+    let report = native::verified_report(
+        &packed,
+        &out,
+        &format!("[native-unpack] done\n{OLDER_REPORT}\n"),
+    )
+    .unwrap();
+    assert!(report.gates_pass && report.verify.gates_pass);
+    assert_eq!(
+        report.output.as_deref(),
+        Some(out.display().to_string().as_str())
+    );
+    assert_eq!(report.dump_path.as_deref(), Some("C:/d/raw.bin"));
+    assert!(report.clean.exception_repointed);
+    assert_eq!(report.clean.unbound_thunks, 7);
+    assert!(
+        !report.clean.cert_cleared,
+        "a field the report lacks reads as its default"
+    );
+    assert!(report.verify.warnings.is_empty());
+    assert_eq!(report.verify.import_functions, 60);
+
+    let (packed, out) = native_run("unreadable", Some(good));
+    let report = native::verified_report(&packed, &out, "not a report").unwrap();
+    assert!(report.gates_pass, "the dump is kept and verified here");
+    assert!(out.is_file());
+    assert_eq!(report.dump_path, None);
+    assert!(
+        report
+            .verify
+            .warnings
+            .iter()
+            .any(|w| w.contains("could not be read")),
+        "{:?}",
+        report.verify.warnings
+    );
+    std::fs::remove_dir_all(packed.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_native_dump_that_fails_this_builds_gates_is_removed() {
+    let mut gutted = clean_bytes(&build_image(false), &CleanOptions::default())
+        .unwrap()
+        .data;
+    let text = Pe::parse(&gutted)
+        .unwrap()
+        .section(".text")
+        .map(|s| s.ro as usize)
+        .unwrap();
+    gutted[text] ^= 0xFF;
+    let (packed, out) = native_run("gutted", Some(gutted));
+    let report = native::verified_report(&packed, &out, OLDER_REPORT).unwrap();
+    assert!(!report.gates_pass);
+    assert_eq!(report.output, None);
+    assert!(!out.exists(), "no unverified binary is left behind");
+    std::fs::remove_dir_all(packed.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_native_run_that_wrote_nothing_fails_loudly() {
+    let (packed, out) = native_run("nothing", None);
+    let err = native::verified_report(&packed, &out, OLDER_REPORT).unwrap_err();
+    assert!(err.to_string().contains("wrote no output"), "{err}");
+    std::fs::remove_dir_all(packed.parent().unwrap()).ok();
+}
