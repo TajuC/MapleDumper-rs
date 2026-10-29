@@ -199,8 +199,10 @@ impl CleanOptions {
     }
 }
 
-/// What the clean pass did, for the report card and CLI summary.
+/// What the clean pass did, for the report card and CLI summary. A field another build's report
+/// lacks reads as its default.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CleanSummary {
     pub exception_repointed: bool,
     pub cert_cleared: bool,
